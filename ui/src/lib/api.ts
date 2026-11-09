@@ -25,13 +25,6 @@ export interface Metrics {
   timestampMs: number;
 }
 
-export interface Task {
-  id: number;
-  title: string;
-  done: boolean;
-  createdAt: string;
-}
-
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -86,13 +79,4 @@ export const api = {
   config: () => request<ServerConfig>("/api/config"),
   health: () => request<{ status: string; version: string }>("/api/health"),
   metrics: () => request<Metrics>("/api/metrics"),
-  listTasks: () => request<Task[]>("/api/tasks"),
-  createTask: (title: string) =>
-    request<Task>("/api/tasks", { method: "POST", body: JSON.stringify({ title }) }),
-  toggleTask: (id: number) => request<Task>(`/api/tasks/${id}/toggle`, { method: "POST" }),
-  deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
-  /** Always fails server-side — demonstrates the error pipeline. */
-  errorDemo: (kind: string) => request<never>(`/api/error-demo?kind=${kind}`),
-  /** Hits an endpoint that does not exist — demonstrates the JSON 404. */
-  missing: () => request<never>("/api/this-endpoint-does-not-exist"),
 };

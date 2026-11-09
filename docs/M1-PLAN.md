@@ -195,22 +195,28 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream P: Groundwork
 
-- [ ] **P1 (S) Short decision notes.** Write `docs/adr/` notes for D1, D5, D6,
+- [~] **P1 (S) Short decision notes.** Write `docs/adr/` notes for D1, D5, D6,
   D7 (a page each). Spike D6 (metrics crate) and the hyper client pool in a
   scratch branch to confirm they fit: pool reuse works, per-request timeouts
   are controllable, body streaming does not buffer.
   *Done when:* notes are merged and the open **(confirm)** items are resolved.
-- [ ] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
+  *Status:* ADRs 0001-0004 are written in `docs/adr/` as **proposed**. Still
+  open: owner confirmation of D1 and D6, and the hyper client / metrics spike.
+- [x] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
   `/api/error-demo`, the Components page, `TasksCard`, their tests, and the
   related README sections. Keep access log, events, and the WebSocket plumbing.
   *Done when:* `cargo test`, `npm test`, `npm run build` pass with the demos
   gone and the sidebar shows only Dashboard and Settings.
-- [ ] **P3 (M) Convert to a Cargo workspace** with the crate layout in section
+- [x] **P3 (M) Convert to a Cargo workspace** with the crate layout in section
   4. Move existing code without behavior changes (`routes/` and
   `static_assets` -> `fast-proxy-admin`, `access_log` -> `fast-proxy-telemetry`).
   Create the other crates as documented, empty skeletons. Set up coverage
   measurement (`cargo llvm-cov`) and record the starting number.
   *Done when:* the app behaves identically and tests pass.
+  *Result:* `access_log` was split into a telemetry `AccessLog` and an admin
+  middleware so telemetry does not depend on axum. The admin crate takes
+  `UiConfig` and the version through `AdminState`. Starting coverage
+  (`cargo llvm-cov --workspace`): 63% lines.
 
 ### Workstream C: Configuration
 

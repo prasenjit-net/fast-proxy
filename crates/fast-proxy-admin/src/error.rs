@@ -1,3 +1,5 @@
+//! The shared API error type and its JSON envelope.
+
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -15,9 +17,6 @@ use thiserror::Error;
 /// as notification bubbles with the same code + message end to end.
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("configuration error: {0}")]
-    Config(String),
-
     #[error("{0}")]
     BadRequest(String),
 
@@ -36,15 +35,12 @@ impl AppError {
         match self {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
-            AppError::Config(_) | AppError::Io(_) | AppError::Internal(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            AppError::Io(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     fn code(&self) -> &'static str {
         match self {
-            AppError::Config(_) => "CONFIG_ERROR",
             AppError::BadRequest(_) => "BAD_REQUEST",
             AppError::NotFound(_) => "NOT_FOUND",
             AppError::Io(_) => "IO_ERROR",
@@ -62,15 +58,15 @@ impl IntoResponse for AppError {
             tracing::debug!(code = self.code(), "request rejected: {self}");
         }
         // Client-facing messages: BadRequest/NotFound/Internal are safe —
-        // their text is always authored by our own handlers. Config and Io
-        // wrap a library error via `#[from]`/format!, which can include
-        // local file paths or OS error text, so those get a generic
-        // message instead; the real detail already went to tracing above.
+        // their text is always authored by our own handlers. Io wraps a
+        // library error via `#[from]`, which can include local file paths
+        // or OS error text, so it gets a generic message instead; the real
+        // detail already went to tracing above.
         let message = match &self {
             AppError::BadRequest(_) | AppError::NotFound(_) | AppError::Internal(_) => {
                 self.to_string()
             }
-            AppError::Config(_) | AppError::Io(_) => "an internal error occurred".to_string(),
+            AppError::Io(_) => "an internal error occurred".to_string(),
         };
         let body = json!({
             "error": {
@@ -106,16 +102,16 @@ mod tests {
 
     #[tokio::test]
     async fn not_found_maps_to_404_with_its_own_message() {
-        let body = body_json(AppError::NotFound("task 1 does not exist".into())).await;
+        let body = body_json(AppError::NotFound("subsystem 1 does not exist".into())).await;
         assert_eq!(body["error"]["code"], "NOT_FOUND");
         assert_eq!(body["error"]["status"], 404);
-        assert_eq!(body["error"]["message"], "task 1 does not exist");
+        assert_eq!(body["error"]["message"], "subsystem 1 does not exist");
     }
 
     #[tokio::test]
     async fn internal_maps_to_500_with_its_own_message() {
         // AppError::Internal is only ever constructed with text we wrote
-        // ourselves, so — unlike Config/Io below — it is safe to show as-is.
+        // ourselves, so — unlike Io below — it is safe to show as-is.
         let body = body_json(AppError::Internal("metrics are not available yet".into())).await;
         assert_eq!(body["error"]["code"], "INTERNAL");
         assert_eq!(body["error"]["status"], 500);
@@ -131,17 +127,5 @@ mod tests {
         let message = body["error"]["message"].as_str().unwrap();
         assert_eq!(message, "an internal error occurred");
         assert!(!message.contains("secret"));
-    }
-
-    #[tokio::test]
-    async fn config_errors_are_masked_so_file_paths_never_reach_the_client() {
-        let body = body_json(AppError::Config(
-            "invalid config /home/alice/config.toml".into(),
-        ))
-        .await;
-        assert_eq!(body["error"]["code"], "CONFIG_ERROR");
-        let message = body["error"]["message"].as_str().unwrap();
-        assert_eq!(message, "an internal error occurred");
-        assert!(!message.contains("alice"));
     }
 }

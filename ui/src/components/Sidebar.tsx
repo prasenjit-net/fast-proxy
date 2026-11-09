@@ -4,21 +4,19 @@ import { useConfig } from "../context/ConfigContext";
 import {
   IconDashboard,
   IconExternal,
-  IconLayers,
   IconSliders,
   IconX,
 } from "../icons";
 import Logo from "./Logo";
 
 interface NavItem {
-  to: "/" | "/components" | "/settings";
+  to: "/" | "/settings";
   label: string;
   icon: ReactElement;
 }
 
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <IconDashboard size={20} /> },
-  { to: "/components", label: "Components", icon: <IconLayers size={20} /> },
   { to: "/settings", label: "Settings", icon: <IconSliders size={20} /> },
 ];
 

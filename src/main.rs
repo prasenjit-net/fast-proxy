@@ -1,10 +1,6 @@
-mod access_log;
+//! The `fast-proxy` binary: CLI parsing, configuration, logging, and server startup.
+
 mod config;
-mod error;
-mod routes;
-mod services;
-mod state;
-mod static_assets;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -12,10 +8,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
+use fast_proxy_admin::AdminState;
+use fast_proxy_telemetry::AccessLog;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::AppConfig;
-use crate::state::AppState;
 
 /// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.
 ///
@@ -95,10 +92,15 @@ async fn main() -> ExitCode {
 
 async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
-    let state = Arc::new(AppState::new(config).await);
-    services::metrics::spawn(state.clone());
+    let access_log = AccessLog::open(config.logging.access_log.as_deref()).await;
+    let state = Arc::new(AdminState::new(
+        config.ui,
+        env!("CARGO_PKG_VERSION"),
+        access_log,
+    ));
+    fast_proxy_admin::spawn_sampler(state.clone());
 
-    let app = routes::router(state);
+    let app = fast_proxy_admin::router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on http://{addr}");
 

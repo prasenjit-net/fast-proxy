@@ -1,0 +1,8 @@
+[package]
+name = "fast-proxy-dataplane"
+version = "0.0.0"
+edition = "2021"
+description = "The hyper-based proxy data plane"
+publish = false
+
+[dependencies]

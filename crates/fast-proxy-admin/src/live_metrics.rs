@@ -1,10 +1,12 @@
+//! Periodic metrics sampling that feeds `GET /api/metrics` and the WebSocket.
+
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use rand::Rng;
 use serde::Serialize;
 
-use crate::services::events::Event;
+use crate::events::Event;
 use crate::state::SharedState;
 
 /// A point-in-time snapshot of server metrics.
@@ -28,7 +30,7 @@ const TICK: Duration = Duration::from_secs(2);
 
 /// Background sampler: stores the latest snapshot (for `GET /api/metrics`)
 /// and pushes it to every WebSocket subscriber each tick.
-pub fn spawn(state: SharedState) {
+pub fn spawn_sampler(state: SharedState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(TICK);
         let mut cpu = 34.0_f64;

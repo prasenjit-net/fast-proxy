@@ -1,3 +1,5 @@
+//! The `/ws` WebSocket endpoint streaming server-push events.
+
 use std::sync::atomic::Ordering;
 
 use axum::extract::ws::{Message, WebSocket};
@@ -5,7 +7,7 @@ use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::services::events::Event;
+use crate::events::Event;
 use crate::state::SharedState;
 
 /// `GET /ws` — upgrade and stream server-push events to the client.
@@ -33,11 +35,7 @@ async fn stream(socket: &mut WebSocket, state: &SharedState) {
     let mut events = state.events.subscribe();
 
     let hello = Event::Hello {
-        message: format!(
-            "Connected to {} v{}",
-            state.config.ui.app_name,
-            env!("CARGO_PKG_VERSION")
-        ),
+        message: format!("Connected to {} v{}", state.ui.app_name, state.version),
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
     };
     if send(socket, &hello).await.is_err() {

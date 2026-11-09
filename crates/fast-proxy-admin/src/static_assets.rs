@@ -1,3 +1,5 @@
+//! Embedded SPA assets and fallback routing.
+
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{header, StatusCode, Uri};
@@ -11,9 +13,10 @@ use crate::state::SharedState;
 /// In debug builds rust-embed reads ui/dist from disk instead, so a
 /// fresh `npm run build` shows up without recompiling the server.
 #[derive(RustEmbed)]
-#[folder = "ui/dist"]
+#[folder = "../../ui/dist"]
 struct Assets;
 
+/// Serves embedded UI assets, the SPA shell for deep links, and JSON 404s under `/api`.
 pub async fn handler(State(state): State<SharedState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
 
@@ -48,7 +51,7 @@ pub async fn handler(State(state): State<SharedState>, uri: Uri) -> Response {
 /// /api/config.
 fn serve_index(state: &SharedState, asset: rust_embed::EmbeddedFile) -> Response {
     let html = String::from_utf8_lossy(&asset.data);
-    let theme = html_attr_escape(&state.config.ui.default_theme);
+    let theme = html_attr_escape(&state.ui.default_theme);
     let html = html.replace("__DEFAULT_THEME__", &theme);
     (
         [

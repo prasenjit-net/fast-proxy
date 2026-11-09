@@ -1,8 +1,27 @@
+//! Config file model (`config.toml`).
+
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use fast_proxy_admin::UiConfig;
+use serde::Deserialize;
+use thiserror::Error;
 
-use crate::error::AppError;
+/// Why the config file could not be loaded.
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("failed to read {path}: {source}")]
+    Read {
+        path: String,
+        source: std::io::Error,
+    },
+    #[error("invalid config {path}: {source}")]
+    Parse {
+        path: String,
+        source: toml::de::Error,
+    },
+}
+
+/// Everything the config file can set.
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -44,30 +63,9 @@ impl Default for LoggingConfig {
     }
 }
 
-/// The `[ui]` section is exposed verbatim to the SPA through
-/// `GET /api/config` (serialized in camelCase for the frontend).
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields, rename_all(serialize = "camelCase"))]
-pub struct UiConfig {
-    pub app_name: String,
-    pub tagline: String,
-    pub default_theme: String,
-    pub repo_url: Option<String>,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            app_name: "Fast Proxy".into(),
-            tagline: "Realtime-configurable ingress and reverse proxy".into(),
-            default_theme: "auto".into(),
-            repo_url: None,
-        }
-    }
-}
-
 impl AppConfig {
-    pub fn load(path: &Path) -> Result<Self, AppError> {
+    /// Loads the file at `path`, or built-in defaults (with a warning) if it is missing.
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             eprintln!(
                 "warning: config file {} not found, using built-in defaults",
@@ -75,10 +73,14 @@ impl AppConfig {
             );
             return Ok(Self::default());
         }
-        let raw = std::fs::read_to_string(path)
-            .map_err(|err| AppError::Config(format!("failed to read {}: {err}", path.display())))?;
-        toml::from_str(&raw)
-            .map_err(|err| AppError::Config(format!("invalid config {}: {err}", path.display())))
+        let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+            path: path.display().to_string(),
+            source,
+        })?;
+        toml::from_str(&raw).map_err(|source| ConfigError::Parse {
+            path: path.display().to_string(),
+            source,
+        })
     }
 }
 
@@ -139,19 +141,5 @@ mod tests {
             result.is_err(),
             "deny_unknown_fields should reject typo_field"
         );
-    }
-
-    #[test]
-    fn ui_config_serializes_camel_case_for_the_frontend() {
-        let ui = UiConfig {
-            app_name: "X".into(),
-            tagline: "Y".into(),
-            default_theme: "auto".into(),
-            repo_url: None,
-        };
-        let value = serde_json::to_value(&ui).unwrap();
-        assert!(value.get("appName").is_some());
-        assert!(value.get("defaultTheme").is_some());
-        assert!(value.get("app_name").is_none());
     }
 }

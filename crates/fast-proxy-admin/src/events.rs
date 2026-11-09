@@ -1,12 +1,14 @@
+//! Server-push event types sent over the WebSocket.
+
 use serde::Serialize;
 
-use crate::services::metrics::MetricsSnapshot;
+use crate::live_metrics::MetricsSnapshot;
 
 /// Server-push events delivered to every WebSocket client as JSON,
 /// discriminated by a `type` field, e.g.:
 ///
 /// ```json
-/// { "type": "activity", "kind": "task", "message": "…", "timestampMs": 0 }
+/// { "type": "activity", "kind": "config", "message": "…", "timestampMs": 0 }
 /// ```
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]

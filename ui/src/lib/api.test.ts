@@ -24,7 +24,7 @@ describe("api client", () => {
 
   it("returns undefined for a 204 No Content response", async () => {
     mockFetchOnce({ ok: true, status: 204, json: () => Promise.reject("no body") });
-    const result = await api.deleteTask(1);
+    const result = await api.health();
     expect(result).toBeUndefined();
   });
 
@@ -35,15 +35,15 @@ describe("api client", () => {
       statusText: "Bad Request",
       json: () =>
         Promise.resolve({
-          error: { code: "BAD_REQUEST", message: "task title must not be empty" },
+          error: { code: "BAD_REQUEST", message: "payload failed validation" },
         }),
     });
 
-    await expect(api.createTask("")).rejects.toMatchObject({
+    await expect(api.config()).rejects.toMatchObject({
       name: "ApiError",
       code: "BAD_REQUEST",
       status: 400,
-      message: "task title must not be empty",
+      message: "payload failed validation",
     });
   });
 

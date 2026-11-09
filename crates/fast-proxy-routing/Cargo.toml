@@ -1,0 +1,8 @@
+[package]
+name = "fast-proxy-routing"
+version = "0.0.0"
+edition = "2021"
+description = "Compiled routing snapshot and host/route matchers (pure, no I/O)"
+publish = false
+
+[dependencies]

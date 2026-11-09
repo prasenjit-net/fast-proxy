@@ -47,8 +47,6 @@ or removed as the proxy lands (see the roadmap, M0).
   target `access`) and optionally to a file
 - **Server push** - a WebSocket at `/ws` streams metrics every 2s plus
   activity events, with auto-reconnect and connection-status toasts
-- **Example task service and component gallery** - scaffolding demos, slated
-  for removal
 
 ## Quick start
 
@@ -112,40 +110,34 @@ If the config file is missing, built-in defaults are used (with a warning).
 | GET | `/api/health` | Liveness + version |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
 | GET | `/api/metrics` | Latest metrics snapshot |
-| GET | `/api/tasks` | List tasks |
-| POST | `/api/tasks` | Create (`{"title": "…"}`; empty title → 400) |
-| POST | `/api/tasks/{id}/toggle` | Toggle done |
-| DELETE | `/api/tasks/{id}` | Delete (204) |
-| GET | `/api/error-demo?kind=…` | Always fails (`internal`, `bad-request`, `not-found`) |
 | GET | `/ws` | WebSocket: server-push events |
 
 Errors always look like:
 
 ```json
-{ "error": { "code": "NOT_FOUND", "message": "task 42 does not exist", "status": 404 } }
+{ "error": { "code": "NOT_FOUND", "message": "subsystem 42 does not exist", "status": 404 } }
 ```
 
 WebSocket events are JSON discriminated by `type`:
 
 ```json
 { "type": "metrics",  "data": { "cpu": 41.3, "memory": 58.0, "...": "…" } }
-{ "type": "activity", "kind": "task", "message": "Task \"x\" created", "timestampMs": 0 }
+{ "type": "activity", "kind": "config", "message": "Route created", "timestampMs": 0 }
 { "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```
 
 ## Project structure
 
 ```
-├── docs/ROADMAP.md           plan and roadmap
+├── docs/                     ROADMAP.md · M1-PLAN.md · adr/
 ├── config.toml               server + UI configuration
 ├── src/
 │   ├── main.rs               CLI (clap) + startup
-│   ├── config.rs             TOML config model
-│   ├── error.rs              AppError → JSON error envelope
-│   ├── access_log.rs         access-log middleware (console + file)
-│   ├── static_assets.rs      embedded SPA + fallback routing
-│   ├── routes/               api.rs (REST) · ws.rs (server push)
-│   └── services/             metrics.rs · tasks.rs · events.rs
+│   └── config.rs             TOML config model
+├── crates/
+│   ├── fast-proxy-admin/     Axum admin plane: api/ · ws · events · error · embedded SPA
+│   ├── fast-proxy-telemetry/ access log (metrics and traffic stats to come)
+│   └── fast-proxy-{model,store,routing,dataplane}/  skeletons for M1
 └── ui/
     ├── public/favicon.svg    the gear-and-bolt mark
     └── src/
@@ -153,21 +145,22 @@ WebSocket events are JSON discriminated by `type`:
         ├── icons/            the icon pack (add icons here)
         ├── context/          Theme · Toast · Config · Live(WebSocket)
         ├── components/       layout, cards, chart, feed, controls
-        ├── pages/            Dashboard · Components · Settings · 404
+        ├── pages/            Dashboard · Settings · 404
         └── styles/           index.css (Tailwind v4 entry + theme tokens)
 ```
 
 ## Extending
 
-**New endpoint** — add a handler in `src/routes/api.rs` returning
-`AppResult<Json<T>>`, register it in `src/routes/mod.rs`, add a typed wrapper
+**New endpoint** — add a handler under
+`crates/fast-proxy-admin/src/api/` returning `AppResult<Json<T>>`, register it in
+`crates/fast-proxy-admin/src/router.rs`, add a typed wrapper
 in `ui/src/lib/api.ts`.
 
 **New page** — create `ui/src/pages/X.tsx`, add a `<Route>` in `App.tsx` and a
 nav item in `components/Sidebar.tsx` (plus a title in `Topbar.tsx`).
 
 **New server-push event** — add a variant to `Event` in
-`src/services/events.rs`, broadcast it via `state.broadcast(…)`, handle its
+`crates/fast-proxy-admin/src/events.rs`, broadcast it via `state.broadcast(…)`, handle its
 `type` in `ui/src/context/LiveContext.tsx`.
 
 **Theming** — the design tokens live at the top of `ui/src/styles/index.css`

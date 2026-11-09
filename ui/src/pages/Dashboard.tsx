@@ -1,7 +1,6 @@
 import ActivityFeed from "../components/ActivityFeed";
 import LiveChart from "../components/LiveChart";
 import StatCard from "../components/StatCard";
-import TasksCard from "../components/TasksCard";
 import { useLive } from "../context/LiveContext";
 import { IconActivity, IconCpu, IconDatabase, IconUsers } from "../icons";
 import { formatNumber, formatUptime } from "../lib/format";
@@ -53,16 +52,13 @@ export default function DashboardPage() {
         <LiveChart history={history} />
       </section>
 
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[3fr_2fr]">
-        <TasksCard />
-        <section className="card">
-          <div className="card-head">
-            <h2>Activity</h2>
-            <span className="card-hint">server events</span>
-          </div>
-          <ActivityFeed activities={activities} />
-        </section>
-      </div>
+      <section className="card">
+        <div className="card-head">
+          <h2>Activity</h2>
+          <span className="card-hint">server events</span>
+        </div>
+        <ActivityFeed activities={activities} />
+      </section>
     </div>
   );
 }

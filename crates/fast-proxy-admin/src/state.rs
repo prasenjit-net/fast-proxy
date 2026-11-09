@@ -1,20 +1,23 @@
+//! Shared state for admin handlers.
+
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::Instant;
 
+use fast_proxy_telemetry::AccessLog;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::access_log::AccessLog;
-use crate::config::AppConfig;
-use crate::services::events::Event;
-use crate::services::metrics::MetricsSnapshot;
-use crate::services::tasks::TaskStore;
+use crate::events::Event;
+use crate::live_metrics::MetricsSnapshot;
+use crate::ui_config::UiConfig;
 
-pub struct AppState {
-    pub config: AppConfig,
+/// Everything the admin plane's handlers share.
+pub struct AdminState {
+    pub ui: UiConfig,
+    /// The binary's version; the admin crate cannot read it from its own manifest.
+    pub version: &'static str,
     /// Fan-out channel feeding every connected WebSocket client.
     pub events: broadcast::Sender<Event>,
-    pub tasks: TaskStore,
     pub latest_metrics: RwLock<Option<MetricsSnapshot>>,
     pub requests_total: AtomicU64,
     pub ws_clients: AtomicUsize,
@@ -23,22 +26,21 @@ pub struct AppState {
     pub access_log: AccessLog,
 }
 
-pub type SharedState = Arc<AppState>;
+pub type SharedState = Arc<AdminState>;
 
-impl AppState {
-    pub async fn new(config: AppConfig) -> Self {
+impl AdminState {
+    pub fn new(ui: UiConfig, version: &'static str, access_log: AccessLog) -> Self {
         let (events, _) = broadcast::channel(64);
-        let access_log = AccessLog::open(config.logging.access_log.as_deref()).await;
         Self {
+            ui,
+            version,
             events,
-            tasks: TaskStore::with_examples(),
             latest_metrics: RwLock::new(None),
             requests_total: AtomicU64::new(0),
             ws_clients: AtomicUsize::new(0),
             started: Instant::now(),
             started_at_ms: chrono::Utc::now().timestamp_millis(),
             access_log,
-            config,
         }
     }
 

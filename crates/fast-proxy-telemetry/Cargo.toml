@@ -1,0 +1,14 @@
+[package]
+name = "fast-proxy-telemetry"
+version = "0.0.0"
+edition = "2021"
+description = "Access log, metrics, and live traffic statistics for fast-proxy"
+publish = false
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

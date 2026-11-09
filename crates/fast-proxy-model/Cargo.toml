@@ -1,0 +1,8 @@
+[package]
+name = "fast-proxy-model"
+version = "0.0.0"
+edition = "2021"
+description = "Domain types and pure validation for fast-proxy configuration (no I/O)"
+publish = false
+
+[dependencies]

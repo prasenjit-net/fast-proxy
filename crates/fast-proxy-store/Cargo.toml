@@ -1,0 +1,8 @@
+[package]
+name = "fast-proxy-store"
+version = "0.0.0"
+edition = "2021"
+description = "SQLite persistence for fast-proxy configuration and revision history"
+publish = false
+
+[dependencies]

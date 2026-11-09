@@ -4,24 +4,35 @@ version = "0.1.0"
 edition = "2021"
 description = "Fast, realtime-configurable ingress server and reverse proxy: host/prefix routing, TLS + ACME, load balancing, health checks, and live diagnostics"
 
-[dependencies]
+[workspace]
+members = ["crates/*"]
+default-members = [".", "crates/*"]
+
+# Shared dependency versions; member crates opt in with `{ workspace = true }`.
+[workspace.dependencies]
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
-clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rust-embed = "8"
-mime_guess = "2"
 chrono = { version = "0.4", features = ["serde"] }
-rand = "0.8"
-
-[dev-dependencies]
+tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+[dependencies]
+fast-proxy-admin = { path = "crates/fast-proxy-admin" }
+fast-proxy-telemetry = { path = "crates/fast-proxy-telemetry" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 lto = true

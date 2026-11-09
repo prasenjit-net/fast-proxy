@@ -12,12 +12,18 @@ Guidance for coding agents working in this repository.
 
 ## Repository Layout
 
-- `src/main.rs` wires CLI parsing, configuration, logging, application state, routes, and server startup.
+Cargo workspace; the root package is the `fast-proxy` binary.
+
+- `src/main.rs` wires CLI parsing, configuration, logging, and server startup.
 - `src/config.rs` defines TOML configuration and CLI overrides.
-- `src/error.rs` defines the shared API error envelope.
-- `src/static_assets.rs` serves embedded SPA assets and fallback routing.
-- `src/routes/` contains REST and WebSocket route handlers.
-- `src/services/` contains metrics, task storage, and event broadcasting.
+- `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs`, `api/` (one
+  file per resource), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
+- `crates/fast-proxy-telemetry/` holds the access log (metrics and traffic
+  stats land here in M1).
+- `crates/fast-proxy-model/`, `-store/`, `-routing/`, `-dataplane/` are
+  skeletons filled in by the M1 plan (`docs/M1-PLAN.md`).
+- `docs/adr/` records design decisions.
 - `ui/src/lib/api.ts` is the typed frontend API client.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
 - `ui/src/components/` contains reusable UI components.
@@ -111,8 +117,8 @@ Development servers:
 ## Implementation Notes
 
 - Keep API responses using the existing `AppError` / JSON error envelope pattern.
-- Add new REST handlers in `src/routes/api.rs`, register routes in `src/routes/mod.rs`, and expose typed frontend calls from `ui/src/lib/api.ts`.
-- Add new WebSocket event types in `src/services/events.rs` and handle them in `ui/src/context/LiveContext.tsx`.
+- Add new REST handlers under `crates/fast-proxy-admin/src/api/`, register routes in `crates/fast-proxy-admin/src/router.rs`, and expose typed frontend calls from `ui/src/lib/api.ts`.
+- Add new WebSocket event types in `crates/fast-proxy-admin/src/events.rs` and handle them in `ui/src/context/LiveContext.tsx`.
 - Add new pages under `ui/src/pages/`, then update routing and navigation in the existing frontend structure.
 - Keep UI styling aligned with the tokens in `ui/src/styles/index.css`; avoid hard-coded one-off colors when a token exists.
 - Prefer existing component patterns in `ui/src/components/` before adding new abstractions.
