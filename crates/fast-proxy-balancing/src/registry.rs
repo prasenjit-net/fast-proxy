@@ -38,6 +38,18 @@ impl RuntimeRegistry {
         Self { entries }
     }
 
+    /// A registry holding exactly these runtimes.
+    pub fn from_runtimes(
+        runtimes: impl IntoIterator<Item = (EndpointId, EndpointAddr, Arc<EndpointRuntime>)>,
+    ) -> Self {
+        Self {
+            entries: runtimes
+                .into_iter()
+                .map(|(id, addr, runtime)| ((id, addr), runtime))
+                .collect(),
+        }
+    }
+
     /// The runtime for an endpoint, if it is in the registry.
     pub fn get(&self, id: EndpointId, addr: &EndpointAddr) -> Option<Arc<EndpointRuntime>> {
         self.entries.get(&(id, addr.clone())).cloned()
@@ -88,6 +100,19 @@ mod tests {
         ));
         let third = first.rebuilt_for([(EndpointId(9), &a)]);
         assert!(!Arc::ptr_eq(&old, &third.get(EndpointId(9), &a).unwrap()));
+    }
+
+    #[test]
+    fn from_runtimes_holds_exactly_what_it_was_given() {
+        let a = addr("a:1");
+        let runtime = Arc::new(EndpointRuntime::new());
+        let registry =
+            RuntimeRegistry::from_runtimes([(EndpointId(1), a.clone(), Arc::clone(&runtime))]);
+        assert!(Arc::ptr_eq(
+            &runtime,
+            &registry.get(EndpointId(1), &a).unwrap()
+        ));
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]

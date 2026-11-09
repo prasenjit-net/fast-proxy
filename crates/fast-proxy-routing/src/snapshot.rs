@@ -1,12 +1,17 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use fast_proxy_model::{EndpointAddr, RouteId, SubsystemId, SubsystemName, UpstreamPrefix};
+use fast_proxy_balancing::RuntimeRegistry;
+use fast_proxy_model::{
+    RetryPolicy, RouteId, SubsystemId, SubsystemName, UpstreamGroupId, UpstreamPrefix,
+};
 
-use crate::{HostTable, RouteTable};
+use crate::{CompiledUpstream, HostTable, RouteTable};
 
-/// A route with its upstream resolved to a concrete endpoint address.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A route with its upstream group resolved. The endpoint is chosen per
+/// request from [`CompiledRoute::upstream`].
+#[derive(Debug, Clone)]
 pub struct CompiledRoute {
     pub id: RouteId,
     /// The path prefix this route matches; used for metric labels and logs.
@@ -16,8 +21,9 @@ pub struct CompiledRoute {
     pub preserve_host: bool,
     pub connect_timeout: Duration,
     pub response_timeout: Duration,
-    pub upstream_name: String,
-    pub endpoint: EndpointAddr,
+    pub retry: RetryPolicy,
+    /// Shared by every route of the same group.
+    pub upstream: Arc<CompiledUpstream>,
 }
 
 /// One subsystem ready for request handling. Disabled routes are not
@@ -27,6 +33,9 @@ pub struct CompiledSubsystem {
     pub name: SubsystemName,
     pub enabled: bool,
     pub routes: RouteTable<CompiledRoute>,
+    /// Every upstream group of the subsystem, including ones no enabled
+    /// route uses (their runtime state must survive too).
+    pub upstreams: HashMap<UpstreamGroupId, Arc<CompiledUpstream>>,
 }
 
 /// The immutable, ready-to-serve view of the whole configuration at one
@@ -42,5 +51,26 @@ impl Snapshot {
     /// The snapshot before any configuration exists: version 0, no hosts.
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// The runtime state of every endpoint in this snapshot; the next
+    /// compile carries it over (see [`crate::compile`]).
+    pub fn runtime_registry(&self) -> RuntimeRegistry {
+        RuntimeRegistry::from_runtimes(
+            self.subsystems
+                .values()
+                .flat_map(|subsystem| subsystem.upstreams.values())
+                .flat_map(|upstream| {
+                    upstream.endpoints.iter().zip(&upstream.candidates).map(
+                        |(endpoint, candidate)| {
+                            (
+                                endpoint.id,
+                                endpoint.addr.clone(),
+                                candidate.runtime.clone(),
+                            )
+                        },
+                    )
+                }),
+        )
     }
 }

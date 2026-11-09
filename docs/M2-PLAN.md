@@ -374,29 +374,29 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream R: Routing and compile
 
-- [ ] **R1 (M) Compiled upstream types.** `CompiledUpstream` (name, policies,
+- [x] **R1 (M) Compiled upstream types.** `CompiledUpstream` (name, policies,
   endpoints, precomputed ring and weight tables) and `CompiledEndpoint` (id,
   address, weight, admin state, `Arc<EndpointRuntime>`); `CompiledRoute` holds an
   `Arc<CompiledUpstream>` instead of a single endpoint (routes of the same group
   share it).
-- [ ] **R2 (M) Compile with carried runtime.** `compile(version, config,
+- [x] **R2 (M) Compile with carried runtime.** `compile(version, config,
   &registry)` reuses an endpoint's runtime when its id and address match and
   starts fresh otherwise; replaces the "exactly one endpoint" rule with "at
   least one, at most 64, unique addresses".
   *Done when:* tests show state survives unrelated edits, resets when an
   address changes or the endpoint is removed, and a bad group is rejected.
-- [ ] **R3 (S) ConfigService owns the registry.** It passes the registry into
+- [x] **R3 (S) ConfigService owns the registry.** It passes the registry into
   every compile and publishes the new snapshot as before.
   *Done when:* a service test changes an unrelated route and sees an endpoint's
   ejection state unchanged, and sees it reset after the endpoint's address is
   edited.
-- [ ] **R4 (S) Lookup and resolver data.** The resolver reports the group's
+- [x] **R4 (S) Lookup and resolver data.** The resolver reports the group's
   algorithm and its eligible endpoints with states (E13); `build_upstream_uri`
   takes the chosen endpoint.
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (L) Select per request.** `UpstreamClient::forward` builds the request
+- [x] **D1 (L) Select per request.** `UpstreamClient::forward` builds the request
   context, selects, and rewrites the URL and `Host` for the chosen endpoint.
   *Done when:* an end-to-end test with three in-process backends sees traffic
   spread per algorithm, and `preserve_host = false` sends the chosen endpoint's
@@ -411,7 +411,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   recovery become visible in tests with a fake backend.
   *Done when:* killing a backend ejects it after the configured failures and a
   revived one returns after its ejection expires.
-- [ ] **D4 (M) Failure policy and the new fixed response.** `503 no healthy
+- [~] **D4 (M) Failure policy and the new fixed response.** (response and fail-open/closed done in PR4; panic-pick counting waits for T1 metrics) `503 no healthy
   upstream` (JSON code `no_healthy_upstream`) for fail-closed groups; panic-mode
   picks counted.
   *Done when:* tests cover all-unhealthy with each policy, and with all
@@ -607,8 +607,8 @@ Suggested slicing into pull requests, each leaving `main` green and releasable
 1. **PR1** G1, G3 (decisions and ADRs); G2 spike as its own throwaway branch
 2. **PR2** MD1-MD2, S1-S3 (model, schema, repository, revisions with ids)
 3. **PR3** B1-B8 (the pure balancing crate), in parallel with PR2
-4. **PR4** R1-R4 (compile with carried runtime; resolver data)
-5. **PR5** D1, D2, D4, D6, D7 (selection, accounting, failure policy) with Q1
+4. **PR4** R1-R4 (compile with carried runtime; resolver data), plus the core of D1 and D4's fixed response: the data plane must select an endpoint for the stack to stay green
+5. **PR5** D2, D6, D7 and the rest of D4 (accounting, access log, drain) with Q1
 6. **PR6** D3 (passive health) and T1's passive metrics
 7. **PR7** D5 (retries and budget)
 8. **PR8** H1-H4, rest of T1, T2 (active health crate)

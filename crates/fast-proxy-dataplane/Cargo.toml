@@ -6,6 +6,8 @@ description = "The hyper-based proxy data plane"
 publish = false
 
 [dependencies]
+fast-proxy-balancing = { path = "../fast-proxy-balancing" }
+fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
 bytes = "1"
@@ -21,7 +23,6 @@ tokio-util = "0.7"
 tracing = { workspace = true }
 
 [dev-dependencies]
-fast-proxy-model = { path = "../fast-proxy-model" }
 http-body-util = { workspace = true, features = ["channel"] }
 futures-util = "0.3"
 tempfile = { workspace = true }

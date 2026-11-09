@@ -10,6 +10,7 @@ use hyper::body::Incoming;
 
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
 use crate::responses::accepts_json;
+use crate::selection::select_endpoint;
 use crate::tracked_body::{RequestSummary, TrackedBody};
 use crate::{FixedResponse, Forward, Observability, ResponseBody, Target};
 
@@ -91,22 +92,30 @@ impl<F: Forward> RequestPipeline<F> {
             } => {
                 fields.subsystem = subsystem.name.as_str().to_string();
                 fields.route = route.prefix.clone();
-                fields.upstream = Some(route.endpoint.to_string());
-                let target = Target {
-                    subsystem,
-                    route,
-                    consumed_prefix_len,
-                    request_id: &request_id,
-                    client_addr,
-                    wants_json,
-                };
-                let forwarding = Instant::now();
-                let mut response = self.forwarder.forward(request, target).await;
-                fields.upstream_time = Some(forwarding.elapsed());
-                response
-                    .headers_mut()
-                    .insert(REQUEST_ID, header_value(&request_id));
-                response
+                let upstream = &route.upstream;
+                match select_endpoint(upstream, request.headers(), client_addr.ip(), None) {
+                    None => FixedResponse::NoHealthyUpstream.render(&request_id, wants_json),
+                    Some(selection) => {
+                        let endpoint = &upstream.endpoints[selection.index];
+                        fields.upstream = Some(endpoint.addr.to_string());
+                        let target = Target {
+                            subsystem,
+                            route,
+                            endpoint,
+                            consumed_prefix_len,
+                            request_id: &request_id,
+                            client_addr,
+                            wants_json,
+                        };
+                        let forwarding = Instant::now();
+                        let mut response = self.forwarder.forward(request, target).await;
+                        fields.upstream_time = Some(forwarding.elapsed());
+                        response
+                            .headers_mut()
+                            .insert(REQUEST_ID, header_value(&request_id));
+                        response
+                    }
+                }
             }
         };
 

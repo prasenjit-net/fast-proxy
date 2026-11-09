@@ -21,11 +21,23 @@ pub enum CompileError {
     )]
     UnknownUpstream { subsystem: String, prefix: String },
     #[error(
-        "upstream \"{upstream}\" in \"{subsystem}\" must have exactly one endpoint, found {count}"
+        "upstream \"{upstream}\" in \"{subsystem}\" must have 1 to 64 endpoints, found {count}"
     )]
     EndpointCount {
         subsystem: String,
         upstream: String,
         count: usize,
+    },
+    #[error("upstream \"{upstream}\" in \"{subsystem}\" lists endpoint {addr} more than once")]
+    DuplicateEndpoint {
+        subsystem: String,
+        upstream: String,
+        addr: String,
+    },
+    #[error("upstream \"{upstream}\" in \"{subsystem}\" is invalid: {reason}")]
+    InvalidUpstream {
+        subsystem: String,
+        upstream: String,
+        reason: String,
     },
 }

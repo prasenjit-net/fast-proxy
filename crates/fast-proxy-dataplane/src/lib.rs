@@ -12,11 +12,14 @@ mod listener;
 mod pipeline;
 mod request_id;
 mod responses;
+mod selection;
 mod server;
 mod tracked_body;
 mod trusted_proxies;
 mod upstream_client;
 
+#[cfg(test)]
+mod balancing_tests;
 #[cfg(test)]
 mod drain_tests;
 #[cfg(test)]

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_model::{Config, SubsystemConfig};
 use fast_proxy_routing::{compile, SnapshotHolder};
 use http::{Request, Response};
@@ -35,7 +36,7 @@ impl Forward for EchoForward {
             "matched {} route={} backend={} rest={rest} id={}",
             target.subsystem.name.as_str(),
             target.route.id.0,
-            target.route.endpoint,
+            target.endpoint.addr,
             target.request_id
         );
         Response::new(
@@ -218,7 +219,9 @@ async fn a_config_swap_takes_effect_for_the_next_request() {
     updated
         .subsystems
         .push(site(4, "fresh", "new.example.com", &["/"], true));
-    harness.holder.swap(compile(2, &updated).unwrap());
+    harness
+        .holder
+        .swap(compile(2, &updated, &RuntimeRegistry::new()).unwrap());
 
     let reply = get(harness.addr, "new.example.com", "/", "").await;
     assert_eq!(reply.status, 200);
@@ -272,7 +275,7 @@ async fn binding_an_address_in_use_names_the_listener() {
 #[tokio::test]
 async fn several_listeners_all_serve_the_same_pipeline() {
     let holder = Arc::new(SnapshotHolder::new());
-    holder.swap(compile(1, &config()).unwrap());
+    holder.swap(compile(1, &config(), &RuntimeRegistry::new()).unwrap());
     let specs = ["a", "b"].map(|name| ListenerSpec {
         name: name.into(),
         addr: ([127, 0, 0, 1], 0).into(),

@@ -6,6 +6,7 @@
 
 mod compile;
 mod compile_error;
+mod compiled_upstream;
 mod holder;
 mod host_table;
 mod lookup;
@@ -15,6 +16,7 @@ mod upstream_uri;
 
 pub use compile::compile;
 pub use compile_error::CompileError;
+pub use compiled_upstream::{CompiledEndpoint, CompiledUpstream};
 pub use holder::SnapshotHolder;
 pub use host_table::HostTable;
 pub use lookup::Lookup;

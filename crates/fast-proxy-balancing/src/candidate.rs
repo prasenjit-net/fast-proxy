@@ -13,7 +13,7 @@ pub struct Candidate {
 
 impl Candidate {
     /// Eligible for new requests: admin enabled, healthy and not ejected.
-    pub(crate) fn is_eligible(&self, now_ms: u64) -> bool {
+    pub fn is_eligible(&self, now_ms: u64) -> bool {
         self.admin_enabled && self.runtime.is_routable(now_ms)
     }
 }

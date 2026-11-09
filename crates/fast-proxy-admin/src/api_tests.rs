@@ -51,7 +51,7 @@ fn error_fields(body: &Value) -> Vec<String> {
 fn backend_for(app: &TestApp, host: &str, path: &str) -> Option<String> {
     let snapshot = app.config.snapshot_holder().load();
     match snapshot.lookup(host, path) {
-        Lookup::Matched { route, .. } => Some(route.route.endpoint.to_string()),
+        Lookup::Matched { route, .. } => Some(route.route.upstream.endpoints[0].addr.to_string()),
         _ => None,
     }
 }
@@ -688,16 +688,38 @@ async fn the_resolver_reports_the_exact_upstream_url() {
     assert_eq!(result["route"]["stripPrefix"], true);
     assert_eq!(result["route"]["upstreamPrefix"], "/v2");
     assert_eq!(result["route"]["preserveHost"], false);
-    assert_eq!(result["route"]["endpoint"], "127.0.0.1:3000");
+    assert_eq!(result["route"]["algorithm"], "round_robin");
+    let endpoints = result["route"]["endpoints"].as_array().unwrap();
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0]["addr"], "127.0.0.1:3000");
+    assert_eq!(endpoints[0]["state"], "enabled");
+    assert_eq!(endpoints[0]["eligible"], true);
     assert_eq!(
-        result["upstreamUrl"],
+        endpoints[0]["upstreamUrl"],
         "http://127.0.0.1:3000/v2/users?page=2&q=a%20b"
     );
     assert_eq!(body["version"], app.config.snapshot_holder().load().version);
 
     let root = resolve(&app, "shop.example.com", "/other").await;
     assert_eq!(root["data"]["route"]["prefix"], "/");
-    assert_eq!(root["data"]["upstreamUrl"], "http://127.0.0.1:3000/other");
+    assert_eq!(
+        root["data"]["route"]["endpoints"][0]["upstreamUrl"],
+        "http://127.0.0.1:3000/other"
+    );
+}
+
+#[tokio::test]
+async fn the_resolver_shows_which_endpoints_would_take_a_request_right_now() {
+    let app = TestApp::new().await;
+    shop_with_rewrite(&app).await;
+    let live = app.config.snapshot_holder().load();
+    for subsystem in live.subsystems.values() {
+        for upstream in subsystem.upstreams.values() {
+            upstream.candidates[0].runtime.record_probe(false, 1, 1);
+        }
+    }
+    let body = resolve(&app, "shop.example.com", "/api/x").await;
+    assert_eq!(body["data"]["route"]["endpoints"][0]["eligible"], false);
 }
 
 #[tokio::test]
@@ -717,7 +739,7 @@ async fn the_resolver_explains_why_nothing_matched() {
     assert_eq!(unknown["data"]["matched"], false);
     assert_eq!(unknown["data"]["reason"], "unknown_host");
     assert!(unknown["data"]["subsystem"].is_null());
-    assert!(unknown["data"]["upstreamUrl"].is_null());
+    assert!(unknown["data"]["route"].is_null());
 
     // Remove the catch-all so only /api remains.
     let (_, routes) = app.get(&format!("/api/subsystems/{id}/routes")).await;
@@ -755,7 +777,10 @@ async fn the_resolver_follows_live_edits() {
     )
     .await;
     let body = resolve(&app, "shop.example.com", "/x").await;
-    assert_eq!(body["data"]["upstreamUrl"], "http://127.0.0.1:4000/x");
+    assert_eq!(
+        body["data"]["route"]["endpoints"][0]["upstreamUrl"],
+        "http://127.0.0.1:4000/x"
+    );
 }
 
 #[tokio::test]

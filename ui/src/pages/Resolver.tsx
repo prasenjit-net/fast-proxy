@@ -54,7 +54,7 @@ function ResolutionView({ resolution, version }: { resolution: Resolution; versi
               <code>{route.prefix}</code>
             </Row>
             <Row label="Upstream">
-              {route.upstreamName} (<code>{route.endpoint}</code>)
+              {route.upstreamName} (<code>{route.algorithm}</code>)
             </Row>
             <Row label="Rewrite">
               {[
@@ -67,11 +67,18 @@ function ResolutionView({ resolution, version }: { resolution: Resolution; versi
             </Row>
           </>
         ) : null}
-        {resolution.upstreamUrl ? (
-          <Row label="Forwarded to">
-            <code className="font-semibold">{resolution.upstreamUrl}</code>
-          </Row>
-        ) : null}
+        {route
+          ? route.endpoints.map((endpoint) => (
+              <Row key={endpoint.id} label={endpoint.eligible ? "Forwarded to" : "Not eligible"}>
+                {endpoint.upstreamUrl ? (
+                  <code className="font-semibold">{endpoint.upstreamUrl}</code>
+                ) : (
+                  <code>{endpoint.addr}</code>
+                )}
+                {endpoint.state === "enabled" ? null : ` (${endpoint.state})`}
+              </Row>
+            ))
+          : null}
       </dl>
     </section>
   );

@@ -148,12 +148,20 @@ export interface Resolution {
     id: number;
     prefix: string;
     upstreamName: string;
-    endpoint: string;
+    algorithm: string;
+    endpoints: {
+      id: number;
+      addr: string;
+      weight: number;
+      state: "enabled" | "draining" | "disabled";
+      /** Admin-enabled, healthy and not ejected right now. */
+      eligible: boolean;
+      upstreamUrl: string | null;
+    }[];
     stripPrefix: boolean;
     upstreamPrefix: string;
     preserveHost: boolean;
   } | null;
-  upstreamUrl: string | null;
 }
 
 export interface Status {

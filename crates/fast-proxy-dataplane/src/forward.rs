@@ -2,7 +2,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use fast_proxy_routing::{CompiledRoute, CompiledSubsystem};
+use fast_proxy_routing::{CompiledEndpoint, CompiledRoute, CompiledSubsystem};
 use http::{Request, Response};
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
@@ -15,6 +15,8 @@ pub type ResponseBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>
 pub struct Target<'snapshot> {
     pub subsystem: &'snapshot CompiledSubsystem,
     pub route: &'snapshot CompiledRoute,
+    /// The endpoint of the route's upstream chosen for this request.
+    pub endpoint: &'snapshot CompiledEndpoint,
     /// How many bytes of the request path the route's prefix consumed; the
     /// rest of the path is `request.uri().path()[consumed_prefix_len..]`.
     pub consumed_prefix_len: usize,

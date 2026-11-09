@@ -12,6 +12,7 @@
 mod algorithms;
 mod balancer;
 mod candidate;
+mod clock;
 mod hashing;
 mod passive;
 mod registry;
@@ -20,6 +21,7 @@ mod runtime;
 
 pub use balancer::Balancer;
 pub use candidate::{Candidate, RequestContext, Selection};
+pub use clock::monotonic_ms;
 pub use hashing::{hash_bytes, hash_ip};
 pub use passive::{record_outcome, Outcome, Transition};
 pub use registry::RuntimeRegistry;

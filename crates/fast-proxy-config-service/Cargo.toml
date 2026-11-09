@@ -6,6 +6,7 @@ description = "The config apply pipeline: validate, persist, compile, and swap t
 publish = false
 
 [dependencies]
+fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }

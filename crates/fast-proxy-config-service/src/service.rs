@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_routing::{compile, Snapshot, SnapshotHolder};
 use fast_proxy_store::{Connection, Database, Mutation, Store, StoreError};
 use fast_proxy_telemetry::{Metrics, ReloadOutcome};
@@ -49,7 +50,7 @@ impl ConfigService {
             .run(|db| Ok((db.load_all()?, db.current_version()?)))
             .await?;
         let holder = Arc::new(SnapshotHolder::new());
-        holder.swap(compile(version, &config)?);
+        holder.swap(compile(version, &config, &RuntimeRegistry::new())?);
         metrics.set_config_version(version);
         let (changes, _) = broadcast::channel(64);
         Ok(Self {
@@ -111,9 +112,13 @@ impl ConfigService {
         mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError> + Send + 'static,
     ) -> Result<Applied<T>, StoreError> {
         let _writer = self.writer.lock().await;
+        // Endpoint runtime state (health, ejection, latency) is carried from
+        // the live snapshot into the new one; the writer lock keeps the live
+        // snapshot from changing under us.
+        let previous = self.holder.load().runtime_registry();
         let (written, compiled, summary) = self
             .store
-            .run(move |db| persist_and_compile(db, mutate))
+            .run(move |db| persist_and_compile(db, mutate, &previous))
             .await?;
         let mut snapshot = compiled.ok_or_else(|| {
             StoreError::Internal("a committed change produced no snapshot".into())
@@ -150,6 +155,7 @@ type PersistOutcome<T> = (fast_proxy_store::Written<T>, Option<Snapshot>, String
 fn persist_and_compile<T>(
     db: &mut Database,
     mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
+    previous: &RuntimeRegistry,
 ) -> Result<PersistOutcome<T>, StoreError> {
     let mut compiled = None;
     let mut summary = String::new();
@@ -159,7 +165,7 @@ fn persist_and_compile<T>(
             summary = mutation.summary.clone();
             Ok(mutation)
         },
-        |config| match compile(0, config) {
+        |config| match compile(0, config, previous) {
             Ok(snapshot) => {
                 compiled = Some(snapshot);
                 Ok(())

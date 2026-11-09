@@ -463,6 +463,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "chrono",
+ "fast-proxy-balancing",
  "fast-proxy-config-service",
  "fast-proxy-model",
  "fast-proxy-routing",
@@ -490,6 +491,7 @@ dependencies = [
 name = "fast-proxy-config-service"
 version = "0.0.0"
 dependencies = [
+ "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-store",
@@ -504,6 +506,7 @@ name = "fast-proxy-dataplane"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-telemetry",
@@ -531,6 +534,7 @@ name = "fast-proxy-routing"
 version = "0.0.0"
 dependencies = [
  "arc-swap",
+ "fast-proxy-balancing",
  "fast-proxy-model",
  "http",
  "proptest",

@@ -14,6 +14,8 @@ pub enum FixedResponse {
     SubsystemDisabled,
     /// The subsystem has no route for the path.
     NoRoute,
+    /// The route's upstream group has no endpoint that may take the request.
+    NoHealthyUpstream,
     /// The upstream refused or dropped the connection.
     BadGateway,
     /// The upstream did not answer in time.
@@ -24,7 +26,7 @@ impl FixedResponse {
     pub fn status(self) -> StatusCode {
         match self {
             Self::UnknownHost | Self::NoRoute => StatusCode::NOT_FOUND,
-            Self::SubsystemDisabled => StatusCode::SERVICE_UNAVAILABLE,
+            Self::SubsystemDisabled | Self::NoHealthyUpstream => StatusCode::SERVICE_UNAVAILABLE,
             Self::BadGateway => StatusCode::BAD_GATEWAY,
             Self::GatewayTimeout => StatusCode::GATEWAY_TIMEOUT,
         }
@@ -35,6 +37,7 @@ impl FixedResponse {
             Self::UnknownHost => "unknown_host",
             Self::SubsystemDisabled => "subsystem_disabled",
             Self::NoRoute => "no_route",
+            Self::NoHealthyUpstream => "no_healthy_upstream",
             Self::BadGateway => "bad_gateway",
             Self::GatewayTimeout => "gateway_timeout",
         }
@@ -45,6 +48,7 @@ impl FixedResponse {
             Self::UnknownHost => "unknown host",
             Self::SubsystemDisabled => "service unavailable",
             Self::NoRoute => "no route matches this path",
+            Self::NoHealthyUpstream => "no healthy upstream",
             Self::BadGateway => "bad gateway",
             Self::GatewayTimeout => "gateway timeout",
         }
@@ -102,10 +106,11 @@ mod tests {
 
     use super::*;
 
-    const ALL: [FixedResponse; 5] = [
+    const ALL: [FixedResponse; 6] = [
         FixedResponse::UnknownHost,
         FixedResponse::SubsystemDisabled,
         FixedResponse::NoRoute,
+        FixedResponse::NoHealthyUpstream,
         FixedResponse::BadGateway,
         FixedResponse::GatewayTimeout,
     ];
@@ -118,7 +123,7 @@ mod tests {
     #[test]
     fn maps_each_kind_to_its_status() {
         let statuses: Vec<u16> = ALL.iter().map(|r| r.status().as_u16()).collect();
-        assert_eq!(statuses, [404, 503, 404, 502, 504]);
+        assert_eq!(statuses, [404, 503, 404, 503, 502, 504]);
     }
 
     #[tokio::test]

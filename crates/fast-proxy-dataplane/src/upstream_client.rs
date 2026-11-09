@@ -89,7 +89,12 @@ impl Forward for UpstreamClient {
         target: Target<'a>,
     ) -> Response<ResponseBody> {
         let route = target.route;
-        let Some(uri) = build_upstream_uri(route, request.uri(), target.consumed_prefix_len) else {
+        let Some(uri) = build_upstream_uri(
+            route,
+            &target.endpoint.addr,
+            request.uri(),
+            target.consumed_prefix_len,
+        ) else {
             tracing::warn!(route = route.id.0, "cannot build an upstream URI");
             return self.failed(&target, UpstreamErrorKind::Other);
         };
@@ -114,7 +119,11 @@ impl Forward for UpstreamClient {
                 scheme: "http",
             },
         );
-        headers::apply_host(headers, route.preserve_host, &route.endpoint.to_string());
+        headers::apply_host(
+            headers,
+            route.preserve_host,
+            &target.endpoint.addr.to_string(),
+        );
         headers::apply_request_id(headers, target.request_id);
         *request.uri_mut() = uri;
 
@@ -122,11 +131,11 @@ impl Forward for UpstreamClient {
         let outcome = tokio::time::timeout(route.response_timeout, client.request(request)).await;
         match outcome {
             Err(_elapsed) => {
-                tracing::warn!(upstream = %route.endpoint, "upstream response timed out");
+                tracing::warn!(upstream = %target.endpoint.addr, "upstream response timed out");
                 self.failed(&target, UpstreamErrorKind::Timeout)
             }
             Ok(Err(err)) => {
-                tracing::warn!(upstream = %route.endpoint, "upstream request failed: {err}");
+                tracing::warn!(upstream = %target.endpoint.addr, "upstream request failed: {err}");
                 self.failed(&target, kind_for(err.is_connect(), &err))
             }
             Ok(Ok(response)) => match client_upgrade {
