@@ -1,6 +1,6 @@
 # ADR 0001: SQLite via rusqlite for configuration storage
 
-Status: proposed (needs owner confirmation). Plan reference: M1 D1, D2, D3.
+Status: accepted (owner confirmed 2026-11-09). Plan reference: M1 D1, D2, D3.
 
 ## Context
 

@@ -12,7 +12,7 @@ mod subsystem_name;
 mod timeout;
 
 pub use config::{
-    Config, EndpointConfig, RouteConfig, RouteId, SubsystemConfig, SubsystemId,
+    Config, EndpointConfig, HostId, RouteConfig, RouteId, SubsystemConfig, SubsystemId,
     UpstreamGroupConfig, UpstreamGroupId,
 };
 pub use endpoint_addr::EndpointAddr;

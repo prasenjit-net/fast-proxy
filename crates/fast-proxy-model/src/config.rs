@@ -6,6 +6,10 @@ use crate::{EndpointAddr, HostPattern, RoutePrefix, SubsystemName, UpstreamPrefi
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SubsystemId(pub i64);
 
+/// Database id of a host pattern row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HostId(pub i64);
+
 /// Database id of an upstream group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UpstreamGroupId(pub i64);
@@ -28,6 +32,7 @@ pub struct SubsystemConfig {
     pub id: SubsystemId,
     pub name: SubsystemName,
     pub enabled: bool,
+    pub description: String,
     pub hosts: Vec<HostPattern>,
     pub upstream_groups: Vec<UpstreamGroupConfig>,
     pub routes: Vec<RouteConfig>,

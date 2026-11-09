@@ -155,6 +155,7 @@ mod tests {
             id: SubsystemId(id),
             name: SubsystemName::parse(name).unwrap(),
             enabled: true,
+            description: String::new(),
             hosts: hosts
                 .iter()
                 .map(|h| HostPattern::parse(h).unwrap())

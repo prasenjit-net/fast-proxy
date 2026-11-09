@@ -57,12 +57,12 @@ the dependent tasks start.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | DB engine and crate | SQLite in WAL mode via `rusqlite` with the `bundled` feature (no system dependency, simple sync API). **(confirm)** |
+| D1 | DB engine and crate | SQLite in WAL mode via `rusqlite` with the `bundled` feature (no system dependency, simple sync API). Confirmed. |
 | D2 | Schema management | No migrations (project is not deployed). A single embedded `schema.sql` creates the tables on first open; schema changes edit that file directly. `PRAGMA user_version` is set only to detect an incompatible DB file. |
 | D3 | DB access from async | One `Store` handle owning a single connection on a dedicated thread, driven by a channel. The data plane hot path **never** touches the DB. |
 | D4 | Upstream shape in M1 | Schema already has `upstream_group` and `upstream_endpoint`, but validation allows **exactly one endpoint** per group. M2 lifts this with no migration. |
 | D5 | HTTP stack | `hyper` 1.x + `hyper-util` (server auto builder, legacy client with pooling). Axum stays admin-only. |
-| D6 | Metrics library | `prometheus` crate (simple, text exposition built in) unless the T0.1 spike shows a problem. **(confirm)** |
+| D6 | Metrics library | `prometheus` crate (simple, text exposition built in) unless the T0.1 spike shows a problem. Confirmed. |
 | D7 | Matcher implementation | Own small implementation: `HashMap` for exact hosts, suffix `HashMap` for wildcards, segment-aware longest-prefix for routes. Benchmark before considering a crate. |
 | D8 | IDs | Integer primary keys internally; names are unique and used in URLs of the UI and as metric labels. Renaming a subsystem changes its label (documented). |
 | D9 | Concurrent admin edits | Last write wins in M1. Every resource returns `updatedAt` so optimistic concurrency can be added later. |
@@ -200,8 +200,9 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   scratch branch to confirm they fit: pool reuse works, per-request timeouts
   are controllable, body streaming does not buffer.
   *Done when:* notes are merged and the open **(confirm)** items are resolved.
-  *Status:* ADRs 0001-0004 are written in `docs/adr/` as **proposed**. Still
-  open: owner confirmation of D1 and D6, and the hyper client / metrics spike.
+  *Status:* ADRs 0001-0004 are written in `docs/adr/`. D1 (rusqlite) and D6
+  (prometheus crate) were confirmed by the owner on 2026-11-09. Still open:
+  the hyper client / metrics spike.
 - [x] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
   `/api/error-demo`, the Components page, `TasksCard`, their tests, and the
   related README sections. Keep access log, events, and the WebSocket plumbing.
@@ -253,14 +254,14 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream S: Storage
 
-- [ ] **S1 (M) SQLite store skeleton.** Add `rusqlite` (bundled). `Store`
+- [x] **S1 (M) SQLite store skeleton.** Add `rusqlite` (bundled). `Store`
   handle running a dedicated thread with a command channel (D3). On open:
   create parent dir, enable WAL, `foreign_keys=ON`, `busy_timeout`, apply
   the embedded `schema.sql` on an empty DB (D2). Refuse to start if the DB
   `user_version` does not match the binary.
   *Done when:* tests open a temp DB, create the schema from empty, reopen
   idempotently, and reject a mismatched `user_version`.
-- [ ] **S2 (S) Schema** (section 5) as `schema.sql` in the store crate.
+- [x] **S2 (S) Schema** (section 5) as `schema.sql` in the store crate.
 - [x] **S3 (M) Domain models and validation** (built in the `model` crate, one
   file per type, not `store/models.rs`), pure and heavily unit tested:
   - subsystem name: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
@@ -274,7 +275,7 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   - timeouts: bounded (for example 100 ms to 10 min)
   *Done when:* table-driven tests list accepted and rejected inputs, each
   rejection producing a field-specific message.
-- [ ] **S4 (L) Repository operations** with transactions, each write also
+- [x] **S4 (L) Repository operations** with transactions, each write also
   appending a `revision` row (D12) and returning the new version:
   - subsystems: create, get, list, update, delete
   - hosts: add, remove (uniqueness enforced across subsystems)
@@ -285,7 +286,17 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   mapped to `AppError` (404, 409, 400, 500).
   *Done when:* each operation has success and failure tests, including
   uniqueness conflicts, FK/RESTRICT behavior, cascade delete, and revision rows.
-- [ ] **S5 (M) Revisions and rollback.** `list_revisions`, `get_revision`,
+  *Result and notes:*
+  - Operations are plain functions over `&Connection` in `repository/`; all
+    writes go through `Database::write(mutate, check)`, which runs the mutation
+    in a transaction, passes the would-be `Config` to `check`, and only then
+    records the revision and commits. `check` is where R5 plugs in `compile`.
+  - `route.upstream_group_id` uses NO ACTION instead of RESTRICT: same effect
+    for deleting a group, but deleting a whole subsystem (cascade) still works.
+  - `StoreError` to `AppError` mapping (404/409/400/500) is done with the admin
+    API in A1; `created_at`/`updated_at` are stored but not yet exposed (A1).
+  - Host ids are not part of `Config`; `hosts::list` returns `(HostId, pattern)`.
+- [x] **S5 (M) Revisions and rollback.** `list_revisions`, `get_revision`,
   `rollback(version)`: replace live tables with the stored config in one
   transaction and append a new revision "rollback to vN". Prune to the last 100.
   *Done when:* a test creates, edits, deletes, rolls back to each prior

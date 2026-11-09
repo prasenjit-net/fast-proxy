@@ -1,6 +1,6 @@
 # ADR 0003: the `prometheus` crate for metrics
 
-Status: proposed (needs owner confirmation). Plan reference: M1 D6.
+Status: accepted (owner confirmed 2026-11-09). Plan reference: M1 D6.
 
 ## Context
 

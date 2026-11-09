@@ -73,6 +73,7 @@ mod tests {
             id: SubsystemId(id),
             name: SubsystemName::parse(name).unwrap(),
             enabled: true,
+            description: String::new(),
             hosts: vec![HostPattern::parse(host).unwrap()],
             upstream_groups: vec![UpstreamGroupConfig {
                 id: UpstreamGroupId(id),
