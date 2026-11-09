@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="description" content="Single-binary fullstack starter: Rust + React" />
+    <!-- The server rewrites this content= value to [ui].default_theme from
+         config.toml when it serves this file (see src/static_assets.rs).
+         In `npm run dev` it stays literally "__DEFAULT_THEME__", which the
+         script below treats the same as "auto". -->
+    <meta name="default-theme" content="__DEFAULT_THEME__" />
+    <title>Rusty Template</title>
+    <script>
+      // Apply the real default theme before first paint, so there's no
+      // flash of the wrong mode while the SPA boots and fetches
+      // /api/config. The React ThemeProvider takes over after hydration.
+      (function () {
+        var mode = null;
+        try {
+          mode = localStorage.getItem("rt-theme");
+        } catch (e) {
+          /* storage unavailable */
+        }
+        if (!mode) {
+          var meta = document.querySelector('meta[name="default-theme"]');
+          var configured = meta && meta.content;
+          mode = configured === "light" || configured === "dark" ? configured : "auto";
+        }
+        var dark =
+          mode === "dark" ||
+          (mode !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

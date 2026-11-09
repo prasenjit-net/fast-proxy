@@ -1,0 +1,198 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Prepare release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+      RELEASE_BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+    steps:
+      - name: Check release token and branch
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_BOT_TOKEN:-}" ]; then
+            echo "::error::Repository secret RELEASE_BOT_TOKEN is required to push the release branch and create the PR."
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "::error::Prepare Release must be run from main. Current ref: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - id: version
+        name: Bump version files
+        run: |
+          set -euo pipefail
+          current_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if ! [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Cargo.toml package version must be semver MAJOR.MINOR.PATCH; got '${current_version}'."
+            exit 1
+          fi
+
+          IFS=. read -r major minor patch <<< "$current_version"
+          case "${{ inputs.bump }}" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+            *)
+              echo "::error::Unsupported bump '${{ inputs.bump }}'."
+              exit 1
+              ;;
+          esac
+
+          version="${major}.${minor}.${patch}"
+          tag="v${version}"
+          branch="release/${tag}"
+
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "::error::Release tag ${tag} already exists."
+            exit 1
+          fi
+
+          existing_pr=$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --base main \
+            --head "${GITHUB_REPOSITORY_OWNER}:${branch}" \
+            --json url \
+            --jq '.[0].url // ""')
+          if [ -n "$existing_pr" ]; then
+            echo "::error::A release PR for ${tag} is already open: ${existing_pr}"
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+            echo "::error::Release branch ${branch} already exists unexpectedly."
+            exit 1
+          fi
+
+          export VERSION="$version"
+          perl -0pi -e 's/(^\[package\]\nname = "rusty-template"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/m' Cargo.toml
+          perl -0pi -e 's/(\[\[package\]\]\nname = "rusty-template"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/' Cargo.lock
+
+          node <<'NODE'
+          const fs = require("fs");
+          const version = process.env.VERSION;
+          for (const file of ["ui/package.json", "ui/package-lock.json"]) {
+            const data = JSON.parse(fs.readFileSync(file, "utf8"));
+            data.version = version;
+            if (data.packages && data.packages[""]) {
+              data.packages[""].version = version;
+            }
+            fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+          }
+          NODE
+
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "branch=${branch}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate version files
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+
+          cargo_toml_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          cargo_lock_version=$(perl -0ne 'print "$1\n" if /\[\[package\]\]\nname = "rusty-template"\nversion = "([^"]+)"/' Cargo.lock)
+          package_version=$(node -p 'require("./ui/package.json").version')
+          package_lock_version=$(node -p 'require("./ui/package-lock.json").version')
+          package_lock_root_version=$(node -p 'require("./ui/package-lock.json").packages[""].version')
+
+          for actual in "$cargo_toml_version" "$cargo_lock_version" "$package_version" "$package_lock_version" "$package_lock_root_version"; do
+            if [ "$actual" != "$version" ]; then
+              echo "::error::Version files disagree. Expected ${version}, found ${actual}."
+              exit 1
+            fi
+          done
+
+          cargo test --locked --no-run
+          npm ci --ignore-scripts --prefix ui
+
+      - name: Create release branch and PR
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          branch="${{ steps.version.outputs.branch }}"
+
+          git diff --exit-code -- Cargo.toml Cargo.lock ui/package.json ui/package-lock.json >/dev/null && {
+            echo "::error::No version changes were produced for ${tag}."
+            exit 1
+          }
+
+          git config user.name "release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git switch -c "$branch"
+          git add Cargo.toml Cargo.lock ui/package.json ui/package-lock.json
+          git commit -m "chore(release): ${tag}"
+
+          git remote set-url origin "https://x-access-token:${RELEASE_BOT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "$branch"
+
+          if ! gh label list --repo "${GITHUB_REPOSITORY}" --search release --json name --jq '.[].name' | grep -Fx release >/dev/null; then
+            gh label create release \
+              --repo "${GITHUB_REPOSITORY}" \
+              --color "0E8A16" \
+              --description "Release PR"
+          fi
+
+          gh pr create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base main \
+            --head "${branch}" \
+            --title "chore(release): ${tag}" \
+            --label release \
+            --body "Prepare release ${tag}.
+
+          This PR was created by the Prepare Release workflow and must pass the normal protected-branch review and CI requirements before publishing.
+
+          Version sources updated:
+          - Cargo.toml
+          - Cargo.lock
+          - ui/package.json
+          - ui/package-lock.json"

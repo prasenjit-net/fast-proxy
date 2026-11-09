@@ -1,0 +1,280 @@
+/* =====================================================================
+   Greptile-inspired theme ("Grove") on Tailwind CSS v4.
+
+   Cool light-gray canvas with a faint emerald grid, white surfaces,
+   dark purple-slate ink, mint/emerald accents, and monospace meta text.
+   Tokens flip with <html data-theme="light|dark"> (stamped before first
+   paint by index.html and managed by ThemeContext). Chart colors are
+   contrast- and color-vision-validated per mode.
+   ===================================================================== */
+
+@import "tailwindcss";
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --canvas: #e9e9e9;
+  --surface: #ffffff;
+  --surface-2: #f1f0f3;
+  --line: #d9d8de;
+  --line-strong: #bcbac6;
+
+  --ink: #2b2938;
+  --ink-muted: #5d5a70;
+  --ink-faint: #8f8ca1;
+
+  --accent: #0d7d59;
+  --accent-strong: #0a6448;
+  --accent-soft: rgba(16, 185, 129, 0.13);
+  --on-accent: #ffffff;
+
+  --ok: #17825c;
+  --warn: #9c7215;
+  --err: #cd4f41;
+  --info: #3f63e0;
+  --ok-soft: rgba(23, 130, 92, 0.12);
+  --warn-soft: rgba(156, 114, 21, 0.13);
+  --err-soft: rgba(205, 79, 65, 0.11);
+  --info-soft: rgba(63, 99, 224, 0.1);
+
+  --chart-1: #0d7d59; /* validated on --surface, light */
+  --chart-2: #3f63e0;
+  --chart-grid: #e2e1e6;
+
+  --scrim: rgba(43, 41, 56, 0.45);
+  --grid-line: rgba(16, 185, 129, 0.05);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: #14131b;
+  --surface: #1d1b26;
+  --surface-2: #272432;
+  --line: #343047;
+  --line-strong: #4a4562;
+
+  --ink: #eae8f2;
+  --ink-muted: #a5a1b8;
+  --ink-faint: #757088;
+
+  --accent: #28e99f;
+  --accent-strong: #5cf2b8;
+  --accent-soft: rgba(40, 233, 159, 0.13);
+  --on-accent: #0d2b1f;
+
+  --ok: #5fce97;
+  --warn: #dfb35c;
+  --err: #ff8578;
+  --info: #8ba4ff;
+  --ok-soft: rgba(95, 206, 151, 0.13);
+  --warn-soft: rgba(223, 179, 92, 0.13);
+  --err-soft: rgba(255, 133, 120, 0.12);
+  --info-soft: rgba(139, 164, 255, 0.12);
+
+  --chart-1: #1fae7d; /* validated on --surface, dark */
+  --chart-2: #6d8bf5;
+  --chart-grid: #2b2837;
+
+  --scrim: rgba(0, 0, 0, 0.6);
+  --grid-line: rgba(40, 233, 159, 0.045);
+}
+
+/* Register the tokens as Tailwind colors (bg-surface, text-ink, …).
+   `inline` keeps them pointing at the vars above so both themes work. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-err: var(--err);
+  --color-err-soft: var(--err-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-scrim: var(--scrim);
+}
+
+@layer base {
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-size: 15px;
+    /* The Greptile-style faint emerald grid on the page canvas. */
+    background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 28px 28px;
+    transition: background-color 180ms ease, color 180ms ease;
+  }
+
+  code {
+    @apply rounded-[5px] bg-surface-2 px-[0.4em] py-[0.1em] font-mono text-[0.85em];
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 5px;
+    border: 2px solid var(--canvas);
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Shared design-system atoms. Everything else is styled with utilities
+   directly in the components. */
+@layer components {
+  .btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-transparent px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-on-accent hover:enabled:bg-accent-strong;
+  }
+
+  .btn-secondary {
+    @apply border-line-strong bg-surface text-ink hover:enabled:bg-surface-2;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-ink-muted hover:enabled:bg-surface-2 hover:enabled:text-ink;
+  }
+
+  .btn-danger {
+    @apply bg-err-soft text-err hover:enabled:bg-err hover:enabled:text-surface;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-[0.8rem];
+  }
+
+  .icon-btn {
+    @apply inline-flex size-[34px] shrink-0 cursor-pointer items-center justify-center rounded-lg bg-transparent text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink;
+  }
+
+  .icon-btn.danger {
+    @apply hover:bg-err-soft hover:text-err;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-[0.9rem] text-ink transition-colors placeholder:text-ink-faint focus:border-accent focus:ring-[3px] focus:ring-accent-soft focus:outline-none;
+  }
+
+  .card {
+    @apply rounded-xl border border-line bg-surface p-5 shadow-sm;
+  }
+
+  .card-head {
+    @apply mb-4 flex items-baseline gap-3;
+  }
+
+  .card-head h2 {
+    @apply text-[0.95rem] font-semibold;
+  }
+
+  .card-hint {
+    @apply font-mono text-[0.7rem] text-ink-faint;
+  }
+
+  .spinner {
+    @apply size-[22px] shrink-0 animate-spin rounded-full border-[2.5px] border-line;
+    border-top-color: var(--accent);
+  }
+
+  .skeleton {
+    @apply h-3.5 w-full rounded-full;
+    background: linear-gradient(
+      100deg,
+      var(--surface-2) 40%,
+      var(--line) 50%,
+      var(--surface-2) 60%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease infinite;
+  }
+}
+
+/* SVG chart chrome (utilities don't reach into SVG presentation attrs). */
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart-crosshair {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.chart-tick {
+  fill: var(--ink-faint);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+/* Animations */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.toast-in {
+  animation: toast-in 200ms ease-out;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,26 @@
+# ------------------------------------------------------------------
+# rusty-template configuration
+#
+# Every value here can be overridden on the command line, e.g.:
+#   rusty-template --config other.toml --port 9000 --log-level debug
+# ------------------------------------------------------------------
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[logging]
+# tracing filter: trace | debug | info | warn | error
+# (also accepts full directives like "info,access=debug")
+level = "info"
+# Per-request access log file. Comment out (or pass --no-access-log)
+# to disable the file; requests are still logged to the console.
+access_log = "access.log"
+
+[ui]
+# This whole section is served to the SPA via GET /api/config.
+app_name = "Rusty Template"
+tagline = "Single-binary fullstack starter"
+# Theme the UI uses until the visitor picks one: light | dark | auto
+default_theme = "auto"
+repo_url = "https://github.com/prasenjit-net/rusty-template"
