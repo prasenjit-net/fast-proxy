@@ -406,7 +406,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   response head.
   *Done when:* tests show the in-flight count returns to zero after normal,
   aborted and upgraded requests.
-- [ ] **D3 (M) Passive outcomes.** Record connect error, timeout and
+- [x] **D3 (M) Passive outcomes.** Record connect error, timeout and
   `502/503/504` as failures and everything else as success (E7); ejection and
   recovery become visible in tests with a fake backend.
   *Done when:* killing a backend ejects it after the configured failures and a
@@ -449,7 +449,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream T: Telemetry
 
-- [ ] **T1 (M) Upstream metrics.** `fastproxy_upstream_endpoint_healthy`,
+- [~] **T1 (M) Upstream metrics.** (done in PR6: `upstream_requests_total` by outcome, `endpoint_ejections_total`, `upstream_panic_total`, series deleted for removed endpoints; still to come: `endpoint_healthy`, `in_flight`, `retries_total`, `retry_budget_exhausted_total`, `health_checks_total`) `fastproxy_upstream_endpoint_healthy`,
   `..._in_flight`, `fastproxy_upstream_requests_total` (by outcome),
   `fastproxy_upstream_retries_total` (by reason),
   `fastproxy_retry_budget_exhausted_total`, `fastproxy_health_checks_total`,
@@ -609,7 +609,7 @@ Suggested slicing into pull requests, each leaving `main` green and releasable
 3. **PR3** B1-B8 (the pure balancing crate), in parallel with PR2
 4. **PR4** R1-R4 (compile with carried runtime; resolver data), plus the core of D1 and D4's fixed response: the data plane must select an endpoint for the stack to stay green
 5. **PR5** D2, D6, D7 and the rest of D4 (accounting, access log, drain) with Q1
-6. **PR6** D3 (passive health) and T1's passive metrics
+6. **PR6** D3 (passive health), T1's passive metrics and the panic-pick counter from D4
 7. **PR7** D5 (retries and budget)
 8. **PR8** H1-H4, rest of T1, T2 (active health crate)
 9. **PR9** A1-A5 (admin API)

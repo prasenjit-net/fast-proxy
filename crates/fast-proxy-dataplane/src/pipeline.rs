@@ -102,6 +102,11 @@ impl<F: Forward> RequestPipeline<F> {
                     Some(selection) => {
                         let endpoint = &upstream.endpoints[selection.index];
                         let candidate = &upstream.candidates[selection.index];
+                        if selection.panic {
+                            self.observability
+                                .metrics
+                                .upstream_panic(subsystem.name.as_str(), &upstream.name);
+                        }
                         in_flight = Some(candidate.runtime.track());
                         fields.upstream = Some(endpoint.addr.to_string());
                         fields.attempts = 1;
@@ -109,6 +114,7 @@ impl<F: Forward> RequestPipeline<F> {
                             subsystem,
                             route,
                             endpoint,
+                            endpoint_index: selection.index,
                             candidate,
                             consumed_prefix_len,
                             request_id: &request_id,

@@ -594,3 +594,62 @@ fn subsystem_fields_for(name: &str) -> SubsystemFields {
         description: String::new(),
     }
 }
+
+#[tokio::test]
+async fn removing_an_endpoint_deletes_its_metric_series() {
+    use fast_proxy_telemetry::{EndpointLabels, Metrics, UpstreamOutcome};
+    let metrics = Arc::new(Metrics::new());
+    let service =
+        ConfigService::start_with_metrics(Store::open_in_memory().unwrap(), metrics.clone())
+            .await
+            .unwrap();
+    let site = service
+        .apply(create_site(
+            "shop",
+            "shop.example.com".into(),
+            "127.0.0.1:3000",
+        ))
+        .await
+        .unwrap()
+        .value;
+    let second = service
+        .apply(move |conn| {
+            let group = subsystems::get(conn, site)?.upstream_groups[0].id;
+            let added = EndpointFields {
+                addr: EndpointAddr::parse("127.0.0.1:3001").unwrap(),
+                weight: 1,
+                state: EndpointState::Enabled,
+            };
+            let id = fast_proxy_store::repository::endpoints::add(conn, site, group, &added)?;
+            Ok(Mutation {
+                value: (group, id),
+                summary: "add".into(),
+            })
+        })
+        .await
+        .unwrap()
+        .value;
+    for endpoint in ["127.0.0.1:3000", "127.0.0.1:3001"] {
+        let labels = EndpointLabels {
+            subsystem: "shop",
+            upstream: "backend",
+            endpoint,
+        };
+        metrics.upstream_request(labels, UpstreamOutcome::Success);
+    }
+    assert!(metrics.render().contains("127.0.0.1:3001"));
+
+    service
+        .apply(move |conn| {
+            fast_proxy_store::repository::endpoints::delete(conn, site, second.0, second.1)?;
+            Ok(Mutation {
+                value: (),
+                summary: "remove".into(),
+            })
+        })
+        .await
+        .unwrap();
+    let text = metrics.render();
+    assert!(text.contains("127.0.0.1:3000"));
+    assert!(!text.contains("127.0.0.1:3001"), "{text}");
+}

@@ -29,6 +29,8 @@ mod forwarding_tests;
 #[cfg(test)]
 mod observability_tests;
 #[cfg(test)]
+mod passive_health_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod test_upstream;

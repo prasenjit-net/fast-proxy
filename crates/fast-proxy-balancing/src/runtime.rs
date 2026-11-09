@@ -100,6 +100,12 @@ impl EndpointRuntime {
         }
     }
 
+    /// Gives up a half-open trial whose request ended without a verdict (for
+    /// example the client left first), so the next request may try instead.
+    pub fn release_trial(&self) {
+        self.trial_in_flight.store(false, Relaxed);
+    }
+
     /// Feeds one active probe result through the rise/fall hysteresis.
     /// Returns the new health when this probe flipped it.
     pub fn record_probe(&self, ok: bool, rise: u32, fall: u32) -> Option<bool> {
@@ -231,6 +237,16 @@ mod tests {
         assert!(!runtime.is_routable(100), "one trial at a time");
         assert_eq!(runtime.status(50).ejected_until_ms, Some(100));
         assert_eq!(runtime.status(100).ejected_until_ms, None);
+    }
+
+    #[test]
+    fn releasing_an_abandoned_trial_lets_the_next_request_try() {
+        let runtime = EndpointRuntime::new();
+        runtime.ejected_until_ms.store(100, Relaxed);
+        runtime.mark_selected(100);
+        assert!(!runtime.is_routable(100));
+        runtime.release_trial();
+        assert!(runtime.is_routable(100));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use fast_proxy_balancing::{monotonic_ms, InFlightGuard};
+use fast_proxy_balancing::{monotonic_ms, record_outcome, InFlightGuard, Outcome, Transition};
 use fast_proxy_routing::build_upstream_uri;
 use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, Empty};
@@ -20,7 +20,7 @@ use crate::connections::{ConnectionContext, ConnectionGuard};
 use crate::headers::{self, ClientInfo};
 use crate::trusted_proxies::TrustedProxies;
 use crate::{FixedResponse, Forward, ResponseBody, Target};
-use fast_proxy_telemetry::{Metrics, UpstreamErrorKind};
+use fast_proxy_telemetry::{EndpointLabels, Metrics, UpstreamErrorKind, UpstreamOutcome};
 use std::sync::Arc;
 
 type HttpClient = Client<HttpConnector, Incoming>;
@@ -68,6 +68,55 @@ impl UpstreamClient {
             UpstreamErrorKind::Connect | UpstreamErrorKind::Other => FixedResponse::BadGateway,
         };
         fixed.render(target.request_id, target.wants_json)
+    }
+}
+
+/// Clears a half-open trial claim when a request ends without a verdict
+/// (the client left mid-request), so the endpoint is not stuck waiting.
+struct TrialRelease<'a>(&'a fast_proxy_balancing::EndpointRuntime);
+
+impl Drop for TrialRelease<'_> {
+    fn drop(&mut self) {
+        self.0.release_trial();
+    }
+}
+
+impl UpstreamClient {
+    /// Feeds one finished attempt to the metrics and to passive health, and
+    /// logs the transition it caused (an ejection or a recovery).
+    fn report(&self, target: &Target<'_>, outcome: UpstreamOutcome) {
+        let upstream = &target.route.upstream;
+        let addr = target.endpoint.addr.to_string();
+        let labels = EndpointLabels {
+            subsystem: target.subsystem.name.as_str(),
+            upstream: &upstream.name,
+            endpoint: &addr,
+        };
+        self.metrics.upstream_request(labels, outcome);
+        let verdict = match outcome {
+            UpstreamOutcome::Success => Outcome::Success,
+            _ => Outcome::Failure,
+        };
+        let transition = record_outcome(
+            &upstream.candidates,
+            target.endpoint_index,
+            verdict,
+            &upstream.policy.passive,
+            monotonic_ms(),
+        );
+        match transition {
+            Some(Transition::Ejected { until_ms, times }) => {
+                self.metrics.endpoint_ejected(labels);
+                tracing::warn!(
+                    upstream = %upstream.name, endpoint = %addr, times, until_ms,
+                    "endpoint ejected after repeated failures"
+                );
+            }
+            Some(Transition::Recovered) => {
+                tracing::info!(upstream = %upstream.name, endpoint = %addr, "endpoint recovered");
+            }
+            None => {}
+        }
     }
 }
 
@@ -129,16 +178,20 @@ impl Forward for UpstreamClient {
         *request.uri_mut() = uri;
 
         let client = self.client_for(route.connect_timeout);
+        let _trial = TrialRelease(&target.candidate.runtime);
         let sent = Instant::now();
         let outcome = tokio::time::timeout(route.response_timeout, client.request(request)).await;
         match outcome {
             Err(_elapsed) => {
                 tracing::warn!(upstream = %target.endpoint.addr, "upstream response timed out");
+                self.report(&target, UpstreamOutcome::Timeout);
                 self.failed(&target, UpstreamErrorKind::Timeout)
             }
             Ok(Err(err)) => {
                 tracing::warn!(upstream = %target.endpoint.addr, "upstream request failed: {err}");
-                self.failed(&target, kind_for(err.is_connect(), &err))
+                let kind = kind_for(err.is_connect(), &err);
+                self.report(&target, outcome_of_error(kind));
+                self.failed(&target, kind)
             }
             Ok(Ok(response)) => {
                 let micros = u64::try_from(sent.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -146,6 +199,7 @@ impl Forward for UpstreamClient {
                     .candidate
                     .runtime
                     .record_latency(micros, monotonic_ms());
+                self.report(&target, outcome_of_status(response.status()));
                 match client_upgrade {
                     Some(client_upgrade)
                         if response.status() == StatusCode::SWITCHING_PROTOCOLS =>
@@ -157,6 +211,25 @@ impl Forward for UpstreamClient {
                 }
             }
         }
+    }
+}
+
+/// A 502, 503 or 504 from the upstream says the endpoint is unwell; every
+/// other status, 500 included, is the application talking.
+fn outcome_of_status(status: StatusCode) -> UpstreamOutcome {
+    match status {
+        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
+            UpstreamOutcome::BadStatus
+        }
+        _ => UpstreamOutcome::Success,
+    }
+}
+
+fn outcome_of_error(kind: UpstreamErrorKind) -> UpstreamOutcome {
+    match kind {
+        UpstreamErrorKind::Connect => UpstreamOutcome::Connect,
+        UpstreamErrorKind::Timeout => UpstreamOutcome::Timeout,
+        UpstreamErrorKind::Other => UpstreamOutcome::Other,
     }
 }
 
@@ -295,6 +368,38 @@ mod tests {
         assert_eq!(
             kind_for(false, &io::Error::other("boom")),
             UpstreamErrorKind::Other
+        );
+    }
+
+    #[test]
+    fn only_502_503_and_504_count_against_an_endpoint() {
+        for status in [502, 503, 504] {
+            let status = StatusCode::from_u16(status).unwrap();
+            assert_eq!(outcome_of_status(status), UpstreamOutcome::BadStatus);
+        }
+        for status in [200, 301, 404, 429, 500, 501] {
+            let status = StatusCode::from_u16(status).unwrap();
+            assert_eq!(
+                outcome_of_status(status),
+                UpstreamOutcome::Success,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn error_kinds_map_to_their_outcomes() {
+        assert_eq!(
+            outcome_of_error(UpstreamErrorKind::Connect),
+            UpstreamOutcome::Connect
+        );
+        assert_eq!(
+            outcome_of_error(UpstreamErrorKind::Timeout),
+            UpstreamOutcome::Timeout
+        );
+        assert_eq!(
+            outcome_of_error(UpstreamErrorKind::Other),
+            UpstreamOutcome::Other
         );
     }
 

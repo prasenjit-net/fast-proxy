@@ -18,6 +18,8 @@ pub struct Target<'snapshot> {
     pub route: &'snapshot CompiledRoute,
     /// The endpoint of the route's upstream chosen for this request.
     pub endpoint: &'snapshot CompiledEndpoint,
+    /// The chosen endpoint's position in the upstream's endpoint list.
+    pub endpoint_index: usize,
     /// The chosen endpoint's live state, for latency samples and tunnels.
     pub candidate: &'snapshot Candidate,
     /// How many bytes of the request path the route's prefix consumed; the

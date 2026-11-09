@@ -6,6 +6,7 @@ use fast_proxy_store::{Connection, Database, Mutation, Store, StoreError};
 use fast_proxy_telemetry::{Metrics, ReloadOutcome};
 use tokio::sync::{broadcast, Mutex};
 
+use crate::metric_series::live_endpoints;
 use crate::StartError;
 
 /// Broadcast after every applied change.
@@ -124,6 +125,8 @@ impl ConfigService {
             StoreError::Internal("a committed change produced no snapshot".into())
         })?;
         snapshot.version = written.version;
+        self.metrics
+            .retain_upstream_series(&live_endpoints(&snapshot));
         self.holder.swap(snapshot);
         // send() only fails when nobody is subscribed, which is fine.
         let _ = self.changes.send(ConfigChanged {

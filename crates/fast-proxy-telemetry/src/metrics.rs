@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::upstream_metrics::{EndpointLabels, UpstreamMetrics, UpstreamOutcome};
 use prometheus::{
     Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
 };
@@ -87,6 +88,7 @@ pub struct Metrics {
     active_requests: IntGauge,
     config_version: IntGauge,
     config_reloads: IntCounterVec,
+    upstream: UpstreamMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -123,7 +125,9 @@ impl Metrics {
         registry
             .register(Box::new(duration.clone()))
             .expect(REGISTRATION);
+        let upstream = UpstreamMetrics::new(&registry);
         Self {
+            upstream,
             requests: counter_vec(
                 &registry,
                 "fastproxy_requests_total",
@@ -177,6 +181,30 @@ impl Metrics {
         self.upstream_errors
             .with_label_values(&[subsystem, kind.label()])
             .inc();
+    }
+
+    /// Counts one request sent to an endpoint, by how it turned out.
+    pub fn upstream_request(&self, endpoint: EndpointLabels<'_>, outcome: UpstreamOutcome) {
+        self.upstream.request(endpoint, outcome);
+    }
+
+    /// Counts one ejection of an endpoint.
+    pub fn endpoint_ejected(&self, endpoint: EndpointLabels<'_>) {
+        self.upstream.ejected(endpoint);
+    }
+
+    /// Counts a request served in panic mode by an upstream group.
+    pub fn upstream_panic(&self, subsystem: &str, upstream: &str) {
+        self.upstream.panic_pick(subsystem, upstream);
+    }
+
+    /// Deletes the per-endpoint series of endpoints no longer configured.
+    /// `live` holds `(subsystem, upstream, endpoint)` for every configured one.
+    pub fn retain_upstream_series(
+        &self,
+        live: &std::collections::HashSet<(String, String, String)>,
+    ) {
+        self.upstream.retain(live);
     }
 
     /// Counts a request as active until the returned guard drops.
