@@ -58,7 +58,7 @@ cd ui && npm install && npm run build && cd ..
 
 # 2. Build + run the single binary
 cargo run --release
-# → http://127.0.0.1:8080
+# → admin UI at http://127.0.0.1:9000
 ```
 
 Or just `make build` / `make run`.
@@ -68,7 +68,7 @@ Or just `make build` / `make run`.
 Run the two dev servers side by side:
 
 ```sh
-cargo run                # terminal 1 — backend on :8080
+cargo run                # terminal 1 — backend (admin plane on :9000)
 cd ui && npm run dev     # terminal 2 — Vite on :5173, proxies /api and /ws
 ```
 
@@ -80,20 +80,25 @@ disk, so a production `npm run build` is picked up by a plain restart too.
 ```
 fast-proxy [OPTIONS]
 
-  -c, --config <CONFIG>        Path to the TOML configuration file [default: config.toml]
-      --host <HOST>            Override [server].host
-  -p, --port <PORT>            Override [server].port
-      --log-level <LOG_LEVEL>  Override [logging].level (trace, debug, info, warn, error)
-      --access-log <PATH>      Override [logging].access_log file path
-      --no-access-log          Disable the access log file entirely
+  -c, --config <CONFIG>             Path to the TOML configuration file [default: config.toml]
+      --admin-listen <ADDR>         Override [admin].listen
+      --database <PATH>             Override [data_plane].database
+      --state-dir <PATH>            Override [data_plane].state_dir
+      --log-level <LOG_LEVEL>       Override [logging].level (trace, debug, info, warn, error)
+      --access-log <PATH>           Override [logging].access_log file path
+      --no-access-log               Disable the access log file entirely
 ```
 
 ## Configuration (`config.toml`)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `server.host` | `127.0.0.1` | Bind address |
-| `server.port` | `8080` | Bind port |
+| `data_plane.state_dir` | `./state` | Directory for the database and other state; created at startup |
+| `data_plane.database` | `<state_dir>/fast-proxy.db` | Database file |
+| `data_plane.trusted_proxies` | `[]` | CIDRs whose `X-Forwarded-*` headers are trusted |
+| `data_plane.shutdown_grace` | `30s` | Time in-flight requests get to finish on shutdown |
+| `data_plane.listener` | one `http` listener on `0.0.0.0:8000` | Array of tables with `name` and `listen`; names and addresses must be unique |
+| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener (no authentication yet, keep it on loopback) |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=warn`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
@@ -102,6 +107,9 @@ fast-proxy [OPTIONS]
 | `ui.repo_url` | *(unset)* | Sidebar "Repository" link |
 
 If the config file is missing, built-in defaults are used (with a warning).
+Unknown keys are rejected, so a typo fails at startup instead of being ignored.
+The data plane listeners are parsed and validated but not bound yet; that lands
+with the proxy itself (M1 task D1).
 
 ## API
 

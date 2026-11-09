@@ -1,9 +1,9 @@
 //! The `fast-proxy` binary: CLI parsing, configuration, logging, and server startup.
 
+mod cli;
 mod config;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -12,59 +12,8 @@ use fast_proxy_admin::AdminState;
 use fast_proxy_telemetry::AccessLog;
 use tracing_subscriber::EnvFilter;
 
+use crate::cli::Cli;
 use crate::config::AppConfig;
-
-/// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.
-///
-/// Configuration is read from a TOML file; every flag below overrides
-/// the corresponding value from that file.
-#[derive(Parser, Debug)]
-#[command(name = "fast-proxy", version, about)]
-struct Cli {
-    /// Path to the TOML configuration file
-    #[arg(short, long, default_value = "config.toml")]
-    config: PathBuf,
-
-    /// Override [server].host
-    #[arg(long)]
-    host: Option<String>,
-
-    /// Override [server].port
-    #[arg(short, long)]
-    port: Option<u16>,
-
-    /// Override [logging].level (trace, debug, info, warn, error)
-    #[arg(long)]
-    log_level: Option<String>,
-
-    /// Override [logging].access_log file path
-    #[arg(long)]
-    access_log: Option<PathBuf>,
-
-    /// Disable the access log file entirely
-    #[arg(long)]
-    no_access_log: bool,
-}
-
-impl Cli {
-    fn apply(&self, config: &mut AppConfig) {
-        if let Some(host) = &self.host {
-            config.server.host = host.clone();
-        }
-        if let Some(port) = self.port {
-            config.server.port = port;
-        }
-        if let Some(level) = &self.log_level {
-            config.logging.level = level.clone();
-        }
-        if let Some(path) = &self.access_log {
-            config.logging.access_log = Some(path.clone());
-        }
-        if self.no_access_log {
-            config.logging.access_log = None;
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -78,6 +27,10 @@ async fn main() -> ExitCode {
         }
     };
     cli.apply(&mut config);
+    if let Err(err) = config.validate() {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
 
     let filter =
         EnvFilter::try_new(&config.logging.level).unwrap_or_else(|_| EnvFilter::new("info"));
@@ -91,7 +44,8 @@ async fn main() -> ExitCode {
 }
 
 async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = format!("{}:{}", config.server.host, config.server.port);
+    log_data_plane_summary(&config);
+    let addr = config.admin.listen;
     let access_log = AccessLog::open(config.logging.access_log.as_deref()).await;
     let state = Arc::new(AdminState::new(
         config.ui,
@@ -102,7 +56,7 @@ async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let app = fast_proxy_admin::router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!("listening on http://{addr}");
+    tracing::info!("admin plane listening on http://{addr}");
 
     axum::serve(
         listener,
@@ -115,4 +69,23 @@ async fn run(config: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     Ok(())
+}
+
+/// Logs what the data plane will use. The listeners are bound once the
+/// proxy lands (M1 task D1); until then this only reports the config.
+fn log_data_plane_summary(config: &AppConfig) {
+    let data_plane = &config.data_plane;
+    for listener in &data_plane.listener {
+        tracing::info!(
+            "data plane listener \"{}\" configured on {} (not bound yet)",
+            listener.name,
+            listener.listen
+        );
+    }
+    tracing::info!(
+        "database {}, shutdown grace {:?}, {} trusted proxy CIDRs",
+        data_plane.database_path().display(),
+        data_plane.shutdown_grace,
+        data_plane.trusted_proxies.len()
+    );
 }

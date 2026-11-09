@@ -220,7 +220,7 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream C: Configuration
 
-- [ ] **C1 (M) New config model** in `config.rs`:
+- [x] **C1 (M) New config model** in `config.rs`:
 
   ```toml
   [data_plane]
@@ -242,10 +242,10 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   address differs from every listener, `state_dir` creatable, duration parsing.
   *Done when:* unit tests cover defaults, missing sections, unknown fields, and
   each validation failure with a clear message.
-- [ ] **C2 (S) CLI overrides.** Replace `--host/--port` with `--admin-listen`,
+- [x] **C2 (S) CLI overrides.** Replace `--host/--port` with `--admin-listen`,
   `--database`, `--state-dir`; keep `--config`, `--log-level`, `--access-log`,
   `--no-access-log`. Update `Cli::apply`.
-- [ ] **C3 (S) Update `config.toml`, README config table and CLI section,
+- [x] **C3 (S) Update `config.toml`, README config table and CLI section,
   and AGENTS.md** for the new keys. Default ports: data plane `8000`, admin
   `9000` (was `8080`); update the Vite dev proxy in `ui/vite.config.ts` to the
   admin port.

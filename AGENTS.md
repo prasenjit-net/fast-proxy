@@ -15,7 +15,7 @@ Guidance for coding agents working in this repository.
 Cargo workspace; the root package is the `fast-proxy` binary.
 
 - `src/main.rs` wires CLI parsing, configuration, logging, and server startup.
-- `src/config.rs` defines TOML configuration and CLI overrides.
+- `src/config/` defines the TOML configuration (`[data_plane]`, `[admin]`, `[logging]`, `[ui]`) and its validation; `src/cli.rs` defines the CLI overrides.
 - `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs`, `api/` (one
   file per resource), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
@@ -111,7 +111,7 @@ make run
 
 Development servers:
 
-- Backend: `cargo run` on `127.0.0.1:8080`.
+- Backend: `cargo run`; admin plane on `127.0.0.1:9000`, data plane on `0.0.0.0:8000`.
 - Frontend: `cd ui && npm run dev` on `localhost:5173`, proxying `/api` and `/ws` to the backend.
 
 ## Implementation Notes
@@ -134,6 +134,7 @@ Development servers:
 ## Configuration
 
 - Runtime config defaults to `config.toml`.
-- CLI flags can override config values such as host, port, log level, access log, and config path.
+- CLI flags can override config values: `--admin-listen`, `--database`, `--state-dir`, `--log-level`, `--access-log`, `--no-access-log`, and `--config`.
+- The config file holds process-level settings only; subsystems, routes, and upstreams live in the database.
 - UI boot configuration is served from `GET /api/config` based on the `[ui]` section of `config.toml`.
 
