@@ -92,7 +92,7 @@ These rules are set by the project owner and apply to every session.
 - **Never commit or push unless the owner explicitly says so.** When a task is
   done, stop and report. The owner does a manual check first, then asks for the
   commit and push.
-- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`). Keep them
+- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `M2-PLAN.md`). Keep them
   current: tick tasks as they land and record decisions. Start a milestone by
   writing its `docs/Mn-PLAN.md`; record new design decisions as an ADR in
   `docs/adr/` and in the ROADMAP decision log.

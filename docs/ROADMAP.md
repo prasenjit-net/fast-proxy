@@ -360,6 +360,8 @@ listed in [M1-PLAN.md](M1-PLAN.md) section 10.
 
 ### M2: Upstream groups, load balancing, health
 
+Detailed task plan: [M2-PLAN.md](M2-PLAN.md) (draft; decisions awaiting confirmation).
+
 - [ ] Multi-endpoint upstream groups with weights.
 - [ ] Round robin, weighted, least-connections, P2C+EWMA, consistent hash.
 - [ ] Active HTTP/TCP health checks; passive outlier ejection.
