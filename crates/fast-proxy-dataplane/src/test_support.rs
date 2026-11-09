@@ -2,6 +2,7 @@
 //! running proxy harness, and a raw-TCP client.
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,11 +12,15 @@ use fast_proxy_model::{
     UpstreamPrefix,
 };
 use fast_proxy_routing::{compile, SnapshotHolder};
+use fast_proxy_telemetry::{AccessLog, Metrics};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::{bind, DataPlane, Forward, ListenerSpec, RequestPipeline};
+use crate::{
+    bind, DataPlane, Forward, ListenerSpec, Observability, RequestPipeline, TrustedProxies,
+    UpstreamClient,
+};
 
 /// A route with default settings (no rewriting, host preserved).
 pub fn route(id: i64, prefix: &str) -> RouteConfig {
@@ -65,10 +70,43 @@ pub struct Harness {
     pub holder: Arc<SnapshotHolder>,
     pub addr: SocketAddr,
     pub shutdown: CancellationToken,
+    pub metrics: Arc<Metrics>,
+    pub access_log: Arc<AccessLog>,
 }
 
 impl Harness {
+    /// Serves `config` with a custom forwarder (no real upstream).
     pub async fn start<F: Forward>(config: Config, forwarder: F) -> Self {
+        Self::start_full(config, |_| forwarder, None).await
+    }
+
+    /// Serves `config` through the real upstream client.
+    pub async fn proxying(config: Config, trusted_proxies: &[&str]) -> Self {
+        Self::proxying_with_log(config, trusted_proxies, None).await
+    }
+
+    /// Like [`Harness::proxying`], also writing the access log to `log_path`.
+    pub async fn proxying_with_log(
+        config: Config,
+        trusted_proxies: &[&str],
+        log_path: Option<&Path>,
+    ) -> Self {
+        let entries: Vec<String> = trusted_proxies.iter().map(ToString::to_string).collect();
+        let trusted = TrustedProxies::parse(&entries).unwrap();
+        Self::start_full(
+            config,
+            |metrics| UpstreamClient::new(trusted, metrics),
+            log_path,
+        )
+        .await
+    }
+
+    /// The general form: `make_forwarder` receives the metrics the pipeline reports to.
+    pub async fn start_full<F: Forward>(
+        config: Config,
+        make_forwarder: impl FnOnce(Arc<Metrics>) -> F,
+        log_path: Option<&Path>,
+    ) -> Self {
         let holder = Arc::new(SnapshotHolder::new());
         holder.swap(compile(1, &config).unwrap());
         let specs = [ListenerSpec {
@@ -77,7 +115,17 @@ impl Harness {
         }];
         let bound = bind(&specs).await.unwrap();
         let shutdown = CancellationToken::new();
-        let pipeline = Arc::new(RequestPipeline::new(holder.clone(), forwarder));
+        let metrics = Arc::new(Metrics::new());
+        let access_log = Arc::new(AccessLog::open(log_path).await);
+        let observability = Observability {
+            metrics: metrics.clone(),
+            access_log: access_log.clone(),
+        };
+        let pipeline = Arc::new(RequestPipeline::new(
+            holder.clone(),
+            make_forwarder(metrics.clone()),
+            observability,
+        ));
         let plane = DataPlane::start(bound, pipeline, shutdown.clone());
         let addr = plane.local_addrs()[0].1;
         Self {
@@ -85,6 +133,8 @@ impl Harness {
             holder,
             addr,
             shutdown,
+            metrics,
+            access_log,
         }
     }
 }

@@ -1,16 +1,16 @@
 //! Shared state for admin handlers.
 
-use std::sync::atomic::{AtomicU64, AtomicUsize};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
 use fast_proxy_config_service::ConfigService;
-use fast_proxy_telemetry::AccessLog;
+use fast_proxy_telemetry::{AccessLog, Metrics};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::events::Event;
-use crate::live_metrics::MetricsSnapshot;
 use crate::runtime_info::RuntimeInfo;
+use crate::traffic::TrafficSnapshot;
 use crate::ui_config::UiConfig;
 
 /// Everything the admin plane's handlers share.
@@ -23,12 +23,13 @@ pub struct AdminState {
     pub version: &'static str,
     /// Fan-out channel feeding every connected WebSocket client.
     pub events: broadcast::Sender<Event>,
-    pub latest_metrics: RwLock<Option<MetricsSnapshot>>,
-    pub requests_total: AtomicU64,
+    pub latest_traffic: RwLock<Option<TrafficSnapshot>>,
     pub ws_clients: AtomicUsize,
     pub started: Instant,
     pub started_at_ms: i64,
-    pub access_log: AccessLog,
+    pub access_log: Arc<AccessLog>,
+    /// The proxy's Prometheus metrics, rendered at `GET /metrics`.
+    pub metrics: Arc<Metrics>,
 }
 
 pub type SharedState = Arc<AdminState>;
@@ -37,9 +38,10 @@ impl AdminState {
     pub fn new(
         ui: UiConfig,
         version: &'static str,
-        access_log: AccessLog,
+        access_log: Arc<AccessLog>,
         config: Arc<ConfigService>,
         runtime: RuntimeInfo,
+        metrics: Arc<Metrics>,
     ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
@@ -48,12 +50,12 @@ impl AdminState {
             runtime,
             version,
             events,
-            latest_metrics: RwLock::new(None),
-            requests_total: AtomicU64::new(0),
+            latest_traffic: RwLock::new(None),
             ws_clients: AtomicUsize::new(0),
             started: Instant::now(),
             started_at_ms: chrono::Utc::now().timestamp_millis(),
             access_log,
+            metrics,
         }
     }
 

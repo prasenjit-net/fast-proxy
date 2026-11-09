@@ -7,11 +7,11 @@ use std::sync::Arc;
 use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo};
 use fast_proxy_config_service::{ConfigService, StartError};
 use fast_proxy_dataplane::{
-    bind, BindError, DataPlane, ListenerSpec, RequestPipeline, TrustedProxies, TrustedProxyError,
-    UpstreamClient,
+    bind, BindError, DataPlane, ListenerSpec, Observability, RequestPipeline, TrustedProxies,
+    TrustedProxyError, UpstreamClient,
 };
 use fast_proxy_store::{Store, StoreError};
-use fast_proxy_telemetry::AccessLog;
+use fast_proxy_telemetry::{AccessLog, Metrics};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -46,7 +46,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
 
     let database = data_plane.database_path();
     let store = Store::open(&database)?;
-    let config_service = Arc::new(ConfigService::start(store).await?);
+    // Both planes report to the same metrics and the same access log.
+    let metrics = Arc::new(Metrics::new());
+    let config_service = Arc::new(ConfigService::start_with_metrics(store, metrics.clone()).await?);
 
     let specs: Vec<ListenerSpec> = data_plane
         .listener
@@ -66,7 +68,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
                 source,
             })?;
 
-    let access_log = AccessLog::open(config.logging.access_log.as_deref()).await;
+    let access_log = Arc::new(AccessLog::open(config.logging.access_log.as_deref()).await);
     let runtime = RuntimeInfo {
         listeners: bound
             .iter()
@@ -85,16 +87,21 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let admin_state = Arc::new(AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
-        access_log,
+        access_log.clone(),
         config_service.clone(),
         runtime,
+        metrics.clone(),
     ));
-    fast_proxy_admin::spawn_sampler(admin_state.clone());
+    fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
     let pipeline = Arc::new(RequestPipeline::new(
         config_service.snapshot_holder(),
-        UpstreamClient::new(trusted_proxies),
+        UpstreamClient::new(trusted_proxies, metrics.clone()),
+        Observability {
+            metrics,
+            access_log: access_log.clone(),
+        },
     ));
     let plane = DataPlane::start(bound, pipeline, data_stop.clone());
 
@@ -136,6 +143,8 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             );
         }
     }
+    // Every request finishes before this point; make sure its line is on disk.
+    access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
 }

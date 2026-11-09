@@ -9,6 +9,8 @@ use crate::{HostTable, RouteTable};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledRoute {
     pub id: RouteId,
+    /// The path prefix this route matches; used for metric labels and logs.
+    pub prefix: String,
     pub strip_prefix: bool,
     pub upstream_prefix: UpstreamPrefix,
     pub preserve_host: bool,

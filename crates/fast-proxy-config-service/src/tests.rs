@@ -416,3 +416,76 @@ async fn a_concurrent_reader_never_observes_a_partial_state() {
     }
     assert!(reader.await.unwrap() > 0);
 }
+
+// ---- metrics ------------------------------------------------------------
+
+fn metric(metrics: &fast_proxy_telemetry::Metrics, prefix: &str) -> Option<f64> {
+    metrics
+        .render()
+        .lines()
+        .find(|line| line.starts_with(prefix))
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|value| value.parse().ok())
+}
+
+#[tokio::test]
+async fn the_config_version_and_reload_outcomes_are_reported_to_metrics() {
+    let metrics = Arc::new(fast_proxy_telemetry::Metrics::new());
+    let service =
+        ConfigService::start_with_metrics(Store::open_in_memory().unwrap(), metrics.clone())
+            .await
+            .unwrap();
+    assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(0.0));
+
+    service
+        .apply(create_site(
+            "shop",
+            "shop.example.com".into(),
+            "127.0.0.1:3000",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(1.0));
+
+    // A conflicting change and a failed rollback are both rejected.
+    service
+        .apply(create_site(
+            "shop",
+            "other.example.com".into(),
+            "127.0.0.1:3001",
+        ))
+        .await
+        .unwrap_err();
+    service.rollback(99).await.unwrap_err();
+    service.rollback(1).await.unwrap();
+
+    let applied = r#"fastproxy_config_reloads_total{outcome="applied"}"#;
+    let rejected = r#"fastproxy_config_reloads_total{outcome="rejected"}"#;
+    assert_eq!(metric(&metrics, applied), Some(2.0));
+    assert_eq!(metric(&metrics, rejected), Some(2.0));
+    assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(2.0));
+}
+
+#[tokio::test]
+async fn starting_on_stored_config_reports_its_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fast-proxy.db");
+    {
+        let service = ConfigService::start(Store::open(&path).unwrap())
+            .await
+            .unwrap();
+        service
+            .apply(create_site(
+                "shop",
+                "shop.example.com".into(),
+                "127.0.0.1:3000",
+            ))
+            .await
+            .unwrap();
+    }
+    let metrics = Arc::new(fast_proxy_telemetry::Metrics::new());
+    ConfigService::start_with_metrics(Store::open(&path).unwrap(), metrics.clone())
+        .await
+        .unwrap();
+    assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(1.0));
+}

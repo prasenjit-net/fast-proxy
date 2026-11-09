@@ -15,7 +15,11 @@ use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::test_support::{eventually, get, route, send_raw, site_to, Harness};
-use crate::{bind, DataPlane, Forward, ListenerSpec, RequestPipeline, ResponseBody, Target};
+use fast_proxy_telemetry::{AccessLog, Metrics};
+
+use crate::{
+    bind, DataPlane, Forward, ListenerSpec, Observability, RequestPipeline, ResponseBody, Target,
+};
 
 /// Answers every routed request with a description of how it was routed.
 struct EchoForward;
@@ -274,7 +278,11 @@ async fn several_listeners_all_serve_the_same_pipeline() {
         addr: ([127, 0, 0, 1], 0).into(),
     });
     let bound = bind(&specs).await.unwrap();
-    let pipeline = Arc::new(RequestPipeline::new(holder, EchoForward));
+    let observability = Observability {
+        metrics: Arc::new(Metrics::new()),
+        access_log: Arc::new(AccessLog::open(None).await),
+    };
+    let pipeline = Arc::new(RequestPipeline::new(holder, EchoForward, observability));
     let plane = DataPlane::start(bound, pipeline, CancellationToken::new());
     assert_eq!(plane.local_addrs().len(), 2);
     for (_, addr) in plane.local_addrs() {

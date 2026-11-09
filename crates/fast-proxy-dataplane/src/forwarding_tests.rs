@@ -15,7 +15,6 @@ use tokio::time::timeout;
 
 use crate::test_support::{eventually, get, parse_reply, route, send_raw, site_to, Harness};
 use crate::test_upstream::{Behavior, TestUpstream};
-use crate::{TrustedProxies, UpstreamClient};
 
 const HOST: &str = "shop.example.com";
 const OK: Behavior = Behavior::Respond {
@@ -36,9 +35,7 @@ async fn proxy_with(
     let config = Config {
         subsystems: vec![site_to(1, "shop", HOST, upstream.addr, routes)],
     };
-    let trusted: Vec<String> = trusted.iter().map(ToString::to_string).collect();
-    let client = UpstreamClient::new(TrustedProxies::parse(&trusted).unwrap());
-    Harness::start(config, client).await
+    Harness::proxying(config, trusted).await
 }
 
 fn value(headers: &http::HeaderMap, name: &str) -> Option<String> {
@@ -246,7 +243,7 @@ async fn a_refused_connection_is_a_502() {
     let config = Config {
         subsystems: vec![site_to(1, "shop", HOST, addr, vec![route(1, "/")])],
     };
-    let proxy = Harness::start(config, UpstreamClient::new(TrustedProxies::default())).await;
+    let proxy = Harness::proxying(config, &[]).await;
 
     let reply = get(proxy.addr, HOST, "/", "Accept: application/json\r\n").await;
     assert_eq!(reply.status, 502);

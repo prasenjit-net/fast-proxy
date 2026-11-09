@@ -9,6 +9,7 @@ publish = false
 tokio = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+prometheus = "0.14"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -2,13 +2,14 @@
 
 mod access_middleware;
 mod api;
+mod config_bridge;
 mod error;
 mod events;
-mod live_metrics;
 mod router;
 mod runtime_info;
 mod state;
 mod static_assets;
+mod traffic;
 mod ui_config;
 mod ws;
 
@@ -20,8 +21,14 @@ mod test_support;
 mod tests;
 
 pub use error::{AppError, AppResult};
-pub use live_metrics::spawn_sampler;
 pub use router::router;
 pub use runtime_info::{ListenerInfo, RuntimeInfo};
 pub use state::{AdminState, SharedState};
 pub use ui_config::UiConfig;
+
+/// Starts the admin plane's background work: the live traffic sampler and
+/// the bridge from applied config changes to the UI.
+pub fn spawn_background_tasks(state: SharedState) {
+    traffic::spawn_sampler(state.clone());
+    config_bridge::spawn_config_bridge(state);
+}

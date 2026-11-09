@@ -1,25 +1,31 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use fast_proxy_telemetry::Metrics;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 /// Counts open client connections (and upgraded tunnels) across all
 /// listeners, and lets shutdown wait for them to finish.
-#[derive(Debug, Default)]
 pub struct ConnectionTracker {
     active: AtomicUsize,
     idle: Notify,
+    metrics: Arc<Metrics>,
 }
 
 impl ConnectionTracker {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+    pub fn new(metrics: Arc<Metrics>) -> Arc<Self> {
+        Arc::new(Self {
+            active: AtomicUsize::new(0),
+            idle: Notify::new(),
+            metrics,
+        })
     }
 
     /// Registers one connection; it stays counted until the guard drops.
     pub fn open(self: &Arc<Self>) -> ConnectionGuard {
         self.active.fetch_add(1, Ordering::SeqCst);
+        self.metrics.connection_opened();
         ConnectionGuard {
             tracker: self.clone(),
         }
@@ -51,6 +57,7 @@ pub struct ConnectionGuard {
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
+        self.tracker.metrics.connection_closed();
         if self.tracker.active.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.tracker.idle.notify_waiters();
         }
@@ -76,7 +83,7 @@ mod tests {
 
     #[test]
     fn counts_open_connections_until_their_guards_drop() {
-        let tracker = ConnectionTracker::new();
+        let tracker = ConnectionTracker::new(Arc::new(Metrics::new()));
         assert_eq!(tracker.active(), 0);
         let first = tracker.open();
         let second = tracker.open();
@@ -89,7 +96,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_idle_returns_immediately_when_nothing_is_open() {
-        let tracker = ConnectionTracker::new();
+        let tracker = ConnectionTracker::new(Arc::new(Metrics::new()));
         tokio::time::timeout(Duration::from_secs(1), tracker.wait_idle())
             .await
             .unwrap();
@@ -97,7 +104,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_idle_waits_for_the_last_guard() {
-        let tracker = ConnectionTracker::new();
+        let tracker = ConnectionTracker::new(Arc::new(Metrics::new()));
         let first = tracker.open();
         let second = tracker.open();
         let waiter = {

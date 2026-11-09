@@ -425,7 +425,7 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream T: Telemetry
 
-- [ ] **T1 (M) Metrics** (`telemetry/metrics.rs`), exposed at `GET /metrics` on
+- [x] **T1 (M) Metrics** (`telemetry/metrics.rs`), exposed at `GET /metrics` on
   the admin listener only:
   - `fastproxy_requests_total{subsystem,route,status_class}`
   - `fastproxy_request_duration_seconds{subsystem,route}` (histogram)
@@ -436,20 +436,45 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   `subsystem="_unmatched"`, `route="_none"`. Never use raw paths or hosts.
   *Done when:* an integration test scrapes `/metrics` after known traffic and
   asserts the counters.
-- [ ] **T2 (M) Access log for the data plane.** Generalize the existing
+  *Result:* `Metrics` in the telemetry crate wraps the `prometheus` crate (ADR
+  0003), so the library can be swapped without touching the data plane. Counters
+  are recorded when the response body finishes (a wrapper body counts bytes and
+  reports exactly once, including when the client leaves mid-response). The
+  route label is the route's prefix (config-derived); tests assert that raw
+  hosts and paths never become labels. Labelled families only appear in the
+  exposition once they have a sample. A request cancelled before its response
+  head exists is not counted. The hot-path cost of label lookups is not
+  measured yet; Q3 will show it.
+- [x] **T2 (M) Access log for the data plane.** Generalize the existing
   middleware into a function usable by both planes. Data plane lines add
   `subsystem`, `route`, `upstream`, `request_id`, `upstream_ms`, `total_ms`,
   `bytes_out`. Keep file plus console (tracing target `access`). Admin API
   requests keep a simpler line or are logged to the same sink with
   `plane=admin`.
   *Done when:* a test reads the log file after requests and parses the fields.
-- [ ] **T3 (M) Live traffic stats.** Replace the fake CPU/memory sampler in
+  *Result:* one sink for both planes, written by a background task so recording
+  never waits on the disk (`flush()` is called at shutdown). Lines are a
+  Common-Log-style request part followed by `key=value` fields: admin lines
+  have `plane=admin total_ms=`; data plane lines add `subsystem`, `route`,
+  `upstream`, `request_id`, `upstream_ms`, `bytes_out` (`-` where not
+  applicable). Client-supplied values are escaped so they cannot forge fields
+  or lines. The `elapsed` tail of the old format became `total_ms`.
+- [x] **T3 (M) Live traffic stats.** Replace the fake CPU/memory sampler in
   `services/metrics.rs` with real counters: per subsystem requests per second,
   error rate, active connections, plus global totals. A background task samples
   counters every 2 s and broadcasts a `traffic` WebSocket event. Add the
   `config_changed` event type.
   *Done when:* the WebSocket test client receives `traffic` events whose
   numbers match generated traffic.
+  *Result:* the fake CPU/memory sampler is gone. Every 2 s the sampler reads the
+  cumulative request counters from the metrics registry (no extra hot-path
+  state), computes per-subsystem and total requests/s and 5xx error rate, stores
+  the latest sample (`GET /api/traffic`, replacing `/api/metrics`) and pushes a
+  `traffic` event. A `configChanged` event plus a `config` activity entry is
+  sent for every applied change (the bridge from `ConfigService`). The first
+  sample is taken after a full window; an e2e test caught the sampler
+  reporting a ~1 ms window at startup. The dashboard was updated to the new
+  contract (U6 will add the per-subsystem table).
 
 ### Workstream A: Admin API
 

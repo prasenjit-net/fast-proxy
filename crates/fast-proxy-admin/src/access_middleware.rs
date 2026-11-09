@@ -1,18 +1,16 @@
 //! Axum middleware that feeds the access log.
 
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use axum::extract::{ConnectInfo, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use fast_proxy_telemetry::AccessRecord;
+use fast_proxy_telemetry::{AccessRecord, Plane};
 
 use crate::state::SharedState;
 
-/// Middleware recording one access-log line per admin request and
-/// counting it toward the request total.
+/// Middleware recording one access-log line per admin request.
 pub async fn record(
     State(state): State<SharedState>,
     ConnectInfo(client): ConnectInfo<SocketAddr>,
@@ -26,16 +24,17 @@ pub async fn record(
 
     let response = next.run(req).await;
 
-    state.requests_total.fetch_add(1, Ordering::Relaxed);
     let record = AccessRecord {
+        plane: Plane::Admin,
         client,
         method: method.as_str(),
         uri: &uri,
         version: &version,
         status: response.status().as_u16(),
         elapsed: started.elapsed(),
+        data_plane: None,
     };
-    state.access_log.record(&record).await;
+    state.access_log.record(&record);
 
     response
 }

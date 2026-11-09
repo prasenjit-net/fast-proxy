@@ -52,7 +52,7 @@ impl DataPlane {
         pipeline: Arc<RequestPipeline<F>>,
         shutdown: CancellationToken,
     ) -> Self {
-        let connections = ConnectionTracker::new();
+        let connections = ConnectionTracker::new(pipeline.metrics());
         let force_close = CancellationToken::new();
         let signals = Signals {
             shutdown,

@@ -12,7 +12,8 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/api/health", get(api::system::health))
         .route("/api/config", get(api::system::config))
-        .route("/api/metrics", get(api::system::metrics))
+        .route("/api/traffic", get(api::system::traffic))
+        .route("/metrics", get(api::system::prometheus))
         .route(
             "/api/subsystems",
             get(api::list_subsystems).post(api::create_subsystem),

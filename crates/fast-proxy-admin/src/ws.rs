@@ -43,8 +43,8 @@ async fn stream(socket: &mut WebSocket, state: &SharedState) {
     }
 
     // Seed the dashboard immediately instead of waiting for the next tick.
-    if let Some(snapshot) = state.latest_metrics.read().await.clone() {
-        if send(socket, &Event::Metrics { data: snapshot })
+    if let Some(snapshot) = state.latest_traffic.read().await.clone() {
+        if send(socket, &Event::Traffic { data: snapshot })
             .await
             .is_err()
         {

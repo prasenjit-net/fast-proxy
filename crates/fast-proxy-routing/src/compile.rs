@@ -69,6 +69,7 @@ fn compile_subsystem(subsystem: &SubsystemConfig) -> Result<CompiledSubsystem, C
             route.prefix.clone(),
             CompiledRoute {
                 id: route.id,
+                prefix: route.prefix.as_str().to_string(),
                 strip_prefix: route.strip_prefix,
                 upstream_prefix: route.upstream_prefix.clone(),
                 preserve_host: route.preserve_host,

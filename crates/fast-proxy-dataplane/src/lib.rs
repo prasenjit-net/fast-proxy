@@ -13,6 +13,7 @@ mod pipeline;
 mod request_id;
 mod responses;
 mod server;
+mod tracked_body;
 mod trusted_proxies;
 mod upstream_client;
 
@@ -20,6 +21,8 @@ mod upstream_client;
 mod drain_tests;
 #[cfg(test)]
 mod forwarding_tests;
+#[cfg(test)]
+mod observability_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -34,5 +37,6 @@ pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use responses::FixedResponse;
 pub use server::{DataPlane, DrainReport};
+pub use tracked_body::Observability;
 pub use trusted_proxies::{TrustedProxies, TrustedProxyError};
 pub use upstream_client::UpstreamClient;

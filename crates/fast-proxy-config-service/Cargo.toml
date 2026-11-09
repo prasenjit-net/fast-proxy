@@ -9,6 +9,7 @@ publish = false
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }
+fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 

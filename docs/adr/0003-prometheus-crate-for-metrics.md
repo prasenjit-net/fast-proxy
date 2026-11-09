@@ -21,3 +21,11 @@ text exposition encoder.
   touching the data plane.
 - Revisit if the spike shows hot-path overhead from label lookups; the
   mitigation is caching resolved label handles in the compiled snapshot.
+
+## Outcome (T1)
+
+Implemented as planned: `Metrics` in `fast-proxy-telemetry` owns the registry
+and exposes typed methods, and the same registry feeds the live traffic
+sampler. Counters are labelled with config names only. Label-handle lookups on
+the request path are not yet measured; the baseline benchmark (Q3) will show
+whether caching resolved handles in the snapshot is worth doing.

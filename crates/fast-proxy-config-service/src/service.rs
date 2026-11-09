@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use fast_proxy_routing::{compile, Snapshot, SnapshotHolder};
 use fast_proxy_store::{Connection, Database, Mutation, Store, StoreError};
+use fast_proxy_telemetry::{Metrics, ReloadOutcome};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::StartError;
@@ -28,23 +29,35 @@ pub struct ConfigService {
     /// Held across persist + swap so commit order always equals swap order.
     writer: Mutex<()>,
     changes: broadcast::Sender<ConfigChanged>,
+    metrics: Arc<Metrics>,
 }
 
 impl ConfigService {
     /// Loads the stored configuration, compiles it, and publishes it as the
     /// initial snapshot. Fails if the stored configuration does not compile.
     pub async fn start(store: Store) -> Result<Self, StartError> {
+        Self::start_with_metrics(store, Arc::new(Metrics::new())).await
+    }
+
+    /// Like [`ConfigService::start`], reporting the config version and every
+    /// accepted or rejected change to `metrics`.
+    pub async fn start_with_metrics(
+        store: Store,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self, StartError> {
         let (config, version) = store
             .run(|db| Ok((db.load_all()?, db.current_version()?)))
             .await?;
         let holder = Arc::new(SnapshotHolder::new());
         holder.swap(compile(version, &config)?);
+        metrics.set_config_version(version);
         let (changes, _) = broadcast::channel(64);
         Ok(Self {
             store,
             holder,
             writer: Mutex::new(()),
             changes,
+            metrics,
         })
     }
 
@@ -79,6 +92,21 @@ impl ConfigService {
     /// 4. commit and record the revision,
     /// 5. swap the new snapshot in and broadcast [`ConfigChanged`].
     pub async fn apply<T: Send + 'static>(
+        &self,
+        mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError> + Send + 'static,
+    ) -> Result<Applied<T>, StoreError> {
+        let result = self.apply_under_lock(mutate).await;
+        match &result {
+            Ok(applied) => {
+                self.metrics.set_config_version(applied.version);
+                self.metrics.config_reload(ReloadOutcome::Applied);
+            }
+            Err(_) => self.metrics.config_reload(ReloadOutcome::Rejected),
+        }
+        result
+    }
+
+    async fn apply_under_lock<T: Send + 'static>(
         &self,
         mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError> + Send + 'static,
     ) -> Result<Applied<T>, StoreError> {

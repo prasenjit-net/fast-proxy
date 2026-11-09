@@ -93,8 +93,7 @@ fn spawn(config: &Path) -> Child {
 }
 
 fn start_proxy(dir: &Path) -> Proxy {
-    let (data_port, admin_port) = (free_port(), free_port());
-    start_proxy_on(dir, data_port, admin_port)
+    start_on_free_ports(dir, "", "")
 }
 
 fn start_proxy_on(dir: &Path, data_port: u16, admin_port: u16) -> Proxy {
@@ -102,20 +101,62 @@ fn start_proxy_on(dir: &Path, data_port: u16, admin_port: u16) -> Proxy {
 }
 
 fn start_proxy_with(dir: &Path, data_port: u16, admin_port: u16, extra_config: &str) -> Proxy {
+    start_proxy_with_tail(dir, data_port, admin_port, extra_config, "")
+}
+
+/// Starts on freshly picked ports. A "free" port can be taken by a parallel
+/// test (or an outgoing connection) before the proxy binds it, in which case
+/// the proxy exits at once; retry with new ports instead of failing.
+fn start_on_free_ports(dir: &Path, extra_config: &str, tail: &str) -> Proxy {
+    let mut last_error = String::new();
+    for _ in 0..5 {
+        match try_start(dir, free_port(), free_port(), extra_config, tail) {
+            Ok(proxy) => return proxy,
+            Err(error) => last_error = error,
+        }
+    }
+    panic!("the proxy would not start on any of 5 port pairs: {last_error}");
+}
+
+/// Like [`start_proxy_with`], appending `tail` (extra config sections) to the file.
+fn start_proxy_with_tail(
+    dir: &Path,
+    data_port: u16,
+    admin_port: u16,
+    extra_config: &str,
+    tail: &str,
+) -> Proxy {
+    try_start(dir, data_port, admin_port, extra_config, tail)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn try_start(
+    dir: &Path,
+    data_port: u16,
+    admin_port: u16,
+    extra_config: &str,
+    tail: &str,
+) -> Result<Proxy, String> {
     let config = write_config(dir, data_port, admin_port, extra_config);
-    let proxy = Proxy {
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(tail);
+    std::fs::write(&config, text).unwrap();
+    let mut proxy = Proxy {
         child: spawn(&config),
         data: ([127, 0, 0, 1], data_port).into(),
         admin: ([127, 0, 0, 1], admin_port).into(),
     };
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
+        if let Some(status) = proxy.child.try_wait().unwrap() {
+            return Err(format!("the proxy exited at startup ({status})"));
+        }
         if TcpStream::connect(proxy.admin).is_ok() && TcpStream::connect(proxy.data).is_ok() {
-            return proxy;
+            return Ok(proxy);
         }
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("the proxy did not start listening in time");
+    Err("the proxy did not start listening in time".to_string())
 }
 
 /// One request over a fresh connection; returns the status and body.
@@ -420,12 +461,7 @@ fn ctrl_c_lets_an_in_flight_request_finish_and_then_exits() {
 #[test]
 fn a_request_that_outlives_the_grace_period_is_cut_off() {
     let dir = tempfile::tempdir().unwrap();
-    let mut proxy = start_proxy_with(
-        dir.path(),
-        free_port(),
-        free_port(),
-        "shutdown_grace = \"300ms\"",
-    );
+    let mut proxy = start_on_free_ports(dir.path(), "shutdown_grace = \"300ms\"", "");
     let backend = start_slow_backend("never", Duration::from_secs(20));
     create_site(&proxy, "shop", "shop.example.com", backend);
 
@@ -475,4 +511,168 @@ fn an_open_admin_websocket_does_not_block_shutdown() {
         wait_for_exit(&mut proxy, Duration::from_secs(5)),
         Some(true)
     );
+}
+
+// ---- observability ------------------------------------------------------
+
+/// The value of the first exposition line that starts with `prefix`.
+fn metric(proxy: &Proxy, prefix: &str) -> Option<f64> {
+    let (_, text) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    text.lines()
+        .find(|line| line.starts_with(prefix))
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|value| value.parse().ok())
+}
+
+fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
+#[test]
+fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("access.log");
+    let proxy = start_on_free_ports(
+        dir.path(),
+        "",
+        &format!("\n[logging]\naccess_log = {log_path:?}\n"),
+    );
+    let backend = start_backend("shop-backend");
+    create_site(&proxy, "shop", "shop.example.com", backend);
+
+    for _ in 0..3 {
+        assert_eq!(
+            through_proxy(&proxy, "shop.example.com", "/page?x=1").0,
+            200
+        );
+    }
+    assert_eq!(through_proxy(&proxy, "nobody.example.com", "/").0, 404);
+
+    // Prometheus: counters by subsystem, route and status class; config activity.
+    let shop = r#"fastproxy_requests_total{route="/",status_class="2xx",subsystem="shop"}"#;
+    let unmatched =
+        r#"fastproxy_requests_total{route="_none",status_class="4xx",subsystem="_unmatched"}"#;
+    assert!(
+        wait_until(|| metric(&proxy, shop) == Some(3.0)),
+        "shop requests"
+    );
+    assert!(
+        wait_until(|| metric(&proxy, unmatched) == Some(1.0)),
+        "unmatched requests"
+    );
+    assert_eq!(metric(&proxy, "fastproxy_config_version"), Some(4.0));
+    assert_eq!(
+        metric(
+            &proxy,
+            r#"fastproxy_config_reloads_total{outcome="applied"}"#
+        ),
+        Some(4.0)
+    );
+    let (_, text) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    assert!(
+        !text.contains("nobody.example.com"),
+        "raw hosts must not become labels"
+    );
+
+    // Access log: data plane lines carry the full set of fields.
+    let data_lines = || -> Vec<String> {
+        std::fs::read_to_string(&log_path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("plane=data"))
+            .map(ToString::to_string)
+            .collect()
+    };
+    assert!(
+        wait_until(|| data_lines().len() == 4),
+        "four data plane lines"
+    );
+    let line = data_lines()
+        .into_iter()
+        .find(|l| l.contains("subsystem=shop"))
+        .unwrap();
+    for field in [
+        "route=/",
+        "upstream=127.0.0.1:",
+        "request_id=",
+        "upstream_ms=",
+        "bytes_out=",
+        "total_ms=",
+    ] {
+        assert!(line.contains(field), "{field} missing from {line}");
+    }
+    assert!(line.contains("\"GET /page?x=1 HTTP/1.1\" 200"), "{line}");
+    let unmatched_line = data_lines()
+        .into_iter()
+        .find(|l| l.contains("_unmatched"))
+        .unwrap();
+    for field in ["upstream=-", "upstream_ms=-", "route=_none"] {
+        assert!(
+            unmatched_line.contains(field),
+            "{field} missing from {unmatched_line}"
+        );
+    }
+    let admin_lines = std::fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("plane=admin"))
+        .count();
+    assert!(
+        admin_lines > 0,
+        "admin requests are logged too, as plane=admin"
+    );
+
+    // Live traffic: the sampler turns the counters into rates every 2 seconds.
+    let traffic = loop_until_traffic(&proxy);
+    assert!(
+        traffic["total"]["requestsTotal"].as_u64().unwrap() >= 4,
+        "{traffic}"
+    );
+    assert!(
+        traffic["total"]["requestsPerSec"].as_f64().unwrap() > 0.0,
+        "{traffic}"
+    );
+    let names: Vec<&str> = traffic["subsystems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["_unmatched", "shop"]);
+}
+
+/// Polls `GET /api/traffic` until the first sample exists (it is taken every 2 seconds).
+fn loop_until_traffic(proxy: &Proxy) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let (status, body) = admin(proxy, "GET", "/api/traffic", None);
+        if status == 200 {
+            return body;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!("no traffic sample appeared in time");
+}
+
+#[test]
+fn upstream_failures_show_up_in_metrics_by_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let proxy = start_proxy(dir.path());
+    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = closed.local_addr().unwrap().port();
+    drop(closed);
+    create_site(&proxy, "shop", "shop.example.com", dead_port);
+
+    assert_eq!(through_proxy(&proxy, "shop.example.com", "/").0, 502);
+    let errors = r#"fastproxy_upstream_errors_total{kind="connect",subsystem="shop"}"#;
+    assert!(wait_until(|| metric(&proxy, errors) == Some(1.0)));
+    let failed = r#"fastproxy_requests_total{route="/",status_class="5xx",subsystem="shop"}"#;
+    assert!(wait_until(|| metric(&proxy, failed) == Some(1.0)));
 }

@@ -20,8 +20,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs`, `api/` (one
   file per resource: subsystems, hosts, upstreams, routes), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
-- `crates/fast-proxy-telemetry/` holds the access log (metrics and traffic
-  stats land here in M1).
+- `crates/fast-proxy-telemetry/` holds `Metrics` (Prometheus registry, the single
+  source for `/metrics` and the live traffic stats) and the `AccessLog`
+  (non-blocking; `flush()` at shutdown). Metric labels must come only from
+  config names, never raw hosts or paths.
 - `crates/fast-proxy-model/` holds validated domain types (`HostPattern`,
   `RoutePrefix`, `EndpointAddr`, ...) and the `Config` tree; no I/O.
 - `crates/fast-proxy-routing/` compiles a `Config` into an immutable `Snapshot`

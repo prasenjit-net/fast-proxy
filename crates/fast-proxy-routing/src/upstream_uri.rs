@@ -50,6 +50,7 @@ mod tests {
     fn route(strip_prefix: bool, upstream_prefix: &str) -> CompiledRoute {
         CompiledRoute {
             id: RouteId(1),
+            prefix: "/".into(),
             strip_prefix,
             upstream_prefix: UpstreamPrefix::parse(upstream_prefix).unwrap(),
             preserve_host: true,

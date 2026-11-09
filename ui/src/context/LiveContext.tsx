@@ -1,8 +1,8 @@
 // The server-push channel. Maintains one WebSocket to /ws with
 // exponential-backoff reconnect, and exposes:
 //   status     – connecting | online | offline (topbar badge)
-//   metrics    – latest snapshot   (stat tiles)
-//   history    – recent snapshots  (live chart)
+//   traffic    – latest traffic sample   (stat tiles)
+//   history    – recent traffic samples  (live chart)
 //   activities – recent server events (activity feed)
 // Connection transitions surface as toast bubbles, but only when a
 // previously-live connection drops — a backend that is simply not
@@ -15,7 +15,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Metrics } from "../lib/api";
+import type { Traffic } from "../lib/api";
 import { useToast } from "./ToastContext";
 
 export interface Activity {
@@ -28,17 +28,18 @@ export type ConnectionStatus = "connecting" | "online" | "offline";
 
 interface LiveContextValue {
   status: ConnectionStatus;
-  metrics: Metrics | null;
-  history: Metrics[];
+  traffic: Traffic | null;
+  history: Traffic[];
   activities: Activity[];
 }
 
 type ServerEvent =
   | { type: "hello"; message: string; timestampMs: number }
-  | { type: "metrics"; data: Metrics }
+  | { type: "traffic"; data: Traffic }
+  | { type: "configChanged"; version: number; summary: string; timestampMs: number }
   | { type: "activity"; kind: string; message: string; timestampMs: number };
 
-const HISTORY_LIMIT = 90; // ~3 minutes at one snapshot per 2s
+const HISTORY_LIMIT = 90; // ~3 minutes at one sample per 2s
 const ACTIVITY_LIMIT = 50;
 
 const LiveContext = createContext<LiveContextValue | null>(null);
@@ -46,8 +47,8 @@ const LiveContext = createContext<LiveContextValue | null>(null);
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { push } = useToast();
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [history, setHistory] = useState<Metrics[]>([]);
+  const [traffic, setTraffic] = useState<Traffic | null>(null);
+  const [history, setHistory] = useState<Traffic[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const wasOnline = useRef(false);
   const pushRef = useRef(push);
@@ -83,8 +84,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         } catch {
           return;
         }
-        if (event.type === "metrics") {
-          setMetrics(event.data);
+        if (event.type === "traffic") {
+          setTraffic(event.data);
           setHistory((current) => [
             ...current.slice(-(HISTORY_LIMIT - 1)),
             event.data,
@@ -127,7 +128,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <LiveContext.Provider value={{ status, metrics, history, activities }}>
+    <LiveContext.Provider value={{ status, traffic, history, activities }}>
       {children}
     </LiveContext.Provider>
   );

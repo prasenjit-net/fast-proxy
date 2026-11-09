@@ -26,7 +26,7 @@ function ConfigRow({ label, children }: { label: string; children: ReactNode }) 
 export default function SettingsPage() {
   const config = useConfig();
   const { mode, setMode } = useTheme();
-  const { status, metrics } = useLive();
+  const { status, traffic } = useLive();
   const { push, notifyError } = useToast();
 
   const healthCheck = useMutation({
@@ -93,7 +93,7 @@ export default function SettingsPage() {
         </dl>
         <p className="mt-3 text-[0.8rem] leading-relaxed text-ink-faint">
           Served by <code>GET /api/config</code>. Edit <code>config.toml</code> or pass CLI
-          flags (e.g. <code>--port 9000</code>) to change these — no UI rebuild needed.
+          flags (e.g. <code>--admin-listen 127.0.0.1:9100</code>) to change these — no UI rebuild needed.
         </p>
       </section>
 
@@ -104,9 +104,11 @@ export default function SettingsPage() {
         </div>
         <dl className="mb-4 flex flex-col">
           <ConfigRow label="WebSocket">{status}</ConfigRow>
-          <ConfigRow label="Clients online">{metrics ? metrics.wsClients : "—"}</ConfigRow>
+          <ConfigRow label="Open proxy connections">
+            {traffic ? traffic.activeConnections : "—"}
+          </ConfigRow>
           <ConfigRow label="Server uptime">
-            {metrics ? formatUptime(metrics.uptimeSecs) : "—"}
+            {formatUptime(Math.max(0, Math.floor((Date.now() - config.startedAtMs) / 1000)))}
           </ConfigRow>
         </dl>
         <button

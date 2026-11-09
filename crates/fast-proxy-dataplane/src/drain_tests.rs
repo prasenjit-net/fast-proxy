@@ -13,7 +13,6 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::test_support::{eventually, parse_reply, route, site_to, Harness};
 use crate::test_upstream::{Behavior, TestUpstream, WsEchoServer};
 use crate::upgrade_tests::{connect, proxy_for};
-use crate::{TrustedProxies, UpstreamClient};
 
 const HOST: &str = "shop.example.com";
 
@@ -21,7 +20,7 @@ async fn proxy_to(upstream: &TestUpstream) -> Harness {
     let config = Config {
         subsystems: vec![site_to(1, "shop", HOST, upstream.addr, vec![route(1, "/")])],
     };
-    Harness::start(config, UpstreamClient::new(TrustedProxies::default())).await
+    Harness::proxying(config, &[]).await
 }
 
 fn request() -> String {

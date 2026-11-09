@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatNumber, formatUptime, timeAgo } from "./format";
+import { formatNumber, formatPercent, formatRate, formatUptime, timeAgo } from "./format";
 
 describe("formatUptime", () => {
   it("shows seconds under a minute", () => {
@@ -40,5 +40,34 @@ describe("timeAgo", () => {
 
   it("never goes negative for clock skew (future timestamps)", () => {
     expect(timeAgo(Date.now() + 10_000)).toBe("just now");
+  });
+});
+
+describe("formatRate", () => {
+  it("keeps one decimal below 10 per second", () => {
+    expect(formatRate(0)).toBe("0.0");
+    expect(formatRate(2.456)).toBe("2.5");
+    expect(formatRate(9.94)).toBe("9.9");
+  });
+
+  it("rounds to whole numbers from 10 per second", () => {
+    expect(formatRate(10)).toBe("10");
+    expect(formatRate(1234.6)).toBe(formatNumber(1234.6));
+  });
+});
+
+describe("formatPercent", () => {
+  it("shows exact zero as 0%", () => {
+    expect(formatPercent(0)).toBe("0%");
+  });
+
+  it("keeps small non-zero values visible", () => {
+    expect(formatPercent(0.0004)).toBe("<1%");
+  });
+
+  it("shows one decimal below 10% and none above", () => {
+    expect(formatPercent(0.025)).toBe("2.5%");
+    expect(formatPercent(0.25)).toBe("25%");
+    expect(formatPercent(1)).toBe("100%");
   });
 });

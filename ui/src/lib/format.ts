@@ -20,3 +20,15 @@ export function timeAgo(timestampMs: number): string {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return new Date(timestampMs).toLocaleDateString();
 }
+
+/** A request rate: one decimal below 10/s, whole numbers above. */
+export function formatRate(perSecond: number): string {
+  return perSecond < 10 ? perSecond.toFixed(1) : formatNumber(perSecond);
+}
+
+/** A 0-1 fraction as a percentage; small non-zero values stay visible. */
+export function formatPercent(fraction: number): string {
+  const percent = fraction * 100;
+  if (percent === 0) return "0%";
+  return percent < 1 ? "<1%" : `${percent.toFixed(percent < 10 ? 1 : 0)}%`;
+}

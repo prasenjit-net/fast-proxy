@@ -9,7 +9,8 @@ Rust, shipped as a single binary with an embedded admin UI.
 > end: configure subsystems, hosts, upstreams and routes through the admin REST
 > API, and traffic is routed live, with the configuration persisted in SQLite.
 > Revision history with rollback, a request resolver, WebSocket passthrough and
-> graceful draining are in. Still to come in M1: the admin UI pages and metrics. Try it with the
+> graceful draining, Prometheus metrics, an enriched access log and live traffic
+> stats are in. Still to come in M1: the admin UI pages. Try it with the
 > [getting-started walkthrough](docs/getting-started.md); see the
 > [roadmap](docs/ROADMAP.md) for the plan.
 
@@ -46,10 +47,11 @@ or removed as the proxy lands (see the roadmap, M0).
 - **TOML configuration + CLI overrides** - every value in `config.toml` can be
   overridden with a flag (`--port`, `--host`, `--log-level`, `--access-log`,
   `--no-access-log`, `--config <path>`)
-- **Access log** - per-request Common-Log-style lines to console (tracing
-  target `access`) and optionally to a file
-- **Server push** - a WebSocket at `/ws` streams metrics every 2s plus
-  activity events, with auto-reconnect and connection-status toasts
+- **Access log** - one line per request for both planes, to the console (tracing
+  target `access`) and optionally a file; proxied requests record subsystem, route,
+  upstream, request id, upstream and total time, and bytes sent
+- **Server push** - a WebSocket at `/ws` streams live traffic every 2s plus
+  config changes and activity events, with auto-reconnect and connection-status toasts
 
 ## Quick start
 
@@ -120,7 +122,8 @@ with the proxy itself (M1 task D1).
 |---|---|---|
 | GET | `/api/health` | Liveness + version |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
-| GET | `/api/metrics` | Latest metrics snapshot |
+| GET | `/api/traffic` | Latest live traffic sample: requests/s, 5xx error rate, connections, per subsystem |
+| GET | `/metrics` | Prometheus text exposition (admin listener only) |
 | GET, POST | `/api/subsystems` | List (host patterns, route counts) / create |
 | GET, PUT, DELETE | `/api/subsystems/{id}` | Detail (hosts, upstreams, routes in match order) / replace / delete |
 | POST | `/api/subsystems/{id}/hosts` | Add a host pattern (`pattern`) |
@@ -158,7 +161,8 @@ Validation failures (400) add a `fields` array naming each bad input
 WebSocket events are JSON discriminated by `type`:
 
 ```json
-{ "type": "metrics",  "data": { "cpu": 41.3, "memory": 58.0, "...": "…" } }
+{ "type": "traffic",  "data": { "total": { "requestsPerSec": 12.5, "errorRate": 0.02, "...": "…" }, "subsystems": ["…"] } }
+{ "type": "configChanged", "version": 7, "summary": "route created: /api in shop", "timestampMs": 0 }
 { "type": "activity", "kind": "config", "message": "Route created", "timestampMs": 0 }
 { "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```

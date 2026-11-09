@@ -15,14 +15,26 @@ export interface ServerConfig {
   startedAtMs: number;
 }
 
-export interface Metrics {
-  cpu: number;
-  memory: number;
+/** Request and error rates over one sampling window. */
+export interface TrafficRates {
   requestsTotal: number;
-  requestsPerMin: number;
-  wsClients: number;
-  uptimeSecs: number;
+  requestsPerSec: number;
+  /** Share of the window's requests that got a 5xx response, 0 to 1. */
+  errorRate: number;
+}
+
+export interface SubsystemTraffic extends TrafficRates {
+  name: string;
+}
+
+/** One sampling window of live proxy traffic (the `traffic` push event). */
+export interface Traffic {
   timestampMs: number;
+  windowSecs: number;
+  total: TrafficRates;
+  activeConnections: number;
+  activeRequests: number;
+  subsystems: SubsystemTraffic[];
 }
 
 export class ApiError extends Error {
@@ -78,5 +90,5 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   config: () => request<ServerConfig>("/api/config"),
   health: () => request<{ status: string; version: string }>("/api/health"),
-  metrics: () => request<Metrics>("/api/metrics"),
+  traffic: () => request<Traffic>("/api/traffic"),
 };

@@ -19,6 +19,8 @@ use crate::connections::{ConnectionContext, ConnectionGuard};
 use crate::headers::{self, ClientInfo};
 use crate::trusted_proxies::TrustedProxies;
 use crate::{FixedResponse, Forward, ResponseBody, Target};
+use fast_proxy_telemetry::{Metrics, UpstreamErrorKind};
+use std::sync::Arc;
 
 type HttpClient = Client<HttpConnector, Incoming>;
 
@@ -33,13 +35,15 @@ const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 /// per request.
 pub struct UpstreamClient {
     trusted_proxies: TrustedProxies,
+    metrics: Arc<Metrics>,
     clients: Mutex<HashMap<Duration, HttpClient>>,
 }
 
 impl UpstreamClient {
-    pub fn new(trusted_proxies: TrustedProxies) -> Self {
+    pub fn new(trusted_proxies: TrustedProxies, metrics: Arc<Metrics>) -> Self {
         Self {
             trusted_proxies,
+            metrics,
             clients: Mutex::new(HashMap::new()),
         }
     }
@@ -50,6 +54,19 @@ impl UpstreamClient {
             .entry(connect_timeout)
             .or_insert_with(|| build_client(connect_timeout))
             .clone()
+    }
+}
+
+impl UpstreamClient {
+    /// Counts an upstream failure and builds the matching 502/504 response.
+    fn failed(&self, target: &Target<'_>, kind: UpstreamErrorKind) -> Response<ResponseBody> {
+        self.metrics
+            .upstream_error(target.subsystem.name.as_str(), kind);
+        let fixed = match kind {
+            UpstreamErrorKind::Timeout => FixedResponse::GatewayTimeout,
+            UpstreamErrorKind::Connect | UpstreamErrorKind::Other => FixedResponse::BadGateway,
+        };
+        fixed.render(target.request_id, target.wants_json)
     }
 }
 
@@ -74,7 +91,7 @@ impl Forward for UpstreamClient {
         let route = target.route;
         let Some(uri) = build_upstream_uri(route, request.uri(), target.consumed_prefix_len) else {
             tracing::warn!(route = route.id.0, "cannot build an upstream URI");
-            return FixedResponse::BadGateway.render(target.request_id, target.wants_json);
+            return self.failed(&target, UpstreamErrorKind::Other);
         };
 
         // A protocol switch needs the client's side of the socket, which is
@@ -106,12 +123,11 @@ impl Forward for UpstreamClient {
         match outcome {
             Err(_elapsed) => {
                 tracing::warn!(upstream = %route.endpoint, "upstream response timed out");
-                FixedResponse::GatewayTimeout.render(target.request_id, target.wants_json)
+                self.failed(&target, UpstreamErrorKind::Timeout)
             }
             Ok(Err(err)) => {
-                let failure = failure_for(&err);
                 tracing::warn!(upstream = %route.endpoint, "upstream request failed: {err}");
-                failure.render(target.request_id, target.wants_json)
+                self.failed(&target, kind_for(err.is_connect(), &err))
             }
             Ok(Ok(response)) => match client_upgrade {
                 Some(client_upgrade) if response.status() == StatusCode::SWITCHING_PROTOCOLS => {
@@ -181,12 +197,16 @@ async fn relay(
     }
 }
 
-/// A connect that timed out is a 504; any other failure is a 502.
-fn failure_for(err: &(dyn Error + 'static)) -> FixedResponse {
+/// Classifies a failed upstream request: anything caused by a timeout is a
+/// timeout (504); otherwise a failure to connect is `Connect` and the rest
+/// is `Other` (both 502).
+fn kind_for(is_connect: bool, err: &(dyn Error + 'static)) -> UpstreamErrorKind {
     if has_timeout_cause(err) {
-        FixedResponse::GatewayTimeout
+        UpstreamErrorKind::Timeout
+    } else if is_connect {
+        UpstreamErrorKind::Connect
     } else {
-        FixedResponse::BadGateway
+        UpstreamErrorKind::Other
     }
 }
 
@@ -225,28 +245,34 @@ mod tests {
     }
 
     #[test]
-    fn a_timed_out_cause_anywhere_in_the_chain_is_a_gateway_timeout() {
+    fn a_timed_out_cause_anywhere_in_the_chain_is_a_timeout() {
         let timed_out = io::Error::new(io::ErrorKind::TimedOut, "deadline");
         let nested = Wrapper(Box::new(Wrapper(Box::new(timed_out))));
-        assert_eq!(failure_for(&nested), FixedResponse::GatewayTimeout);
+        assert_eq!(kind_for(false, &nested), UpstreamErrorKind::Timeout);
+        // A connect that timed out is still a timeout, not a connect error.
+        assert_eq!(kind_for(true, &nested), UpstreamErrorKind::Timeout);
     }
 
     #[test]
-    fn other_failures_are_a_bad_gateway() {
+    fn a_failed_connect_is_a_connect_error() {
         let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
         assert_eq!(
-            failure_for(&Wrapper(Box::new(refused))),
-            FixedResponse::BadGateway
+            kind_for(true, &Wrapper(Box::new(refused))),
+            UpstreamErrorKind::Connect
         );
+    }
+
+    #[test]
+    fn other_failures_are_other() {
         assert_eq!(
-            failure_for(&io::Error::other("boom")),
-            FixedResponse::BadGateway
+            kind_for(false, &io::Error::other("boom")),
+            UpstreamErrorKind::Other
         );
     }
 
     #[test]
     fn one_client_is_kept_per_distinct_connect_timeout() {
-        let client = UpstreamClient::new(TrustedProxies::default());
+        let client = UpstreamClient::new(TrustedProxies::default(), Arc::new(Metrics::new()));
         client.client_for(Duration::from_secs(1));
         client.client_for(Duration::from_secs(1));
         client.client_for(Duration::from_secs(2));

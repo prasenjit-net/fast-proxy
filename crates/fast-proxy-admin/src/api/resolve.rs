@@ -127,12 +127,7 @@ pub async fn resolve(
                 subsystem: Some(named(id.0, subsystem)),
                 route: Some(MatchedRoute {
                     id: compiled.id.0,
-                    prefix: if consumed == 0 {
-                        "/"
-                    } else {
-                        &path[..consumed]
-                    }
-                    .to_string(),
+                    prefix: compiled.prefix.clone(),
                     upstream_name: compiled.upstream_name.clone(),
                     endpoint: compiled.endpoint.to_string(),
                     strip_prefix: compiled.strip_prefix,

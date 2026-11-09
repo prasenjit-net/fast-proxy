@@ -144,14 +144,43 @@ The last 100 revisions are kept.
 curl -s $A/status      # listeners, database path, subsystem counts, uptime, live config version
 ```
 
-## 10. WebSockets and other protocol upgrades
+## 10. Metrics, access log, and live traffic
+
+Prometheus metrics are served on the admin listener, and every proxied request
+is written to the access log (console, and the file named by
+`logging.access_log` if set):
+
+```sh
+curl -s http://127.0.0.1:9000/metrics | grep fastproxy_
+# fastproxy_requests_total{route="/",status_class="2xx",subsystem="shop"} 6
+# fastproxy_request_duration_seconds_bucket / _sum / _count
+# fastproxy_upstream_errors_total{kind="connect|timeout|other",subsystem="shop"}
+# fastproxy_active_connections, fastproxy_active_requests
+# fastproxy_config_version, fastproxy_config_reloads_total{outcome="applied|rejected"}
+```
+
+Label values come only from your configuration (subsystem names and route
+prefixes); traffic for an unknown host is counted as `subsystem="_unmatched"`,
+and requests with no route as `route="_none"`. An access-log line looks like:
+
+```
+127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
+```
+
+The dashboard's numbers come from the same counters, sampled every 2 seconds:
+
+```sh
+curl -s http://127.0.0.1:9000/api/traffic      # requests/s, error rate, connections, per subsystem
+```
+
+## 11. WebSockets and other protocol upgrades
 
 Requests with `Connection: Upgrade` / `Upgrade: websocket` are passed through:
 if the upstream answers `101`, the proxy relays bytes both ways until either
 side closes. Point a subsystem at any WebSocket server and connect to the
 proxy with the subsystem's `Host`; no extra configuration is needed.
 
-## 11. Validation errors name every bad field
+## 12. Validation errors name every bad field
 
 ```sh
 curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":5}' \
@@ -163,7 +192,7 @@ curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":
 Other errors: `404` for something that does not exist, `409` for a duplicate
 (subsystem name, host pattern, route prefix) or an upstream a route still uses.
 
-## 12. Shutting down
+## 13. Shutting down
 
 Ctrl-C starts a graceful shutdown: the proxy stops accepting new connections,
 closes idle ones, and lets requests that are already in flight (and open
@@ -171,11 +200,11 @@ WebSockets) finish for up to `data_plane.shutdown_grace` (30 seconds by
 default). Anything still open after that is closed. The admin API stays up
 until the data plane has drained.
 
-## 13. The configuration survives a restart
+## 14. The configuration survives a restart
 
 Start the proxy again with `cargo run`. The same requests route the same way:
 the configuration is in `./state/fast-proxy.db`.
 
 ## Not available yet
 
-Metrics and the admin UI pages for all of this are still to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).
+The admin UI pages for all of this are still to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).

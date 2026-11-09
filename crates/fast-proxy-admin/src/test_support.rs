@@ -9,27 +9,30 @@ use axum::http::{Method, Request, StatusCode};
 use axum::Router;
 use fast_proxy_config_service::ConfigService;
 use fast_proxy_store::Store;
-use fast_proxy_telemetry::AccessLog;
+use fast_proxy_telemetry::{AccessLog, Metrics};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use crate::{AdminState, ListenerInfo, RuntimeInfo, UiConfig};
+use crate::{AdminState, ListenerInfo, RuntimeInfo, SharedState, UiConfig};
 
 pub struct TestApp {
     router: Router,
     pub config: Arc<ConfigService>,
+    pub metrics: Arc<Metrics>,
+    pub state: SharedState,
 }
 
 impl TestApp {
     pub async fn new() -> Self {
+        let metrics = Arc::new(Metrics::new());
         let config = Arc::new(
-            ConfigService::start(Store::open_in_memory().unwrap())
+            ConfigService::start_with_metrics(Store::open_in_memory().unwrap(), metrics.clone())
                 .await
                 .unwrap(),
         );
         // No access-log path, so tests never touch disk.
-        let access_log = AccessLog::open(None).await;
+        let access_log = Arc::new(AccessLog::open(None).await);
         let state = Arc::new(AdminState::new(
             UiConfig::default(),
             "0.0.0-test",
@@ -42,10 +45,13 @@ impl TestApp {
                 }],
                 database_path: "/tmp/test.db".into(),
             },
+            metrics.clone(),
         ));
         Self {
-            router: crate::router(state),
+            router: crate::router(state.clone()),
             config,
+            metrics,
+            state,
         }
     }
 
@@ -89,6 +95,28 @@ impl TestApp {
     ) -> (StatusCode, Value) {
         self.call_raw(method, uri, body.map(|v| v.to_string()).as_deref())
             .await
+    }
+
+    /// A `GET` whose body is text, returning the status, content type, and body.
+    pub async fn get_text(&self, uri: &str) -> (StatusCode, String, String) {
+        let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+        let response = self.router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            content_type,
+            String::from_utf8(bytes.to_vec()).unwrap(),
+        )
     }
 
     pub async fn get(&self, uri: &str) -> (StatusCode, Value) {

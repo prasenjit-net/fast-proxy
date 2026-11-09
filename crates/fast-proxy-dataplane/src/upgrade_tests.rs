@@ -14,7 +14,6 @@ use tokio_tungstenite::{client_async, MaybeTlsStream, WebSocketStream};
 
 use crate::test_support::{eventually, route, send_raw, site_to, Harness};
 use crate::test_upstream::{Behavior, TestUpstream, WsEchoServer};
-use crate::{TrustedProxies, UpstreamClient};
 
 const HOST: &str = "shop.example.com";
 
@@ -25,7 +24,7 @@ pub async fn proxy_for(upstream: std::net::SocketAddr) -> Harness {
     let config = Config {
         subsystems: vec![site_to(1, "shop", HOST, upstream, vec![route(1, "/")])],
     };
-    Harness::start(config, UpstreamClient::new(TrustedProxies::default())).await
+    Harness::proxying(config, &[]).await
 }
 
 /// Opens a WebSocket to `ws://shop.example.com/chat` through the proxy.
