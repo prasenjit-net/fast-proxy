@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatNumber, formatPercent, formatRate, formatUptime, timeAgo } from "./format";
+import {
+  formatDurationMs,
+  formatNumber,
+  formatPercent,
+  formatRate,
+  formatUptime,
+  timeAgo,
+} from "./format";
 
 describe("formatUptime", () => {
   it("shows seconds under a minute", () => {
@@ -69,5 +76,15 @@ describe("formatPercent", () => {
     expect(formatPercent(0.025)).toBe("2.5%");
     expect(formatPercent(0.25)).toBe("25%");
     expect(formatPercent(1)).toBe("100%");
+  });
+});
+
+describe("formatDurationMs", () => {
+  it("uses milliseconds, seconds, or minutes as fits", () => {
+    expect(formatDurationMs(250)).toBe("250ms");
+    expect(formatDurationMs(5000)).toBe("5s");
+    expect(formatDurationMs(1500)).toBe("1.5s");
+    expect(formatDurationMs(120_000)).toBe("2m");
+    expect(formatDurationMs(90_000)).toBe("1.5m");
   });
 });

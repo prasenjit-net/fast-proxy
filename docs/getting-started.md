@@ -1,8 +1,20 @@
 # Getting started
 
 A copy-paste walkthrough that sets up two subsystems through the admin API and
-sends traffic through the proxy. It follows the M1 exit criteria. The admin UI
-for these resources is not built yet, so everything here uses `curl`.
+sends traffic through the proxy. It follows the M1 exit criteria and uses
+`curl` so every step is explicit.
+
+**Prefer clicking?** Everything below can also be done in the admin UI at
+http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`):
+
+- **Subsystems**: create a subsystem, then on its page add hosts, upstreams and
+  routes. Forms check your input and show the server's messages next to the
+  fields; deletes ask first and say what will be removed.
+- **Revisions**: browse the history, view the configuration at any revision, and
+  roll back.
+- **Resolver**: try a host and path and see the subsystem, route and the exact
+  upstream URL, or why nothing matched.
+- **Dashboard**: live requests/s, error rate and connections, by subsystem.
 
 ## 1. Start the proxy
 
@@ -207,4 +219,5 @@ the configuration is in `./state/fast-proxy.db`.
 
 ## Not available yet
 
-The admin UI pages for all of this are still to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).
+Authentication for the admin plane, TLS, multiple endpoints per upstream and load
+balancing are later milestones (see [ROADMAP.md](ROADMAP.md)).

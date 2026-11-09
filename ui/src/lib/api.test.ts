@@ -72,3 +72,95 @@ describe("api client", () => {
     await expect(api.health()).rejects.toMatchObject({ code: "NETWORK", status: 0 });
   });
 });
+
+describe("ApiError fields", () => {
+  it("carries the server's per-field messages", async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      json: () =>
+        Promise.resolve({
+          error: {
+            code: "VALIDATION_FAILED",
+            message: "validation failed",
+            fields: [
+              { field: "prefix", message: "must start with '/'" },
+              { field: "connectTimeoutMs", message: "out of range" },
+            ],
+          },
+        }),
+    });
+
+    const error = await api.config().catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ApiError);
+    const apiError = error as ApiError;
+    expect(apiError.fields).toHaveLength(2);
+    expect(apiError.fieldMessage("prefix")).toBe("must start with '/'");
+    expect(apiError.fieldMessage("connectTimeoutMs")).toBe("out of range");
+    expect(apiError.fieldMessage("name")).toBeUndefined();
+  });
+
+  it("has no fields for errors that do not name any", async () => {
+    mockFetchOnce({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      json: () => Promise.resolve({ error: { code: "CONFLICT", message: "already exists" } }),
+    });
+    const error = (await api.config().catch((err: unknown) => err)) as ApiError;
+    expect(error.fields).toEqual([]);
+    expect(error.code).toBe("CONFLICT");
+  });
+});
+
+describe("endpoint calls", () => {
+  const route = {
+    prefix: "/api",
+    upstreamGroupId: 3,
+    stripPrefix: true,
+    upstreamPrefix: "/v2",
+    preserveHost: false,
+    connectTimeoutMs: 1000,
+    responseTimeoutMs: 2000,
+    enabled: true,
+  };
+  const upstream = { name: "backend", addr: "127.0.0.1:3000", weight: 1 };
+  const subsystem = { name: "shop", enabled: true, description: "" };
+
+  const calls: [string, () => Promise<unknown>, string, string, unknown][] = [
+    ["subsystems", () => api.subsystems(), "GET", "/api/subsystems", undefined],
+    ["subsystem", () => api.subsystem(4), "GET", "/api/subsystems/4", undefined],
+    ["createSubsystem", () => api.createSubsystem(subsystem), "POST", "/api/subsystems", subsystem],
+    ["updateSubsystem", () => api.updateSubsystem(4, subsystem), "PUT", "/api/subsystems/4", subsystem],
+    ["deleteSubsystem", () => api.deleteSubsystem(4), "DELETE", "/api/subsystems/4", undefined],
+    ["addHost", () => api.addHost(4, "a.example.com"), "POST", "/api/subsystems/4/hosts", { pattern: "a.example.com" }],
+    ["removeHost", () => api.removeHost(4, 9), "DELETE", "/api/subsystems/4/hosts/9", undefined],
+    ["createUpstream", () => api.createUpstream(4, upstream), "POST", "/api/subsystems/4/upstreams", upstream],
+    ["updateUpstream", () => api.updateUpstream(4, 7, upstream), "PUT", "/api/subsystems/4/upstreams/7", upstream],
+    ["deleteUpstream", () => api.deleteUpstream(4, 7), "DELETE", "/api/subsystems/4/upstreams/7", undefined],
+    ["createRoute", () => api.createRoute(4, route), "POST", "/api/subsystems/4/routes", route],
+    ["updateRoute", () => api.updateRoute(4, 5, route), "PUT", "/api/subsystems/4/routes/5", route],
+    ["deleteRoute", () => api.deleteRoute(4, 5), "DELETE", "/api/subsystems/4/routes/5", undefined],
+    ["revisions", () => api.revisions(), "GET", "/api/revisions?limit=25", undefined],
+    ["revisions (older page)", () => api.revisions(40), "GET", "/api/revisions?limit=25&before=40", undefined],
+    ["revision", () => api.revision(12), "GET", "/api/revisions/12", undefined],
+    ["rollback", () => api.rollback(12), "POST", "/api/revisions/12/rollback", {}],
+    ["resolve", () => api.resolve("a.com", "/x?y=1"), "POST", "/api/resolve", { host: "a.com", path: "/x?y=1" }],
+    ["status", () => api.status(), "GET", "/api/status", undefined],
+    ["traffic", () => api.traffic(), "GET", "/api/traffic", undefined],
+  ];
+
+  it.each(calls)("%s", async (_name, call, method, path, body) => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
+    await call();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(path);
+    expect(init.method ?? "GET").toBe(method);
+    if (body === undefined) {
+      expect(init.body).toBeUndefined();
+    } else {
+      expect(JSON.parse(init.body as string)).toEqual(body);
+    }
+  });
+});

@@ -6,7 +6,11 @@ import { createRootRoute, createRoute, createRouter } from "@tanstack/react-rout
 import Layout from "./components/Layout";
 import DashboardPage from "./pages/Dashboard";
 import NotFoundPage from "./pages/NotFound";
+import ResolverPage from "./pages/Resolver";
+import RevisionsPage from "./pages/Revisions";
 import SettingsPage from "./pages/Settings";
+import SubsystemDetailPage from "./pages/SubsystemDetail";
+import SubsystemsPage from "./pages/Subsystems";
 
 const rootRoute = createRootRoute({
   component: Layout,
@@ -18,13 +22,44 @@ const dashboardRoute = createRoute({
   component: DashboardPage,
 });
 
+const subsystemsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/subsystems",
+  component: SubsystemsPage,
+});
+
+const subsystemDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/subsystems/$id",
+  component: SubsystemDetailPage,
+});
+
+const revisionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/revisions",
+  component: RevisionsPage,
+});
+
+const resolverRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/resolver",
+  component: ResolverPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
   component: SettingsPage,
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([
+  dashboardRoute,
+  subsystemsRoute,
+  subsystemDetailRoute,
+  revisionsRoute,
+  resolverRoute,
+  settingsRoute,
+]);
 
 export const router = createRouter({
   routeTree,

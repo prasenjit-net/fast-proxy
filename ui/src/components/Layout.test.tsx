@@ -120,3 +120,17 @@ describe("Layout sidebar collapse", () => {
     expect(window.localStorage.getItem("rt-sidebar")).toBeNull();
   });
 });
+
+describe("Layout navigation", () => {
+  it("lists every page in the sidebar, with the dashboard active at the root", async () => {
+    renderLayout();
+    const nav = await screen.findByRole("navigation");
+    const labels = within(nav)
+      .getAllByRole("link")
+      .map((link) => link.textContent);
+    expect(labels).toEqual(["Dashboard", "Subsystems", "Revisions", "Resolver", "Settings"]);
+    expect(within(nav).getByRole("link", { name: "Subsystems" })).toHaveAttribute("href", "/subsystems");
+    expect(within(nav).getByRole("link", { name: "Dashboard" }).className).toMatch(/text-accent/);
+    expect(within(nav).getByRole("link", { name: "Settings" }).className).not.toMatch(/text-accent/);
+  });
+});

@@ -1,6 +1,7 @@
 import ActivityFeed from "../components/ActivityFeed";
 import LiveChart from "../components/LiveChart";
 import StatCard from "../components/StatCard";
+import { Link } from "@tanstack/react-router";
 import { useLive } from "../context/LiveContext";
 import { IconActivity, IconAlertTriangle, IconServer, IconUsers } from "../icons";
 import { formatNumber, formatPercent, formatRate } from "../lib/format";
@@ -53,6 +54,53 @@ export default function DashboardPage() {
           <span className="card-hint">pushed over WebSocket every 2 s</span>
         </div>
         <LiveChart history={history} />
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>By subsystem</h2>
+          <span className="card-hint">rates over the last sample window</span>
+        </div>
+        {traffic && traffic.subsystems.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[0.88rem]">
+              <thead className="font-mono text-[0.7rem] tracking-wide text-ink-faint uppercase">
+                <tr>
+                  <th className="py-2 pr-4 font-medium">Subsystem</th>
+                  <th className="py-2 pr-4 text-right font-medium">Requests / s</th>
+                  <th className="py-2 pr-4 text-right font-medium">Error rate</th>
+                  <th className="py-2 text-right font-medium">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {traffic.subsystems.map((subsystem) => (
+                  <tr key={subsystem.name} className="border-t border-line">
+                    <td className="py-2 pr-4 font-medium">
+                      {subsystem.name.startsWith("_") ? (
+                        <span title="Requests that matched no subsystem" className="text-ink-muted">
+                          {subsystem.name}
+                        </span>
+                      ) : (
+                        <Link to="/subsystems" className="text-accent hover:underline">
+                          {subsystem.name}
+                        </Link>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-right font-mono">{formatRate(subsystem.requestsPerSec)}</td>
+                    <td className="py-2 pr-4 text-right font-mono">{formatPercent(subsystem.errorRate)}</td>
+                    <td className="py-2 text-right font-mono text-ink-muted">
+                      {formatNumber(subsystem.requestsTotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-[0.88rem] text-ink-faint">
+            {traffic ? "No traffic has reached the proxy yet." : "Waiting for data…"}
+          </p>
+        )}
       </section>
 
       <section className="card">

@@ -4,6 +4,8 @@
 //   traffic    – latest traffic sample   (stat tiles)
 //   history    – recent traffic samples  (live chart)
 //   activities – recent server events (activity feed)
+// A configChanged event (someone, maybe another admin, changed the
+// configuration) refetches every list and detail that shows it.
 // Connection transitions surface as toast bubbles, but only when a
 // previously-live connection drops — a backend that is simply not
 // running yet retries quietly.
@@ -15,7 +17,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Traffic } from "../lib/api";
+import { refreshConfigData } from "../lib/refreshConfigData";
 import { useToast } from "./ToastContext";
 
 export interface Activity {
@@ -46,6 +50,9 @@ const LiveContext = createContext<LiveContextValue | null>(null);
 
 export function LiveProvider({ children }: { children: ReactNode }) {
   const { push } = useToast();
+  const queryClient = useQueryClient();
+  const queryClientRef = useRef(queryClient);
+  queryClientRef.current = queryClient;
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [traffic, setTraffic] = useState<Traffic | null>(null);
   const [history, setHistory] = useState<Traffic[]>([]);
@@ -90,6 +97,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             ...current.slice(-(HISTORY_LIMIT - 1)),
             event.data,
           ]);
+        } else if (event.type === "configChanged") {
+          void refreshConfigData(queryClientRef.current);
         } else if (event.type === "activity") {
           prepend({
             kind: event.kind,

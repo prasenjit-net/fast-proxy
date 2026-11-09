@@ -520,16 +520,30 @@ restart.
 
 ### Workstream U: Admin UI
 
+*Status: done.* How it is built: `lib/http.ts` (request core, `ApiError` with
+per-field messages), `lib/types.ts`, `lib/api.ts` (one function per endpoint),
+`lib/validation.ts` (pure client-side checks using the server's camelCase field
+names, so client and server errors land on the same inputs),
+`components/forms/` (one form per resource) and `components/subsystem/` (the
+detail page's sections). Every form validates cheaply on the client and shows
+the server's `fields` inline; errors that name no field (a 409, a 404) appear
+once above the form; success and failure are toasts. Any write refreshes every
+query except the boot config, and a `configChanged` push does the same for
+changes made elsewhere. Test helpers: `test/mockApi.ts` (a recording fetch mock)
+and `test/renderPage.tsx` (router, query client and real toasts). The UI could
+not be looked at in a real browser in the session that built it; it is covered
+by jsdom tests only, so a manual click-through is still worthwhile.
+
 Follow existing component patterns and the tokens in
 `ui/src/styles/index.css`; no hard-coded one-off colors.
 
-- [ ] **U1 (S) API client and types** in `ui/src/lib/api.ts` for all A1-A4
+- [x] **U1 (S) API client and types** in `ui/src/lib/api.ts` for all A1-A4
   endpoints; `ApiError` exposes `fields` for form display. Update
   `vite.config.ts` proxy target to the admin port.
-- [ ] **U2 (M) Navigation and shell:** sidebar items Dashboard, Subsystems,
+- [x] **U2 (M) Navigation and shell:** sidebar items Dashboard, Subsystems,
   Revisions, Resolver, Settings; update `router.tsx`, `Sidebar.tsx`,
   `Topbar.tsx` titles.
-- [ ] **U3 (L) Subsystems list and detail.**
+- [x] **U3 (L) Subsystems list and detail.**
   - List: name, host chips, enabled toggle, route count, "New subsystem"
     button, empty state that explains the first steps.
   - Detail with sections: Hosts (add/remove), Upstreams (name + `host:port`),
@@ -538,15 +552,15 @@ Follow existing component patterns and the tokens in
   - Forms validate on the client where cheap and always show server `fields`
     errors inline; success and failure toasts.
   - Delete confirmations that state what will be removed.
-- [ ] **U4 (M) Revisions page:** table of versions with summary and time,
+- [x] **U4 (M) Revisions page:** table of versions with summary and time,
   view-config modal, rollback button with confirmation.
-- [ ] **U5 (S) Resolver page:** host and path inputs, shows matched subsystem,
+- [x] **U5 (S) Resolver page:** host and path inputs, shows matched subsystem,
   route, and final upstream URL, or why nothing matched.
-- [ ] **U6 (M) Dashboard rewrite:** replace sample tiles with real data from the
+- [x] **U6 (M) Dashboard rewrite:** replace sample tiles with real data from the
   `traffic` event: global requests/s, error rate, active connections, a live
   chart, a per-subsystem table, and the activity feed showing config changes.
   Handle new event types in `LiveContext.tsx`.
-- [ ] **U7 (S) Tests and build:** Vitest tests for the forms (validation errors
+- [x] **U7 (S) Tests and build:** Vitest tests for the forms (validation errors
   rendered, submit calls the right API), subsystem list empty state, and the
   rollback confirmation. `npm test` and `npm run build` pass.
 

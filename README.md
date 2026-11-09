@@ -9,8 +9,9 @@ Rust, shipped as a single binary with an embedded admin UI.
 > end: configure subsystems, hosts, upstreams and routes through the admin REST
 > API, and traffic is routed live, with the configuration persisted in SQLite.
 > Revision history with rollback, a request resolver, WebSocket passthrough and
-> graceful draining, Prometheus metrics, an enriched access log and live traffic
-> stats are in. Still to come in M1: the admin UI pages. Try it with the
+> graceful draining, Prometheus metrics, an enriched access log, live traffic stats
+> and the admin UI for all of it are in. M1 is in its final polish (load test,
+> benchmark, CI gates, docs). Try it with the
 > [getting-started walkthrough](docs/getting-started.md); see the
 > [roadmap](docs/ROADMAP.md) for the plan.
 
@@ -41,7 +42,9 @@ or removed as the proxy lands (see the roadmap, M0).
   cache headers, unknown `/api/*` paths still return JSON 404s
 - **Light / dark / auto theme** - Tailwind CSS v4 tokens, applied before first
   paint, visitor override persisted in `localStorage`
-- **Dashboard UI** - stat tiles, a live chart, activity feed
+- **Admin UI** - dashboard (live traffic, by subsystem, activity), subsystem
+  management (hosts, upstreams, routes), revision history with rollback, and a
+  request resolver
 - **UI configured by the backend** - the SPA boots from `GET /api/config`,
   which serves the `[ui]` section of `config.toml`
 - **TOML configuration + CLI overrides** - every value in `config.toml` can be
@@ -192,7 +195,7 @@ WebSocket events are JSON discriminated by `type`:
         ├── icons/            the icon pack (add icons here)
         ├── context/          Theme · Toast · Config · Live(WebSocket)
         ├── components/       layout, cards, chart, feed, controls
-        ├── pages/            Dashboard · Settings · 404
+        ├── pages/            Dashboard · Subsystems · SubsystemDetail · Revisions · Resolver · Settings · 404
         └── styles/           index.css (Tailwind v4 entry + theme tokens)
 ```
 

@@ -32,3 +32,10 @@ export function formatPercent(fraction: number): string {
   if (percent === 0) return "0%";
   return percent < 1 ? "<1%" : `${percent.toFixed(percent < 10 ? 1 : 0)}%`;
 }
+
+/** A duration in milliseconds as a short label: 250ms, 5s, 2m. */
+export function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${Number((ms / 1000).toFixed(1))}s`;
+  return `${Number((ms / 60_000).toFixed(1))}m`;
+}

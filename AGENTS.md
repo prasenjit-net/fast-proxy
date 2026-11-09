@@ -46,9 +46,12 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
 - `tests/` holds end-to-end tests that run the real binary.
-- `ui/src/lib/api.ts` is the typed frontend API client.
+- `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,
+  `types.ts`, `api.ts` one function per endpoint), `validation.ts` (client-side
+  checks that use the server's camelCase field names), and `navigation.ts`.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
-- `ui/src/components/` contains reusable UI components.
+- `ui/src/components/` contains reusable UI components; `forms/` has one form per
+  resource and `subsystem/` the detail page's sections.
 - `ui/src/pages/` contains route pages.
 - `ui/src/styles/index.css` contains Tailwind entrypoint and theme tokens.
 
@@ -144,6 +147,7 @@ Development servers:
 - Add new pages under `ui/src/pages/`, then update routing and navigation in the existing frontend structure.
 - Keep UI styling aligned with the tokens in `ui/src/styles/index.css`; avoid hard-coded one-off colors when a token exists.
 - Prefer existing component patterns in `ui/src/components/` before adding new abstractions.
+- UI forms: validate in `lib/validation.ts`, show server `fields` inline via `useServerErrors`, and use toasts for success. Page tests use `test/renderPage.tsx` and `test/mockApi.ts`.
 - Do not commit generated artifacts such as `target/`, `ui/dist/`, or `ui/node_modules/` unless explicitly requested.
 
 ## Testing Expectations

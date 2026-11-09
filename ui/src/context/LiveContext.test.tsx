@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveProvider, useLive } from "./LiveContext";
@@ -47,6 +48,16 @@ const trafficEvent = (rps: number) => ({
   },
 });
 
+function renderLive(client = new QueryClient()) {
+  return render(
+    <QueryClientProvider client={client}>
+      <LiveProvider>
+        <Probe />
+      </LiveProvider>
+    </QueryClientProvider>,
+  );
+}
+
 describe("LiveProvider", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", FakeSocket);
@@ -56,11 +67,7 @@ describe("LiveProvider", () => {
   });
 
   it("goes online when the socket opens", () => {
-    render(
-      <LiveProvider>
-        <Probe />
-      </LiveProvider>,
-    );
+    renderLive();
     expect(screen.getByTestId("status")).toHaveTextContent("connecting");
     act(() => FakeSocket.last.open());
     expect(screen.getByTestId("status")).toHaveTextContent("online");
@@ -68,11 +75,7 @@ describe("LiveProvider", () => {
   });
 
   it("keeps the latest traffic sample and a history of them", () => {
-    render(
-      <LiveProvider>
-        <Probe />
-      </LiveProvider>,
-    );
+    renderLive();
     expect(screen.getByTestId("rps")).toHaveTextContent("none");
     act(() => FakeSocket.last.receive(trafficEvent(4)));
     act(() => FakeSocket.last.receive(trafficEvent(9)));
@@ -81,11 +84,7 @@ describe("LiveProvider", () => {
   });
 
   it("caps the history length", () => {
-    render(
-      <LiveProvider>
-        <Probe />
-      </LiveProvider>,
-    );
+    renderLive();
     act(() => {
       for (let i = 0; i < 120; i++) FakeSocket.last.receive(trafficEvent(i));
     });
@@ -93,11 +92,7 @@ describe("LiveProvider", () => {
   });
 
   it("adds activity and hello events to the feed, newest first", () => {
-    render(
-      <LiveProvider>
-        <Probe />
-      </LiveProvider>,
-    );
+    renderLive();
     act(() => FakeSocket.last.receive({ type: "hello", message: "Connected", timestampMs: 1 }));
     act(() =>
       FakeSocket.last.receive({
@@ -110,17 +105,26 @@ describe("LiveProvider", () => {
     expect(screen.getByTestId("activities")).toHaveTextContent("route created: / in shop|Connected");
   });
 
-  it("ignores messages it cannot parse and events it does not handle", () => {
-    render(
-      <LiveProvider>
-        <Probe />
-      </LiveProvider>,
-    );
+  it("ignores messages it cannot parse", () => {
+    renderLive();
     act(() => FakeSocket.last.onmessage?.({ data: "not json" }));
+    expect(screen.getByTestId("rps")).toHaveTextContent("none");
+    expect(screen.getByTestId("activities")).toHaveTextContent("");
+  });
+
+  it("refetches config data (but not the boot config) when the configuration changes", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    renderLive(client);
     act(() =>
       FakeSocket.last.receive({ type: "configChanged", version: 3, summary: "x", timestampMs: 1 }),
     );
-    expect(screen.getByTestId("rps")).toHaveTextContent("none");
-    expect(screen.getByTestId("activities")).toHaveTextContent("");
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    const { predicate } = invalidate.mock.calls[0][0] as unknown as {
+      predicate: (query: { queryKey: unknown[] }) => boolean;
+    };
+    expect(predicate({ queryKey: ["subsystems"] })).toBe(true);
+    expect(predicate({ queryKey: ["revisions"] })).toBe(true);
+    expect(predicate({ queryKey: ["config"] })).toBe(false);
   });
 });

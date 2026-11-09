@@ -184,3 +184,24 @@ export const IconExternal = icon(
 );
 
 export const IconChevronRight = icon(<path d="m9 5 7 7-7 7" />);
+
+export const IconEdit = icon(
+  <>
+    <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z" />
+    <path d="m14.5 7.5 3 3" />
+  </>,
+);
+
+export const IconSearch = icon(
+  <>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m16 16 4.5 4.5" />
+  </>,
+);
+
+export const IconRotateCcw = icon(
+  <>
+    <path d="M4 12a8 8 0 1 0 2.6-5.9L4 8.5" />
+    <path d="M4 4v4.5h4.5" />
+  </>,
+);
