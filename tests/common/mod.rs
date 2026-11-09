@@ -319,6 +319,7 @@ pub fn start_keepalive_backend(name: &'static str, delay: Duration) -> u16 {
 }
 
 fn serve_keepalive(mut stream: TcpStream, name: &str, delay: Duration) {
+    stream.set_nodelay(true).ok();
     let mut pending = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
