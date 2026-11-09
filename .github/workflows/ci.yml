@@ -92,6 +92,6 @@ jobs:
       - name: Smoke-test the release binary
         shell: bash
         run: |
-          bin=target/release/rusty-template
+          bin=target/release/fast-proxy
           [ -f "$bin.exe" ] && bin="$bin.exe"
           "$bin" --version

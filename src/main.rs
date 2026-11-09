@@ -17,12 +17,12 @@ use tracing_subscriber::EnvFilter;
 use crate::config::AppConfig;
 use crate::state::AppState;
 
-/// Single-binary fullstack template: Axum REST API + embedded React SPA.
+/// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.
 ///
 /// Configuration is read from a TOML file; every flag below overrides
 /// the corresponding value from that file.
 #[derive(Parser, Debug)]
-#[command(name = "rusty-template", version, about)]
+#[command(name = "fast-proxy", version, about)]
 struct Cli {
     /// Path to the TOML configuration file
     #[arg(short, long, default_value = "config.toml")]

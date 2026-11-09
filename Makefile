@@ -3,7 +3,7 @@
 ## Build the single release binary (frontend + backend).
 build: ui
 	cargo build --release
-	@echo "→ single binary at target/release/rusty-template"
+	@echo "→ single binary at target/release/fast-proxy"
 
 ## Build the frontend into ui/dist (embedded by the Rust build).
 ui:
@@ -19,7 +19,7 @@ dev-ui:
 
 ## Build everything, then run the release binary.
 run: build
-	./target/release/rusty-template
+	./target/release/fast-proxy
 
 clean:
 	cargo clean

@@ -1,8 +1,8 @@
 [package]
-name = "rusty-template"
+name = "fast-proxy"
 version = "0.1.0"
 edition = "2021"
-description = "Single-binary fullstack template: Axum REST API + embedded React (Vite) SPA"
+description = "Fast, realtime-configurable ingress server and reverse proxy: host/prefix routing, TLS + ACME, load balancing, health checks, and live diagnostics"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }

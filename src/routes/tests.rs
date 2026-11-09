@@ -76,7 +76,7 @@ async fn config_exposes_ui_section_camel_cased() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let body = body_json(res).await;
-    assert_eq!(body["ui"]["appName"], "Rusty Template");
+    assert_eq!(body["ui"]["appName"], "Fast Proxy");
     assert_eq!(body["ui"]["defaultTheme"], "auto");
     assert!(body["version"].is_string());
 }

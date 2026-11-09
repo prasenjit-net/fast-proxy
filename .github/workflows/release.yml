@@ -111,8 +111,8 @@ jobs:
           fi
 
           export VERSION="$version"
-          perl -0pi -e 's/(^\[package\]\nname = "rusty-template"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/m' Cargo.toml
-          perl -0pi -e 's/(\[\[package\]\]\nname = "rusty-template"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/' Cargo.lock
+          perl -0pi -e 's/(^\[package\]\nname = "fast-proxy"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/m' Cargo.toml
+          perl -0pi -e 's/(\[\[package\]\]\nname = "fast-proxy"\nversion = ")[^"]+(")/$1$ENV{VERSION}$2/' Cargo.lock
 
           node <<'NODE'
           const fs = require("fs");
@@ -139,7 +139,7 @@ jobs:
           version="${{ steps.version.outputs.version }}"
 
           cargo_toml_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          cargo_lock_version=$(perl -0ne 'print "$1\n" if /\[\[package\]\]\nname = "rusty-template"\nversion = "([^"]+)"/' Cargo.lock)
+          cargo_lock_version=$(perl -0ne 'print "$1\n" if /\[\[package\]\]\nname = "fast-proxy"\nversion = "([^"]+)"/' Cargo.lock)
           package_version=$(node -p 'require("./ui/package.json").version')
           package_lock_version=$(node -p 'require("./ui/package-lock.json").version')
           package_lock_root_version=$(node -p 'require("./ui/package-lock.json").packages[""].version')

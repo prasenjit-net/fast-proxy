@@ -93,7 +93,7 @@ jobs:
           version="${{ needs.qualify.outputs.version }}"
 
           cargo_toml_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          cargo_lock_version=$(perl -0ne 'print "$1\n" if /\[\[package\]\]\nname = "rusty-template"\nversion = "([^"]+)"/' Cargo.lock)
+          cargo_lock_version=$(perl -0ne 'print "$1\n" if /\[\[package\]\]\nname = "fast-proxy"\nversion = "([^"]+)"/' Cargo.lock)
           package_version=$(node -p 'require("./ui/package.json").version')
           package_lock_version=$(node -p 'require("./ui/package-lock.json").version')
           package_lock_root_version=$(node -p 'require("./ui/package-lock.json").packages[""].version')
@@ -162,9 +162,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          stage="rusty-template-${{ needs.qualify.outputs.tag }}-${{ matrix.target }}"
+          stage="fast-proxy-${{ needs.qualify.outputs.tag }}-${{ matrix.target }}"
           mkdir "$stage"
-          cp "target/${{ matrix.target }}/release/rusty-template" "$stage/"
+          cp "target/${{ matrix.target }}/release/fast-proxy" "$stage/"
           cp README.md LICENSE config.toml "$stage/"
           tar -czf "$stage.tar.gz" "$stage"
           shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
@@ -173,9 +173,9 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $stage = "rusty-template-${{ needs.qualify.outputs.tag }}-${{ matrix.target }}"
+          $stage = "fast-proxy-${{ needs.qualify.outputs.tag }}-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/rusty-template.exe" -Destination $stage
+          Copy-Item "target/${{ matrix.target }}/release/fast-proxy.exe" -Destination $stage
           Copy-Item README.md, LICENSE, config.toml -Destination $stage
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
           Get-FileHash "$stage.zip" -Algorithm SHA256 |
@@ -186,10 +186,10 @@ jobs:
         with:
           name: package-${{ matrix.target }}
           path: |
-            rusty-template-*.tar.gz
-            rusty-template-*.tar.gz.sha256
-            rusty-template-*.zip
-            rusty-template-*.zip.sha256
+            fast-proxy-*.tar.gz
+            fast-proxy-*.tar.gz.sha256
+            fast-proxy-*.zip
+            fast-proxy-*.zip.sha256
           if-no-files-found: error
 
   tag:

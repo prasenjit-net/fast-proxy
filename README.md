@@ -1,49 +1,54 @@
-# rusty-template
+# fast-proxy
 
-[![CI](https://github.com/prasenjit-net/rusty-template/actions/workflows/ci.yml/badge.svg)](https://github.com/prasenjit-net/rusty-template/actions/workflows/ci.yml)
+[![CI](https://github.com/prasenjit-net/fast-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/prasenjit-net/fast-proxy/actions/workflows/ci.yml)
 
-A **single-binary fullstack template**: an [Axum](https://github.com/tokio-rs/axum)
-REST + WebSocket backend with a React (Vite + TypeScript) SPA embedded straight
-into the executable. Build once, ship one file.
+A fast, **realtime-configurable ingress server and reverse proxy** written in
+Rust, shipped as a single binary with an embedded admin UI.
 
-## Features
+> **Status: early development.** The repository currently contains the
+> single-binary scaffold (Axum admin API, WebSocket push, embedded React UI,
+> TOML config, access log, CI/release pipeline). The proxy data plane is not
+> built yet. See the [roadmap](docs/ROADMAP.md) for the plan and milestones.
 
-- **REST backend** — Axum with a typed error framework (`AppError` → consistent
-  JSON error envelope on every endpoint)
-- **Embedded SPA** — `ui/dist` is compiled into the binary with `rust-embed`;
+## Planned capabilities
+
+| Capability | Summary | Milestone |
+|---|---|---|
+| Host-based routing | Virtual hosts by `Host` / SNI, exact and wildcard match | M1 |
+| URI prefix routing | Longest-prefix match per host, optional prefix strip/rewrite | M1 |
+| Realtime configuration | Validate-then-swap config reloads with no dropped connections | M1 |
+| Upstream groups + load balancing | Round robin, weighted, least-connections, power-of-two-choices, consistent hash | M2 |
+| Upstream health monitoring | Active probes plus passive outlier ejection | M2 |
+| TLS termination | rustls, SNI cert selection, hot cert reload, HTTP/2 | M3 |
+| ACME auto certificates | Automatic issue and renewal (HTTP-01 / TLS-ALPN-01) | M4 |
+| Maintenance mode | Temporary, auto-expiring 503 per host or route, with bypass rules | M5 |
+| Diagnostics and monitoring | Prometheus metrics, structured logs, live admin UI | M1-M5 |
+| Request sampling | Capture unusual requests (errors, slow, anomalous) with redaction | M6 |
+
+## Current scaffold features
+
+These come from the template this project started from and will be reworked
+or removed as the proxy lands (see the roadmap, M0).
+
+- **Admin REST + WebSocket backend** - Axum with a typed error framework
+  (`AppError` -> consistent JSON error envelope on every endpoint)
+- **Embedded SPA** - `ui/dist` is compiled into the binary with `rust-embed`;
   deep links work via the SPA fallback, fingerprinted assets get immutable
   cache headers, unknown `/api/*` paths still return JSON 404s
-- **Greptile-inspired theme** — light-gray canvas with a faint emerald grid,
-  dark purple-slate ink, mint/emerald accents, and monospace meta text, built
-  on **Tailwind CSS v4**, plus a bespoke 24×24 stroke **icon pack**
-- **Light / dark / auto theme** — applied before first paint, follows the OS in
-  auto mode, visitor override persisted in `localStorage`
-- **Dashboard UI** — stat tiles with sparklines, a live two-series chart with
-  crosshair + tooltip (colors validated for contrast and color-vision safety in
-  both modes), activity feed, tasks card
-- **Example service** — an in-memory tasks CRUD (`/api/tasks`) demonstrating
-  validation, 404s, and activity broadcasting
-- **Example page** — a component gallery (buttons, badges, forms, alerts,
-  table, progress, skeletons) with live error-pipeline demos
-- **Responsive + collapsible sidebar** — the topbar hamburger toggles the
-  sidebar between icon+text and an icon-only rail on desktop (choice
-  persisted), and opens it as an overlay drawer on mobile; layouts collapse
-  down to phone widths
-- **UI configured by the backend** — the SPA boots from `GET /api/config`,
-  which serves the `[ui]` section of `config.toml` (app name, tagline, default
-  theme, repo link)
-- **TOML configuration + CLI overrides** — every value in `config.toml` can be
+- **Light / dark / auto theme** - Tailwind CSS v4 tokens, applied before first
+  paint, visitor override persisted in `localStorage`
+- **Dashboard UI** - stat tiles, a live chart, activity feed
+- **UI configured by the backend** - the SPA boots from `GET /api/config`,
+  which serves the `[ui]` section of `config.toml`
+- **TOML configuration + CLI overrides** - every value in `config.toml` can be
   overridden with a flag (`--port`, `--host`, `--log-level`, `--access-log`,
   `--no-access-log`, `--config <path>`)
-- **Access log** — per-request Common-Log-style lines to console (tracing
+- **Access log** - per-request Common-Log-style lines to console (tracing
   target `access`) and optionally to a file
-- **Error handling end to end** — backend errors arrive in the UI as
-  notification bubbles (toasts) carrying the server's error code; render
-  crashes are caught by nested error boundaries
-- **Server push** — a WebSocket at `/ws` streams metrics every 2s plus
+- **Server push** - a WebSocket at `/ws` streams metrics every 2s plus
   activity events, with auto-reconnect and connection-status toasts
-- **Unique favicon** — a mint-on-slate gear-and-bolt SVG, mirrored by the
-  in-app logo
+- **Example task service and component gallery** - scaffolding demos, slated
+  for removal
 
 ## Quick start
 
@@ -75,7 +80,7 @@ disk, so a production `npm run build` is picked up by a plain restart too.
 ## CLI
 
 ```
-rusty-template [OPTIONS]
+fast-proxy [OPTIONS]
 
   -c, --config <CONFIG>        Path to the TOML configuration file [default: config.toml]
       --host <HOST>            Override [server].host
@@ -93,7 +98,7 @@ rusty-template [OPTIONS]
 | `server.port` | `8080` | Bind port |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=warn`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
-| `ui.app_name` | `Rusty Template` | Shown in the sidebar + browser title |
+| `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
 | `ui.tagline` | … | Shown under the app name |
 | `ui.default_theme` | `auto` | `light` \| `dark` \| `auto` — used until the visitor picks |
 | `ui.repo_url` | *(unset)* | Sidebar "Repository" link |
@@ -125,12 +130,13 @@ WebSocket events are JSON discriminated by `type`:
 ```json
 { "type": "metrics",  "data": { "cpu": 41.3, "memory": 58.0, "...": "…" } }
 { "type": "activity", "kind": "task", "message": "Task \"x\" created", "timestampMs": 0 }
-{ "type": "hello",    "message": "Connected to Rusty Template v0.1.0", "timestampMs": 0 }
+{ "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```
 
 ## Project structure
 
 ```
+├── docs/ROADMAP.md           plan and roadmap
 ├── config.toml               server + UI configuration
 ├── src/
 │   ├── main.rs               CLI (clap) + startup

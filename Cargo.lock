@@ -348,6 +348,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "http-body-util",
+ "mime_guess",
+ "rand 0.8.7",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -891,27 +912,6 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "rusty-template"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "clap",
- "http-body-util",
- "mime_guess",
- "rand 0.8.7",
- "rust-embed",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "ryu"
