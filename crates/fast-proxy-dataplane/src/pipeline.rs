@@ -73,11 +73,15 @@ impl<F: Forward> RequestPipeline<F> {
             subsystem: UNMATCHED_SUBSYSTEM.to_string(),
             route: NO_ROUTE.to_string(),
             upstream: None,
+            attempts: 0,
             request_id: request_id.clone(),
             upstream_time: None,
             bytes_out: 0,
         };
 
+        // Keeps the chosen endpoint's in-flight count up until the response
+        // body has been fully sent (or the client went away).
+        let mut in_flight = None;
         let response = match resolve(&snapshot, &request) {
             Resolved::Respond { fixed, subsystem } => {
                 if let Some(subsystem) = subsystem {
@@ -97,11 +101,15 @@ impl<F: Forward> RequestPipeline<F> {
                     None => FixedResponse::NoHealthyUpstream.render(&request_id, wants_json),
                     Some(selection) => {
                         let endpoint = &upstream.endpoints[selection.index];
+                        let candidate = &upstream.candidates[selection.index];
+                        in_flight = Some(candidate.runtime.track());
                         fields.upstream = Some(endpoint.addr.to_string());
+                        fields.attempts = 1;
                         let target = Target {
                             subsystem,
                             route,
                             endpoint,
+                            candidate,
                             consumed_prefix_len,
                             request_id: &request_id,
                             client_addr,
@@ -129,7 +137,12 @@ impl<F: Forward> RequestPipeline<F> {
             fields,
         };
         let (parts, body) = response.into_parts();
-        let tracked = TrackedBody::new(body, summary, self.observability.clone(), active);
+        let tracked = TrackedBody::new(
+            body,
+            summary,
+            self.observability.clone(),
+            (active, in_flight),
+        );
         Response::from_parts(parts, tracked.boxed())
     }
 }

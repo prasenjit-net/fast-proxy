@@ -19,6 +19,8 @@ mod trusted_proxies;
 mod upstream_client;
 
 #[cfg(test)]
+mod accounting_tests;
+#[cfg(test)]
 mod balancing_tests;
 #[cfg(test)]
 mod drain_tests;

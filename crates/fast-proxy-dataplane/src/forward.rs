@@ -2,6 +2,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
+use fast_proxy_balancing::Candidate;
 use fast_proxy_routing::{CompiledEndpoint, CompiledRoute, CompiledSubsystem};
 use http::{Request, Response};
 use http_body_util::combinators::BoxBody;
@@ -17,6 +18,8 @@ pub struct Target<'snapshot> {
     pub route: &'snapshot CompiledRoute,
     /// The endpoint of the route's upstream chosen for this request.
     pub endpoint: &'snapshot CompiledEndpoint,
+    /// The chosen endpoint's live state, for latency samples and tunnels.
+    pub candidate: &'snapshot Candidate,
     /// How many bytes of the request path the route's prefix consumed; the
     /// rest of the path is `request.uri().path()[consumed_prefix_len..]`.
     pub consumed_prefix_len: usize,

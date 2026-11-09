@@ -327,6 +327,7 @@ fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
     for field in [
         "route=/",
         "upstream=127.0.0.1:",
+        "attempts=1",
         "request_id=",
         "upstream_ms=",
         "bytes_out=",
@@ -339,7 +340,7 @@ fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
         .into_iter()
         .find(|l| l.contains("_unmatched"))
         .unwrap();
-    for field in ["upstream=-", "upstream_ms=-", "route=_none"] {
+    for field in ["upstream=-", "attempts=0", "upstream_ms=-", "route=_none"] {
         assert!(
             unmatched_line.contains(field),
             "{field} missing from {unmatched_line}"

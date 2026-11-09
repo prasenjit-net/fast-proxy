@@ -176,7 +176,7 @@ prefixes); traffic for an unknown host is counted as `subsystem="_unmatched"`,
 and requests with no route as `route="_none"`. An access-log line looks like:
 
 ```
-127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
+127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 attempts=1 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
 ```
 
 The dashboard's numbers come from the same counters, sampled every 2 seconds:

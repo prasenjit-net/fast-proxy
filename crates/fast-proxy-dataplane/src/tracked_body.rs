@@ -7,6 +7,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 
+use fast_proxy_balancing::InFlightGuard;
 use fast_proxy_telemetry::{
     AccessLog, AccessRecord, ActiveRequest, DataPlaneFields, Metrics, Plane,
 };
@@ -45,6 +46,8 @@ struct Report {
     observability: Observability,
     /// Keeps the request counted as active until it is reported.
     _active: ActiveRequest,
+    /// Keeps the upstream endpoint's in-flight count up until then too.
+    _in_flight: Option<InFlightGuard>,
 }
 
 impl TrackedBody {
@@ -52,7 +55,7 @@ impl TrackedBody {
         inner: ResponseBody,
         summary: RequestSummary,
         observability: Observability,
-        active: ActiveRequest,
+        (active, in_flight): (ActiveRequest, Option<InFlightGuard>),
     ) -> Self {
         Self {
             inner,
@@ -61,6 +64,7 @@ impl TrackedBody {
                 summary,
                 observability,
                 _active: active,
+                _in_flight: in_flight,
             }),
         }
     }

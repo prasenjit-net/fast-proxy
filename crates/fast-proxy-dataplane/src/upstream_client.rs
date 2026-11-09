@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io;
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use fast_proxy_balancing::{monotonic_ms, InFlightGuard};
 use fast_proxy_routing::build_upstream_uri;
 use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, Empty};
@@ -128,6 +129,7 @@ impl Forward for UpstreamClient {
         *request.uri_mut() = uri;
 
         let client = self.client_for(route.connect_timeout);
+        let sent = Instant::now();
         let outcome = tokio::time::timeout(route.response_timeout, client.request(request)).await;
         match outcome {
             Err(_elapsed) => {
@@ -138,12 +140,22 @@ impl Forward for UpstreamClient {
                 tracing::warn!(upstream = %target.endpoint.addr, "upstream request failed: {err}");
                 self.failed(&target, kind_for(err.is_connect(), &err))
             }
-            Ok(Ok(response)) => match client_upgrade {
-                Some(client_upgrade) if response.status() == StatusCode::SWITCHING_PROTOCOLS => {
-                    switch_protocols(response, client_upgrade, context)
+            Ok(Ok(response)) => {
+                let micros = u64::try_from(sent.elapsed().as_micros()).unwrap_or(u64::MAX);
+                target
+                    .candidate
+                    .runtime
+                    .record_latency(micros, monotonic_ms());
+                match client_upgrade {
+                    Some(client_upgrade)
+                        if response.status() == StatusCode::SWITCHING_PROTOCOLS =>
+                    {
+                        let tunnel = target.candidate.runtime.track();
+                        switch_protocols(response, client_upgrade, context, tunnel)
+                    }
+                    _ => into_client_response(response),
                 }
-                _ => into_client_response(response),
-            },
+            }
         }
     }
 }
@@ -165,6 +177,7 @@ fn switch_protocols(
     mut response: Response<Incoming>,
     client_upgrade: OnUpgrade,
     context: Option<ConnectionContext>,
+    tunnel: InFlightGuard,
 ) -> Response<ResponseBody> {
     let upstream_upgrade = hyper::upgrade::on(&mut response);
     let (mut parts, _) = response.into_parts();
@@ -174,7 +187,12 @@ fn switch_protocols(
         Some(context) => (Some(context.guard), context.force_close),
         None => (None, CancellationToken::new()),
     };
-    tokio::spawn(relay(client_upgrade, upstream_upgrade, guard, force_close));
+    tokio::spawn(relay(
+        client_upgrade,
+        upstream_upgrade,
+        (guard, tunnel),
+        force_close,
+    ));
 
     let empty = Empty::<Bytes>::new()
         .map_err(|never| match never {})
@@ -183,11 +201,12 @@ fn switch_protocols(
 }
 
 /// Copies bytes between the two upgraded connections. The guard keeps the
-/// tunnel counted as an open connection for as long as it lives.
+/// tunnel counted as an open connection, and as in flight on its endpoint,
+/// for as long as it lives.
 async fn relay(
     client: OnUpgrade,
     upstream: OnUpgrade,
-    _guard: Option<std::sync::Arc<ConnectionGuard>>,
+    _guards: (Option<std::sync::Arc<ConnectionGuard>>, InFlightGuard),
     force_close: CancellationToken,
 ) {
     let (client, upstream) = tokio::join!(client, upstream);

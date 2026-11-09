@@ -401,7 +401,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   *Done when:* an end-to-end test with three in-process backends sees traffic
   spread per algorithm, and `preserve_host = false` sends the chosen endpoint's
   address.
-- [ ] **D2 (M) In-flight and latency accounting.** An RAII in-flight guard held
+- [x] **D2 (M) In-flight and latency accounting.** An RAII in-flight guard held
   until the response finishes (including streamed bodies), and EWMA updated at
   response head.
   *Done when:* tests show the in-flight count returns to zero after normal,
@@ -422,10 +422,10 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   *Done when:* tests show a `GET` retried on `503`, a `POST` retried only on
   connect failure, no retry after a body byte, the budget refusing a retry storm,
   and `attempts` correct in the access log.
-- [ ] **D6 (S) Access log and summary.** `upstream` is the endpoint actually
+- [x] **D6 (S) Access log and summary.** `upstream` is the endpoint actually
   used (last attempt) and a new `attempts` field is added; update the log
   format tests and docs.
-- [ ] **D7 (S) Drain and disable semantics.** New requests skip the endpoint;
+- [x] **D7 (S) Drain and disable semantics.** New requests skip the endpoint;
   in-flight requests and upgraded tunnels finish.
   *Done when:* a test holds a slow request on an endpoint, drains it, sees no new
   traffic reach it while the slow one completes.
@@ -501,7 +501,7 @@ restart.
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (L) Test backends that can fail on demand.** Extend the in-process
+- [~] **Q1 (L) Test backends that can fail on demand.** (data plane's `TestUpstream` has kill/revive/fail_with/recover; `tests/common` gets the same with Q2) Extend the in-process
   backends in `tests/common/mod.rs` and the data plane's test upstream: "kill"
   (stop listening and drop connections), revive on the same port, slow, answer
   `503` on demand, count hits. No Unix-only commands, so tests run on Windows.

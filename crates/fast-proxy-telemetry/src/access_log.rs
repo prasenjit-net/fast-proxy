@@ -31,6 +31,8 @@ pub struct DataPlaneFields {
     pub route: String,
     /// The upstream endpoint, when the request was forwarded.
     pub upstream: Option<String>,
+    /// How many upstream attempts were made (0 when nothing was forwarded).
+    pub attempts: u32,
     pub request_id: String,
     /// Time until the upstream's response head arrived, when forwarded.
     pub upstream_time: Option<Duration>,
@@ -61,8 +63,10 @@ impl AccessRecord<'_> {
     ///
     /// `127.0.0.1:52123 - [2026-08-03T10:15:42.123Z] "GET /api/health HTTP/1.1" 200 plane=admin total_ms=0.4`
     ///
-    /// Data plane lines add `subsystem`, `route`, `upstream`, `request_id`,
-    /// `upstream_ms`, and `bytes_out`; fields that do not apply are `-`.
+    /// Data plane lines add `subsystem`, `route`, `upstream` (the endpoint
+    /// that served the request, or the last one tried), `attempts`,
+    /// `request_id`, `upstream_ms`, and `bytes_out`; fields that do not
+    /// apply are `-`.
     fn format_line(&self, at: DateTime<Utc>) -> String {
         let timestamp = at.format("%Y-%m-%dT%H:%M:%S%.3fZ");
         let uri = escape_log_field(self.uri);
@@ -80,10 +84,11 @@ impl AccessRecord<'_> {
                 .upstream_time
                 .map_or_else(|| "-".to_string(), |time| format!("{:.1}", ms(time)));
             line.push_str(&format!(
-                " subsystem={} route={} upstream={} request_id={} upstream_ms={upstream_ms} bytes_out={}",
+                " subsystem={} route={} upstream={} attempts={} request_id={} upstream_ms={upstream_ms} bytes_out={}",
                 escape_log_field(&data.subsystem),
                 escape_log_field(&data.route),
                 escape_log_field(upstream),
+                data.attempts,
                 escape_log_field(&data.request_id),
                 data.bytes_out
             ));
@@ -215,6 +220,7 @@ mod tests {
             subsystem: "shop".into(),
             route: "/api".into(),
             upstream: Some("127.0.0.1:3000".into()),
+            attempts: 1,
             request_id: "abc123".into(),
             upstream_time: Some(Duration::from_micros(1200)),
             bytes_out: 456,
@@ -272,7 +278,7 @@ mod tests {
         assert_eq!(
             line,
             "127.0.0.1:52123 - [2026-08-03T10:15:42.000Z] \"GET /api/users?page=2 HTTP/1.1\" 200 \
-             plane=data subsystem=shop route=/api upstream=127.0.0.1:3000 request_id=abc123 \
+             plane=data subsystem=shop route=/api upstream=127.0.0.1:3000 attempts=1 request_id=abc123 \
              upstream_ms=1.2 bytes_out=456 total_ms=0.4"
         );
     }
@@ -283,6 +289,7 @@ mod tests {
             subsystem: "_unmatched".into(),
             route: "_none".into(),
             upstream: None,
+            attempts: 0,
             upstream_time: None,
             ..data_fields()
         };
@@ -295,6 +302,7 @@ mod tests {
         let line = record.format_line(at());
         let parsed = fields_of(&line);
         assert_eq!(parsed["upstream"], "-");
+        assert_eq!(parsed["attempts"], "0");
         assert_eq!(parsed["upstream_ms"], "-");
         assert_eq!(parsed["subsystem"], "_unmatched");
         assert_eq!(parsed["route"], "_none");
