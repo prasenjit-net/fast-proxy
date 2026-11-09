@@ -29,6 +29,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   writes via `Database::write`), `Store` (async handle on a dedicated thread),
   `repository/` (one file per resource), `revision/`. The data plane must never
   use it.
+- `crates/fast-proxy-config-service/` is the only writer: `ConfigService::apply`
+  validates (compiles) a change, persists it, swaps the live `Snapshot`, and
+  broadcasts `ConfigChanged`. All admin writes must go through it.
 - `crates/fast-proxy-dataplane/` is a skeleton filled in by the M1 plan
   (`docs/M1-PLAN.md`).
 - `docs/adr/` records design decisions.

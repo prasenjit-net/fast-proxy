@@ -18,4 +18,5 @@ mod test_support;
 pub use database::{Database, Mutation, Written};
 pub use error::StoreError;
 pub use inputs::{RouteFields, SubsystemFields, UpstreamFields};
+pub use rusqlite::Connection;
 pub use store::Store;

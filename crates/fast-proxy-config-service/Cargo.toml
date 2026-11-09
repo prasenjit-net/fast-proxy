@@ -1,0 +1,16 @@
+[package]
+name = "fast-proxy-config-service"
+version = "0.0.0"
+edition = "2021"
+description = "The config apply pipeline: validate, persist, compile, and swap the live routing snapshot"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-routing = { path = "../fast-proxy-routing" }
+fast-proxy-store = { path = "../fast-proxy-store" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

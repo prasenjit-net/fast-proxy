@@ -473,6 +473,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-config-service"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "fast-proxy-routing",
+ "fast-proxy-store",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "fast-proxy-dataplane"
 version = "0.0.0"
 

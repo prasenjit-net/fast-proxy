@@ -325,7 +325,7 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 - [x] **R4 (S) Snapshot holder.** `SnapshotHolder` wrapping
   `arc-swap::ArcSwap<Snapshot>` with `load()` and `swap()`; the initial value
   is an empty snapshot version 0.
-- [ ] **R5 (M) Apply pipeline.** One `ConfigService` owning a writer mutex so DB
+- [x] **R5 (M) Apply pipeline.** One `ConfigService` owning a writer mutex so DB
   commit order equals swap order:
   1. take the writer lock
   2. run the store mutation in a transaction **without committing**
@@ -338,6 +338,11 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   On startup: open the store, `load_all`, `compile`, set the initial snapshot.
   *Done when:* tests show an invalid change leaves both the DB and the live
   snapshot untouched, and a concurrent reader never observes a partial state.
+  *Result:* lives in the new `fast-proxy-config-service` crate (decided here:
+  it keeps `routing` free of the store and `dataplane` free of both). The
+  pipeline uses `Database::write`'s `check` hook, so steps 2-4 are one store
+  transaction. It broadcasts a `ConfigChanged` on its own channel; bridging that
+  to the admin WebSocket `config_changed` event is part of T3.
 
 ### Workstream D: Data plane
 
