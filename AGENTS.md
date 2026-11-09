@@ -4,11 +4,12 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). It currently sits on a single-binary fullstack scaffold:
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestone 1 is complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI. TLS, load balancing, health checks, ACME and maintenance mode are the next milestones.
 
-- Rust backend using Axum, Tokio, Clap, Serde, Tracing, and `rust-embed`.
+- Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
 - The frontend build output is embedded into the Rust binary from `ui/dist`.
+- Design and plans are in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `adr/`).
 
 ## Repository Layout
 
@@ -59,6 +60,29 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `ui/src/pages/` contains route pages.
 - `ui/src/styles/index.css` contains Tailwind entrypoint and theme tokens.
 
+## Architecture rules
+
+These invariants hold across the codebase; do not break them without an ADR in `docs/adr/`.
+
+- **The data plane never touches the database.** It only reads the compiled
+  `Snapshot` through `SnapshotHolder`. `fast-proxy-dataplane` must not depend on
+  `fast-proxy-store`.
+- **All configuration writes go through `ConfigService::apply`** (mutate in a
+  transaction, compile the would-be configuration as the validation, commit with
+  a revision, swap the snapshot). Never write to the store or swap a snapshot
+  from anywhere else.
+- **`model` and `routing` are pure** (no I/O). Cross-table rules are checked by
+  `compile`; field-level rules by the `parse` constructors in `model`.
+- **A request loads the snapshot once** and uses it to the end.
+- **Configuration is split:** `config.toml` is process settings only (restart to
+  change); subsystems, hosts, upstreams and routes are in the database.
+- **Metric labels come only from config names** (subsystem name, route prefix,
+  `_unmatched`/`_none`), never raw hosts or paths.
+- **The URL rewrite lives in `fast-proxy-routing`** (`build_upstream_uri`) so the
+  proxy and the admin resolver cannot disagree.
+- **API errors never leak paths or storage detail**; the detail goes to the log.
+- **The admin plane has no authentication until M5**; keep it on loopback.
+
 ## Development Rules
 
 These rules are set by the project owner and apply to every session.
@@ -69,7 +93,9 @@ These rules are set by the project owner and apply to every session.
   done, stop and report. The owner does a manual check first, then asks for the
   commit and push.
 - Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`). Keep them
-  current: tick tasks as they land and record decisions.
+  current: tick tasks as they land and record decisions. Start a milestone by
+  writing its `docs/Mn-PLAN.md`; record new design decisions as an ADR in
+  `docs/adr/` and in the ROADMAP decision log.
 
 ### Design and structure
 
@@ -103,6 +129,14 @@ These rules are set by the project owner and apply to every session.
   `cargo llvm-cov`, and report the number when finishing a task. Do not lower
   coverage to ship a change.
 - Run the checks listed under Testing Expectations before reporting a task done.
+- **Tests must pass on Linux, macOS and Windows** (CI runs all three). Do not
+  shell out to Unix commands (`kill`, `sh`) in tests without `#[cfg(unix)]`. In
+  tests that talk raw TCP, send each request in one write and set `TCP_NODELAY`:
+  tiny split writes stall for tens of milliseconds on Linux (Nagle plus delayed
+  ACK) and hide as slow or flaky tests. Pick free ports with retry, since a
+  parallel test can take a port between picking and binding.
+- When a test passes on the first try, check it can fail: temporarily break the
+  behavior it guards and confirm it goes red.
 
 ### Compatibility and migration
 
@@ -136,6 +170,15 @@ Full build/run:
 ```sh
 make build
 make run
+```
+
+Coverage and benchmarks:
+
+```sh
+cargo llvm-cov --workspace --summary-only     # needs cargo-llvm-cov; report the number
+cargo test --test exit_criteria               # end-to-end tests against the real binary
+cargo test --test reload_under_load -- --nocapture
+# performance baseline and how to reproduce it: docs/benchmarks.md
 ```
 
 Development servers:

@@ -1,6 +1,7 @@
 # M1 Plan: Core proxy and realtime config
 
-Status: draft v0.1 (2026-11-09). Parent document: [ROADMAP.md](ROADMAP.md).
+Status: **complete except the release** (2026-11-09); see section 10 for the
+outcome and what carries over. Parent document: [ROADMAP.md](ROADMAP.md).
 Task sizes are relative effort (S under half a day, M about 1-2 days, L about
 3-5 days), not commitments. Tick the checkboxes as tasks land.
 
@@ -195,15 +196,16 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream P: Groundwork
 
-- [~] **P1 (S) Short decision notes.** Write `docs/adr/` notes for D1, D5, D6,
+- [x] **P1 (S) Short decision notes.** Write `docs/adr/` notes for D1, D5, D6,
   D7 (a page each). Spike D6 (metrics crate) and the hyper client pool in a
   scratch branch to confirm they fit: pool reuse works, per-request timeouts
   are controllable, body streaming does not buffer.
   *Done when:* notes are merged and the open **(confirm)** items are resolved.
   *Status:* ADRs 0001-0004 are written in `docs/adr/`. D1 (rusqlite) and D6
   (prometheus crate) were confirmed by the owner on 2026-11-09. The hyper
-  client spike is done (results in ADR 0002). Still open: the metrics crate
-  spike, folded into T1.
+  client spike is done (results in ADR 0002). The metrics crate had no separate
+  spike: T1 exercised it directly, and the per-request cost of its label lookups
+  is only visible in the baseline benchmark.
 - [x] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
   `/api/error-demo`, the Components page, `TasksCard`, their tests, and the
   related README sections. Keep access log, events, and the WebSocket plumbing.
@@ -566,7 +568,7 @@ Follow existing component patterns and the tokens in
 
 ### Workstream Q: Quality
 
-- [~] **Q1 (L) Integration test harness** (`tests/` directory): helper that
+- [x] **Q1 (L) Integration test harness** (`tests/` directory): helper that
   starts fake upstreams (in-process hyper servers on ephemeral ports with
   configurable behavior: echo headers, delay, close, WebSocket echo), a proxy
   instance with a temp state dir and ephemeral ports, and a small admin API
@@ -587,7 +589,7 @@ Follow existing component patterns and the tokens in
   *Status:* `tests/exit_criteria.rs` runs the real binary against in-process
   backends and covers scenarios 1, 5 (unknown host, disabled subsystem), 7 and
   8 (and 9, rollback); scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
-  forwarding tests. Scenarios 9 (rollback), 11 (WebSocket) and 12 (graceful shutdown) are covered too, at crate level and on the binary (12).
+  forwarding tests. Scenarios 9 (rollback), 11 (WebSocket) and 12 (graceful shutdown) are covered too, at crate level and on the binary (12). Closed: scenarios 2-4, 6, 10 and 11 are tested at crate level (with real sockets and in-process backends) rather than through the binary, which tests the same code faster.
 - [x] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
   continuously while a task performs many admin writes (add/remove routes
   unrelated to the traffic and flip one route between two backends).
@@ -626,14 +628,24 @@ Follow existing component patterns and the tokens in
 
 ### Workstream W: Documentation
 
-- [ ] **W1 (M) README:** new quick start (start the proxy, open the admin UI,
+- [x] **W1 (M) README:** new quick start (start the proxy, open the admin UI,
   create a subsystem, curl through it), updated config table and CLI, API
   table, project structure, and removal of scaffold-only sections.
-- [ ] **W2 (S) AGENTS.md:** new layout, where to add endpoints, snapshot and
+  *Result:* rewritten, with a "how it works" section, a capabilities table with
+  status, an observability section, security notes, and the crate dependency
+  direction (checked against `cargo metadata`).
+- [x] **W2 (S) AGENTS.md:** new layout, where to add endpoints, snapshot and
   store rules (data plane never queries the DB; all writes go through
   `ConfigService`), test expectations.
-- [ ] **W3 (S) ROADMAP.md:** tick M0 and M1 items, record decisions D1-D12 in
+  *Result:* a new "Architecture rules" section states the invariants once, and
+  the testing rules include the cross-platform lessons (Unix-only signal tests,
+  one write per raw request plus `TCP_NODELAY`, free-port retry, mutation-check
+  tests that pass first time).
+- [x] **W3 (S) ROADMAP.md:** tick M0 and M1 items, record decisions D1-D12 in
   the decision log, link this plan.
+  *Result:* M0 and M1 ticked with evidence; the "proposed" technology choices
+  now say what was decided and link their ADRs; the risks table is current; the
+  decision log has D1-D12 and the other M1 decisions.
 - [x] **W4 (S) Walkthrough:** `docs/getting-started.md` with a copy-paste curl
   example that sets up two subsystems through the admin API.
 
@@ -699,12 +711,72 @@ PRs 3 and 4 can proceed in parallel after PR2; PR5 needs both. Admin UI work
 
 ## 9. Definition of done for M1
 
-- [ ] Every task above is checked, or explicitly moved with a note.
+- [x] Every task above is checked, or explicitly moved with a note.
 - [ ] Exit criteria (section 1) demonstrated by integration test 1, 7, 8 and a
-  manual run through the admin UI.
-- [ ] CI green on all three platforms; no new clippy warnings.
-- [ ] Overall test coverage above 60%, number recorded (AGENTS.md rule).
-- [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md, and getting-started updated.
-- [ ] Baseline benchmark recorded.
+  manual run through the admin UI. *Tests: done. The manual click-through in a
+  real browser is still to do; the UI has only been exercised under jsdom.*
+- [ ] CI green on all three platforms; no new clippy warnings. *PRs 1-13 are
+  green on Linux, macOS and Windows. PR 14's Ubuntu run failed in the new load
+  test (a client-side Nagle stall, fixed in the test); it needs a green run.*
+- [x] Overall test coverage above 60%, number recorded (AGENTS.md rule).
+  *97.05% of lines (`cargo llvm-cov --workspace`); no frontend coverage tool is
+  configured.*
+- [x] Nothing committed without the owner's go-ahead after manual review.
+- [x] README, AGENTS.md, ROADMAP.md, and getting-started updated.
+- [x] Baseline benchmark recorded.
 - [ ] Release `v0.2.0` prepared through the existing release workflow.
+
+## 10. Outcome
+
+M1 is built: the binary starts from an empty database and a data plane config
+file, an operator creates subsystems, hosts, upstreams and routes in the admin UI
+(or API), traffic flows immediately, edits apply live without dropping requests,
+everything survives a restart, and metrics, the access log and the dashboard
+show real traffic per subsystem. It was delivered as a stack of pull requests
+(groundwork and config, the model/routing/store/config-service crates, the data
+plane, the admin API, telemetry, the UI, and the load test and benchmark).
+
+### Where the result differs from the plan
+
+- `route.upstream_group_id` uses NO ACTION instead of RESTRICT, so deleting a
+  subsystem cascades; deleting a used upstream is still refused.
+- The apply pipeline (R5) is its own crate, `fast-proxy-config-service`, so
+  `routing` stays free of the store and `dataplane` free of both.
+- `build_upstream_uri` moved into `fast-proxy-routing` so the proxy and the
+  admin resolver compute the same URL.
+- Subsystems gained a `description`; host ids are not part of the `Config` tree
+  (the API reads them separately, and a rollback regenerates them).
+- The access log format changed: `key=value` fields and `total_ms` replaced the
+  old trailing latency. `GET /api/traffic` replaced `GET /api/metrics`, and the
+  `metrics` push event became `traffic`.
+- The fake CPU/memory sampler is gone; the dashboard shows real traffic.
+- The benchmark uses `oha` with a small `bench_backend` example (no in-repo load
+  generator).
+- Q1's scenarios are covered across crate-level and binary-level tests rather
+  than all through `tests/`.
+
+### Known limitations carried forward
+
+- **Admin plane has no authentication** (M5); it binds to loopback and warns
+  otherwise.
+- **The UI has not been checked in a real browser**: layout, spacing and dark
+  mode are unverified beyond jsdom tests.
+- **No end-to-end Ctrl-C test on Windows**; the signal tests are Unix-only.
+  Draining itself is tested on every platform without signals.
+- A request cancelled before its response head exists (the client left first) is
+  not counted in metrics or the access log.
+- Not measured: the per-request cost of metric label lookups on its own;
+  reload time with thousands of routes; a connect timeout against an unroutable
+  address (only the error classification is tested); request bodies of hundreds
+  of MB (64 MiB was streamed, and a test shows the body reaches the upstream while
+  the client is still sending).
+- Only one endpoint per upstream, and no health checks or load balancing (M2);
+  HTTP/1.1 only (HTTP/2 arrives with TLS in M3).
+- `docs/benchmarks.md` is a single-machine, shared-CPU baseline; capacity
+  numbers need a separate load generator machine.
+
+### Next
+
+Cut `v0.2.0` through the existing release workflow once the stack is merged into
+`main` and CI is green, then write `docs/M2-PLAN.md` (upstream groups, load
+balancing, health).
