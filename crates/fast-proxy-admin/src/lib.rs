@@ -12,6 +12,10 @@ mod ui_config;
 mod ws;
 
 #[cfg(test)]
+mod api_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 
 pub use error::{AppError, AppResult};

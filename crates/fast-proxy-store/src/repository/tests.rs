@@ -121,6 +121,24 @@ fn deleting_a_subsystem_cascades_to_everything_under_it() {
     }
 }
 
+#[test]
+fn timestamps_are_recorded_and_advance_when_children_change() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    let first = db.read(subsystems::times).unwrap()[&a.subsystem];
+    assert!(first.created_at_ms > 0);
+    assert!(first.updated_at_ms >= first.created_at_ms);
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    commit(&mut db, "host", |c| {
+        hosts::add(c, a.subsystem, &host("b.example.com"))
+    })
+    .unwrap();
+    let second = db.read(subsystems::times).unwrap()[&a.subsystem];
+    assert_eq!(second.created_at_ms, first.created_at_ms);
+    assert!(second.updated_at_ms > first.updated_at_ms);
+}
+
 // ---- hosts ------------------------------------------------------------
 
 #[test]

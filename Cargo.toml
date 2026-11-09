@@ -23,6 +23,9 @@ http-body-util = "0.1"
 
 [dependencies]
 fast-proxy-admin = { path = "crates/fast-proxy-admin" }
+fast-proxy-config-service = { path = "crates/fast-proxy-config-service" }
+fast-proxy-dataplane = { path = "crates/fast-proxy-dataplane" }
+fast-proxy-store = { path = "crates/fast-proxy-store" }
 fast-proxy-telemetry = { path = "crates/fast-proxy-telemetry" }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -34,6 +37,7 @@ toml = "0.8"
 humantime = "2"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-util = "0.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }

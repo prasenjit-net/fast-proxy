@@ -401,11 +401,15 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   connections. Admin plane shuts down after the data plane.
   *Done when:* a test holds a slow request open during shutdown and sees it
   complete, and another test sees forced close after the grace period.
-- [ ] **D7 (S) Startup wiring in `main.rs`:** parse config, open store, build
+- [x] **D7 (S) Startup wiring in `main.rs`:** parse config, open store, build
   initial snapshot, start the admin listener, then the data plane listeners;
   log a clear summary (listeners, admin URL, DB path, snapshot version).
   *Done when:* running with an empty state dir creates the DB and starts both
   planes.
+  *Result:* `src/startup.rs` binds every listener (and the admin address)
+  before serving, validates `trusted_proxies`, and logs listeners, admin URL,
+  DB path and config version. Fatal startup errors now go to stderr. The
+  binary-level tests in `tests/exit_criteria.rs` cover exit criteria 1-5.
 
 ### Workstream T: Telemetry
 
@@ -442,12 +446,12 @@ envelope gains an optional `fields: [{ field, message }]` array for validation
 failures (backward compatible). Every write returns the resource and the new
 config `version`.
 
-- [ ] **A1 (M) Subsystems and hosts** (`admin/api/subsystems.rs`):
+- [x] **A1 (M) Subsystems and hosts** (`admin/api/subsystems.rs`):
   `GET/POST /api/subsystems`, `GET/PUT/DELETE /api/subsystems/{id}`,
   `POST /api/subsystems/{id}/hosts`,
   `DELETE /api/subsystems/{id}/hosts/{host_id}`. List responses include host
   patterns and route counts.
-- [ ] **A2 (M) Upstreams and routes** (`admin/api/{upstreams,routes}.rs`):
+- [x] **A2 (M) Upstreams and routes** (`admin/api/{upstreams,routes}.rs`):
   `GET/POST /api/subsystems/{id}/upstreams`, `PUT/DELETE .../upstreams/{uid}`;
   `GET/POST /api/subsystems/{id}/routes`, `PUT/DELETE .../routes/{rid}`.
   Routes in a list are returned in match order (longest prefix first).
@@ -459,9 +463,14 @@ config `version`.
   `GET /api/status` returns data plane listeners, snapshot version, uptime,
   DB path, and totals. The existing `/api/health` and `/api/config` (UI boot
   config) stay unchanged.
-- [ ] **A5 (S) Admin safety:** if `admin.listen` is not a loopback address, log
+- [x] **A5 (S) Admin safety:** if `admin.listen` is not a loopback address, log
   a prominent warning that the admin plane has no authentication until M5.
   Loopback by default is the only protection in M1.
+
+*Status for A1-A2:* done, with the response shape `{ data, version }` (deletes
+return `{ version }`), camelCase JSON, and a `fields` array on 400s.
+Subsystem resources carry `createdAtMs`/`updatedAtMs`. Unknown JSON keys are
+rejected. A3 (revisions) and A4 (resolver, status) are still open.
 
 *Done for A1-A4:* every endpoint has HTTP-level tests in the style of
 `src/routes/tests.rs` (success, validation error with `fields`, 404, 409), and
@@ -502,7 +511,7 @@ Follow existing component patterns and the tokens in
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (L) Integration test harness** (`tests/` directory): helper that
+- [~] **Q1 (L) Integration test harness** (`tests/` directory): helper that
   starts fake upstreams (in-process hyper servers on ephemeral ports with
   configurable behavior: echo headers, delay, close, WebSocket echo), a proxy
   instance with a temp state dir and ephemeral ports, and a small admin API
@@ -519,6 +528,11 @@ Follow existing component patterns and the tokens in
   10. header handling (hop-by-hop, forwarded, request id)
   11. WebSocket passthrough
   12. graceful shutdown with an in-flight request
+
+  *Status:* `tests/exit_criteria.rs` runs the real binary against in-process
+  backends and covers scenarios 1, 5 (unknown host, disabled subsystem), 7 and
+  8; scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
+  forwarding tests. Still open: 9 (needs A3), 11 (D5), 12 (D6).
 - [ ] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
   continuously while a task performs many admin writes (add/remove routes
   unrelated to the traffic and flip one route between two backends).
@@ -543,7 +557,7 @@ Follow existing component patterns and the tokens in
   `ConfigService`), test expectations.
 - [ ] **W3 (S) ROADMAP.md:** tick M0 and M1 items, record decisions D1-D12 in
   the decision log, link this plan.
-- [ ] **W4 (S) Walkthrough:** `docs/getting-started.md` with a copy-paste curl
+- [x] **W4 (S) Walkthrough:** `docs/getting-started.md` with a copy-paste curl
   example that sets up two subsystems through the admin API.
 
 ## 7. Dependencies and suggested order

@@ -14,10 +14,11 @@ Guidance for coding agents working in this repository.
 
 Cargo workspace; the root package is the `fast-proxy` binary.
 
-- `src/main.rs` wires CLI parsing, configuration, logging, and server startup.
+- `src/main.rs` wires CLI parsing, configuration, and logging; `src/startup.rs`
+  assembles the store, config service, data plane, and admin plane.
 - `src/config/` defines the TOML configuration (`[data_plane]`, `[admin]`, `[logging]`, `[ui]`) and its validation; `src/cli.rs` defines the CLI overrides.
 - `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs`, `api/` (one
-  file per resource), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  file per resource: subsystems, hosts, upstreams, routes), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-telemetry/` holds the access log (metrics and traffic
   stats land here in M1).
@@ -37,7 +38,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   (fixed 404/503/502/504), `upstream_client` (pooled forwarding), `headers`
   (hop-by-hop, `X-Forwarded-*`), `upstream_uri` (path rewriting). It reads
   snapshots only and never depends on the store.
-- `docs/adr/` records design decisions.
+- `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
+  curl walkthrough (keep it working when the API changes).
+- `tests/` holds end-to-end tests that run the real binary.
 - `ui/src/lib/api.ts` is the typed frontend API client.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
 - `ui/src/components/` contains reusable UI components.

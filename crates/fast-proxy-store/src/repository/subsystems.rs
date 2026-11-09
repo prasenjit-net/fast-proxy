@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use fast_proxy_model::{SubsystemConfig, SubsystemId};
 use rusqlite::{params, Connection};
 
@@ -55,6 +57,28 @@ pub fn get(conn: &Connection, id: SubsystemId) -> Result<SubsystemConfig, StoreE
         .into_iter()
         .find(|subsystem| subsystem.id == id)
         .ok_or_else(|| StoreError::NotFound(format!("subsystem {}", id.0)))
+}
+
+/// When a subsystem was created and last changed, in unix milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubsystemTimes {
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Timestamps of every subsystem, keyed by id.
+pub fn times(conn: &Connection) -> Result<HashMap<SubsystemId, SubsystemTimes>, StoreError> {
+    let mut statement = conn.prepare("SELECT id, created_at, updated_at FROM subsystem")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            SubsystemId(row.get(0)?),
+            SubsystemTimes {
+                created_at_ms: row.get(1)?,
+                updated_at_ms: row.get(2)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Every subsystem, ordered by id.

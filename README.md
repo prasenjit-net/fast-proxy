@@ -5,10 +5,13 @@
 A fast, **realtime-configurable ingress server and reverse proxy** written in
 Rust, shipped as a single binary with an embedded admin UI.
 
-> **Status: early development.** The repository currently contains the
-> single-binary scaffold (Axum admin API, WebSocket push, embedded React UI,
-> TOML config, access log, CI/release pipeline). The proxy data plane is not
-> built yet. See the [roadmap](docs/ROADMAP.md) for the plan and milestones.
+> **Status: early development (milestone 1 in progress).** The proxy works end to
+> end: configure subsystems, hosts, upstreams and routes through the admin REST
+> API, and traffic is routed live, with the configuration persisted in SQLite.
+> Still to come in M1: the admin UI pages, revision history and rollback,
+> metrics, WebSocket passthrough and graceful draining. Try it with the
+> [getting-started walkthrough](docs/getting-started.md); see the
+> [roadmap](docs/ROADMAP.md) for the plan.
 
 ## Planned capabilities
 
@@ -118,12 +121,33 @@ with the proxy itself (M1 task D1).
 | GET | `/api/health` | Liveness + version |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
 | GET | `/api/metrics` | Latest metrics snapshot |
+| GET, POST | `/api/subsystems` | List (host patterns, route counts) / create |
+| GET, PUT, DELETE | `/api/subsystems/{id}` | Detail (hosts, upstreams, routes in match order) / replace / delete |
+| POST | `/api/subsystems/{id}/hosts` | Add a host pattern (`pattern`) |
+| DELETE | `/api/subsystems/{id}/hosts/{host_id}` | Remove a host pattern |
+| GET, POST | `/api/subsystems/{id}/upstreams` | List / create (`name`, `addr`, `weight`) |
+| PUT, DELETE | `/api/subsystems/{id}/upstreams/{upstream_id}` | Replace / delete (409 while a route uses it) |
+| GET, POST | `/api/subsystems/{id}/routes` | List in match order / create |
+| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete |
 | GET | `/ws` | WebSocket: server-push events |
+
+Config responses are `{ "data": …, "version": N }`, where `version` is the config
+revision the response reflects (for a write, the one it created); deletes return
+`{ "version": N }`. See [docs/getting-started.md](docs/getting-started.md) for a
+`curl` walkthrough.
 
 Errors always look like:
 
 ```json
 { "error": { "code": "NOT_FOUND", "message": "subsystem 42 does not exist", "status": 404 } }
+```
+
+Validation failures (400) add a `fields` array naming each bad input
+(camelCase), and duplicates are `409`:
+
+```json
+{ "error": { "code": "VALIDATION_FAILED", "message": "validation failed", "status": 400,
+             "fields": [{ "field": "prefix", "message": "must start with '/'" }] } }
 ```
 
 WebSocket events are JSON discriminated by `type`:
@@ -140,8 +164,10 @@ WebSocket events are JSON discriminated by `type`:
 ├── docs/                     ROADMAP.md · M1-PLAN.md · adr/
 ├── config.toml               server + UI configuration
 ├── src/
-│   ├── main.rs               CLI (clap) + startup
+│   ├── main.rs               CLI (clap) + logging
+│   ├── startup.rs            assembles store, config service, data plane, admin plane
 │   └── config.rs             TOML config model
+├── tests/                    end-to-end tests that run the real binary
 ├── crates/
 │   ├── fast-proxy-admin/     Axum admin plane: api/ · ws · events · error · embedded SPA
 │   ├── fast-proxy-telemetry/ access log (metrics and traffic stats to come)

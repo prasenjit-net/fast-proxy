@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::Instant;
 
+use fast_proxy_config_service::ConfigService;
 use fast_proxy_telemetry::AccessLog;
 use tokio::sync::{broadcast, RwLock};
 
@@ -14,6 +15,8 @@ use crate::ui_config::UiConfig;
 /// Everything the admin plane's handlers share.
 pub struct AdminState {
     pub ui: UiConfig,
+    /// The only writer of configuration; handlers never touch storage directly.
+    pub config: Arc<ConfigService>,
     /// The binary's version; the admin crate cannot read it from its own manifest.
     pub version: &'static str,
     /// Fan-out channel feeding every connected WebSocket client.
@@ -29,10 +32,16 @@ pub struct AdminState {
 pub type SharedState = Arc<AdminState>;
 
 impl AdminState {
-    pub fn new(ui: UiConfig, version: &'static str, access_log: AccessLog) -> Self {
+    pub fn new(
+        ui: UiConfig,
+        version: &'static str,
+        access_log: AccessLog,
+        config: Arc<ConfigService>,
+    ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
             ui,
+            config,
             version,
             events,
             latest_metrics: RwLock::new(None),
