@@ -4,14 +4,18 @@ use std::io;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use bytes::Bytes;
 use fast_proxy_routing::build_upstream_uri;
-use http::{Request, Response};
-use http_body_util::BodyExt;
+use http::{Request, Response, StatusCode};
+use http_body_util::{BodyExt, Empty};
 use hyper::body::Incoming;
+use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioTimer};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use tokio_util::sync::CancellationToken;
 
+use crate::connections::{ConnectionContext, ConnectionGuard};
 use crate::headers::{self, ClientInfo};
 use crate::trusted_proxies::TrustedProxies;
 use crate::{FixedResponse, Forward, ResponseBody, Target};
@@ -73,8 +77,18 @@ impl Forward for UpstreamClient {
             return FixedResponse::BadGateway.render(target.request_id, target.wants_json);
         };
 
+        // A protocol switch needs the client's side of the socket, which is
+        // only available before the request is handed to the upstream client.
+        let upgrading = headers::is_upgrade_request(request.headers());
+        let context = request.extensions().get::<ConnectionContext>().cloned();
+        let client_upgrade = upgrading.then(|| hyper::upgrade::on(&mut request));
+
         let headers = request.headers_mut();
-        headers::strip_hop_by_hop(headers);
+        if upgrading {
+            headers::strip_hop_by_hop_keeping_upgrade(headers);
+        } else {
+            headers::strip_hop_by_hop(headers);
+        }
         headers::apply_forwarded(
             headers,
             &ClientInfo {
@@ -99,7 +113,12 @@ impl Forward for UpstreamClient {
                 tracing::warn!(upstream = %route.endpoint, "upstream request failed: {err}");
                 failure.render(target.request_id, target.wants_json)
             }
-            Ok(Ok(response)) => into_client_response(response),
+            Ok(Ok(response)) => match client_upgrade {
+                Some(client_upgrade) if response.status() == StatusCode::SWITCHING_PROTOCOLS => {
+                    switch_protocols(response, client_upgrade, context)
+                }
+                _ => into_client_response(response),
+            },
         }
     }
 }
@@ -112,6 +131,54 @@ fn into_client_response(response: Response<Incoming>) -> Response<ResponseBody> 
         .map_err(|err| Box::new(err) as Box<dyn Error + Send + Sync>)
         .boxed();
     Response::from_parts(parts, body)
+}
+
+/// The upstream agreed to switch protocols: answer the client with the same
+/// `101`, then relay bytes both ways until either side closes (or the drain
+/// deadline passes).
+fn switch_protocols(
+    mut response: Response<Incoming>,
+    client_upgrade: OnUpgrade,
+    context: Option<ConnectionContext>,
+) -> Response<ResponseBody> {
+    let upstream_upgrade = hyper::upgrade::on(&mut response);
+    let (mut parts, _) = response.into_parts();
+    headers::strip_hop_by_hop_keeping_upgrade(&mut parts.headers);
+
+    let (guard, force_close) = match context {
+        Some(context) => (Some(context.guard), context.force_close),
+        None => (None, CancellationToken::new()),
+    };
+    tokio::spawn(relay(client_upgrade, upstream_upgrade, guard, force_close));
+
+    let empty = Empty::<Bytes>::new()
+        .map_err(|never| match never {})
+        .boxed();
+    Response::from_parts(parts, empty)
+}
+
+/// Copies bytes between the two upgraded connections. The guard keeps the
+/// tunnel counted as an open connection for as long as it lives.
+async fn relay(
+    client: OnUpgrade,
+    upstream: OnUpgrade,
+    _guard: Option<std::sync::Arc<ConnectionGuard>>,
+    force_close: CancellationToken,
+) {
+    let (client, upstream) = tokio::join!(client, upstream);
+    let (Ok(client), Ok(upstream)) = (client, upstream) else {
+        tracing::debug!("protocol switch was not completed by both sides");
+        return;
+    };
+    let (mut client, mut upstream) = (TokioIo::new(client), TokioIo::new(upstream));
+    tokio::select! {
+        result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
+            if let Err(err) = result {
+                tracing::debug!("upgraded connection ended with error: {err}");
+            }
+        }
+        () = force_close.cancelled() => {}
+    }
 }
 
 /// A connect that timed out is a 504; any other failure is a 502.

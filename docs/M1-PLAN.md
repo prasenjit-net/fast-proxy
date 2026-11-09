@@ -370,15 +370,14 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   client in D4; tests use a fake). `FixedResponse` renders all five fixed
   responses, including 502/504, which D4 will return on upstream failures.
   The 404/503/404 cases are tested end to end over TCP.
-- [~] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
+- [x] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
   named in `Connection` (RFC 9110), both directions, while preserving
   `Upgrade` for upgrades (D6 task); set `X-Forwarded-For/Proto/Host` per D10;
   honor `preserve_host` (D11); generate `x-request-id` if absent and propagate
   it upstream and in the response.
   *Done when:* unit tests on header maps and an integration test with an echo
   upstream confirm what the backend actually receives.
-  *Status:* done except keeping `Upgrade` for upgrade requests, which lands
-  with D5. `trusted_proxies` entries are parsed by `TrustedProxies::parse`;
+  *Status:* done; `Upgrade` is kept for upgrade requests (D5). `trusted_proxies` entries are parsed by `TrustedProxies::parse`;
   the binary must call it at startup (D7) so a bad CIDR aborts with a clear error.
 - [x] **D4 (L) Upstream client and forwarding** (`client.rs`): pooled hyper-util
   client, per-route connect and response-header timeouts, request and response
@@ -392,15 +391,28 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   *Result:* all covered end to end (64 MiB body, not hundreds of MB). A connect
   timeout also maps to 504; that mapping is unit tested but not exercised
   against an unroutable address.
-- [ ] **D5 (M) Upgrade/WebSocket passthrough** (`upgrade.rs`): forward the
+- [x] **D5 (M) Upgrade/WebSocket passthrough** (`upgrade.rs`): forward the
   upgrade request, relay the `101` response, then copy bytes in both
   directions until either side closes.
   *Done when:* an integration test completes a WebSocket echo through the proxy.
-- [ ] **D6 (M) Graceful shutdown and draining.** On signal: stop accepting,
+  *Result:* tested with a real WebSocket server and client (`tokio-tungstenite`,
+  test-only). The proxy takes the client's side of the socket before sending the
+  request, and on a `101` relays bytes with `copy_bidirectional`. If the upstream
+  declines, the response is proxied normally. An `Upgrade` header without
+  `Connection: upgrade` is stripped like any hop-by-hop header. Tunnels hold the
+  connection counter, so draining waits for them.
+- [x] **D6 (M) Graceful shutdown and draining.** On signal: stop accepting,
   let in-flight requests finish up to `shutdown_grace`, then close remaining
   connections. Admin plane shuts down after the data plane.
   *Done when:* a test holds a slow request open during shutdown and sees it
   complete, and another test sees forced close after the grace period.
+  *Result:* `DataPlane::stopped(grace)` stops accepting, closes idle keep-alive
+  connections at once (hyper `graceful_shutdown`), waits for in-flight requests
+  and tunnels up to `grace`, then force-closes the rest and reports how many
+  (`DrainReport`). `startup.rs` stops the admin plane only after the data plane
+  has drained. Also tested on the real binary with a real SIGINT. Note: an open
+  admin `/ws` does not hold up shutdown (hyper hands upgraded sockets off), which
+  `tests/exit_criteria.rs` pins down.
 - [x] **D7 (S) Startup wiring in `main.rs`:** parse config, open store, build
   initial snapshot, start the admin listener, then the data plane listeners;
   log a clear summary (listeners, admin URL, DB path, snapshot version).
@@ -536,7 +548,7 @@ Follow existing component patterns and the tokens in
   *Status:* `tests/exit_criteria.rs` runs the real binary against in-process
   backends and covers scenarios 1, 5 (unknown host, disabled subsystem), 7 and
   8 (and 9, rollback); scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
-  forwarding tests. Scenario 9 (rollback) is now covered too. Still open: 11 (D5), 12 (D6).
+  forwarding tests. Scenarios 9 (rollback), 11 (WebSocket) and 12 (graceful shutdown) are covered too, at crate level and on the binary (12).
 - [ ] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
   continuously while a task performs many admin writes (add/remove routes
   unrelated to the traffic and flip one route between two backends).

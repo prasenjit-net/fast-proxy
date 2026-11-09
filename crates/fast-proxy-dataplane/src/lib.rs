@@ -17,6 +17,8 @@ mod trusted_proxies;
 mod upstream_client;
 
 #[cfg(test)]
+mod drain_tests;
+#[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
 mod test_support;
@@ -24,11 +26,13 @@ mod test_support;
 mod test_upstream;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod upgrade_tests;
 
 pub use forward::{Forward, ResponseBody, Target};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use responses::FixedResponse;
-pub use server::DataPlane;
+pub use server::{DataPlane, DrainReport};
 pub use trusted_proxies::{TrustedProxies, TrustedProxyError};
 pub use upstream_client::UpstreamClient;

@@ -21,3 +21,5 @@ tracing = { workspace = true }
 [dev-dependencies]
 fast-proxy-model = { path = "../fast-proxy-model" }
 http-body-util = { workspace = true, features = ["channel"] }
+futures-util = "0.3"
+tokio-tungstenite = "0.29"

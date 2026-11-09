@@ -41,6 +41,21 @@ fn answer(mut stream: TcpStream, name: &str) {
     );
 }
 
+/// A backend that waits `delay` before answering.
+fn start_slow_backend(name: &'static str, delay: Duration) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            thread::spawn(move || {
+                thread::sleep(delay);
+                answer(stream, name);
+            });
+        }
+    });
+    port
+}
+
 struct Proxy {
     child: Child,
     data: SocketAddr,
@@ -83,7 +98,11 @@ fn start_proxy(dir: &Path) -> Proxy {
 }
 
 fn start_proxy_on(dir: &Path, data_port: u16, admin_port: u16) -> Proxy {
-    let config = write_config(dir, data_port, admin_port, "");
+    start_proxy_with(dir, data_port, admin_port, "")
+}
+
+fn start_proxy_with(dir: &Path, data_port: u16, admin_port: u16, extra_config: &str) -> Proxy {
+    let config = write_config(dir, data_port, admin_port, extra_config);
     let proxy = Proxy {
         child: spawn(&config),
         data: ([127, 0, 0, 1], data_port).into(),
@@ -327,5 +346,133 @@ fn an_invalid_trusted_proxy_aborts_startup() {
     assert!(
         stderr.contains("invalid trusted proxy \"not-a-cidr\""),
         "{stderr}"
+    );
+}
+
+// ---- shutdown -----------------------------------------------------------
+
+/// Sends SIGINT, the same as Ctrl-C.
+fn interrupt(proxy: &Proxy) {
+    let status = Command::new("kill")
+        .args(["-INT", &proxy.child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Waits for the process to exit on its own, returning whether it did so
+/// successfully, or `None` if it was still running at the deadline.
+fn wait_for_exit(proxy: &mut Proxy, within: Duration) -> Option<bool> {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if let Some(status) = proxy.child.try_wait().unwrap() {
+            return Some(status.success());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    None
+}
+
+/// Sends a request on a thread and returns what the client ended up with.
+fn request_in_background(proxy: &Proxy) -> thread::JoinHandle<Option<(u16, String)>> {
+    let addr = proxy.data;
+    thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).ok()?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .ok()?;
+        write!(
+            stream,
+            "GET /slow HTTP/1.1\r\nHost: shop.example.com\r\nConnection: close\r\n\r\n"
+        )
+        .ok()?;
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw).ok()?;
+        let (head, body) = raw.split_once("\r\n\r\n")?;
+        Some((
+            head.split_whitespace().nth(1)?.parse().ok()?,
+            body.to_string(),
+        ))
+    })
+}
+
+#[test]
+fn ctrl_c_lets_an_in_flight_request_finish_and_then_exits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut proxy = start_proxy(dir.path());
+    let backend = start_slow_backend("slow", Duration::from_millis(800));
+    create_site(&proxy, "shop", "shop.example.com", backend);
+
+    let client = request_in_background(&proxy);
+    thread::sleep(Duration::from_millis(250));
+    interrupt(&proxy);
+
+    assert_eq!(
+        client.join().unwrap(),
+        Some((200, "slow /slow".to_string()))
+    );
+    assert_eq!(
+        wait_for_exit(&mut proxy, Duration::from_secs(5)),
+        Some(true)
+    );
+}
+
+#[test]
+fn a_request_that_outlives_the_grace_period_is_cut_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut proxy = start_proxy_with(
+        dir.path(),
+        free_port(),
+        free_port(),
+        "shutdown_grace = \"300ms\"",
+    );
+    let backend = start_slow_backend("never", Duration::from_secs(20));
+    create_site(&proxy, "shop", "shop.example.com", backend);
+
+    let client = request_in_background(&proxy);
+    thread::sleep(Duration::from_millis(250));
+    let interrupted_at = Instant::now();
+    interrupt(&proxy);
+
+    assert_eq!(
+        wait_for_exit(&mut proxy, Duration::from_secs(5)),
+        Some(true)
+    );
+    assert!(interrupted_at.elapsed() < Duration::from_secs(4));
+    assert_eq!(
+        client.join().unwrap(),
+        None,
+        "the client should get no response"
+    );
+}
+
+#[test]
+/// Guards against an open UI connection keeping the process alive. (Upgraded
+/// sockets are handed off by hyper, so graceful shutdown does not wait for
+/// them; this pins that behavior down.)
+fn an_open_admin_websocket_does_not_block_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut proxy = start_proxy(dir.path());
+
+    let mut socket = TcpStream::connect(proxy.admin).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        socket,
+        "GET /ws HTTP/1.1\r\nHost: admin\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    )
+    .unwrap();
+    let mut buf = [0u8; 512];
+    let n = socket.read(&mut buf).unwrap();
+    assert!(
+        String::from_utf8_lossy(&buf[..n]).contains("101"),
+        "the socket should be open"
+    );
+
+    interrupt(&proxy);
+    assert_eq!(
+        wait_for_exit(&mut proxy, Duration::from_secs(5)),
+        Some(true)
     );
 }

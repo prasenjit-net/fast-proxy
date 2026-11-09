@@ -77,6 +77,11 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             .collect(),
         database_path: database.display().to_string(),
     };
+    // Shutdown happens in two stages: the signal stops the data plane, and
+    // only once it has drained does the admin plane stop (so the admin API
+    // stays usable while requests finish).
+    let data_stop = CancellationToken::new();
+    let admin_stop = CancellationToken::new();
     let admin_state = Arc::new(AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
@@ -85,15 +90,13 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         runtime,
     ));
     fast_proxy_admin::spawn_sampler(admin_state.clone());
-
-    let shutdown = CancellationToken::new();
-    tokio::spawn(cancel_on_ctrl_c(shutdown.clone()));
+    tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
     let pipeline = Arc::new(RequestPipeline::new(
         config_service.snapshot_holder(),
         UpstreamClient::new(trusted_proxies),
     ));
-    let plane = DataPlane::start(bound, pipeline, shutdown.clone());
+    let plane = DataPlane::start(bound, pipeline, data_stop.clone());
 
     for (name, addr) in plane.local_addrs() {
         tracing::info!("data plane listener \"{name}\" serving on http://{addr}");
@@ -107,15 +110,33 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         tracing::warn!("{warning}");
     }
 
+    let grace = config.data_plane.shutdown_grace;
+    let drain = tokio::spawn({
+        let admin_stop = admin_stop.clone();
+        async move {
+            let report = plane.stopped(grace).await;
+            admin_stop.cancel();
+            report
+        }
+    });
+
     let served = axum::serve(
         admin_listener,
         fast_proxy_admin::router(admin_state).into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+    .with_graceful_shutdown(admin_stop.cancelled_owned())
     .await;
     // However the admin server ended, stop the data plane with it.
-    shutdown.cancel();
-    plane.stopped().await;
+    data_stop.cancel();
+    if let Ok(report) = drain.await {
+        if report.forced_connections > 0 {
+            tracing::warn!(
+                "closed {} connection(s) still open after the {grace:?} grace period",
+                report.forced_connections
+            );
+        }
+    }
+    tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
 }
 

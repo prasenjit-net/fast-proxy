@@ -37,6 +37,32 @@ pub fn strip_hop_by_hop(headers: &mut HeaderMap) {
     }
 }
 
+/// Whether the request asks to switch protocols (for example to WebSocket):
+/// `Connection` names `upgrade` and an `Upgrade` header is present.
+pub fn is_upgrade_request(headers: &HeaderMap) -> bool {
+    headers.contains_key(header::UPGRADE) && connection_has_token(headers, "upgrade")
+}
+
+fn connection_has_token(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get_all(header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|candidate| candidate.trim().eq_ignore_ascii_case(token))
+}
+
+/// Like [`strip_hop_by_hop`], but keeps the `Upgrade` header and states
+/// `Connection: upgrade`, so a protocol switch can pass through.
+pub fn strip_hop_by_hop_keeping_upgrade(headers: &mut HeaderMap) {
+    let upgrade = headers.get(header::UPGRADE).cloned();
+    strip_hop_by_hop(headers);
+    if let Some(upgrade) = upgrade {
+        headers.insert(header::UPGRADE, upgrade);
+        headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
+    }
+}
+
 /// How the client reached us, used to build the `X-Forwarded-*` headers.
 pub struct ClientInfo {
     pub ip: IpAddr,
@@ -152,6 +178,43 @@ mod tests {
         strip_hop_by_hop(&mut headers);
         assert_eq!(headers.len(), 1);
         assert_eq!(value(&headers, "x-kept"), Some("3"));
+    }
+
+    #[test]
+    fn recognizes_upgrade_requests_case_insensitively() {
+        let upgrade = map(&[
+            ("connection", "keep-alive, Upgrade"),
+            ("upgrade", "websocket"),
+        ]);
+        assert!(is_upgrade_request(&upgrade));
+        assert!(!is_upgrade_request(&map(&[("upgrade", "websocket")])));
+        assert!(!is_upgrade_request(&map(&[("connection", "upgrade")])));
+        assert!(!is_upgrade_request(&map(&[("connection", "keep-alive")])));
+    }
+
+    #[test]
+    fn keeping_upgrade_preserves_it_and_still_strips_the_rest() {
+        let mut headers = map(&[
+            ("connection", "keep-alive, Upgrade, x-private"),
+            ("upgrade", "websocket"),
+            ("x-private", "1"),
+            ("keep-alive", "5"),
+            ("sec-websocket-key", "abc"),
+        ]);
+        strip_hop_by_hop_keeping_upgrade(&mut headers);
+        assert_eq!(value(&headers, "upgrade"), Some("websocket"));
+        assert_eq!(value(&headers, "connection"), Some("upgrade"));
+        assert_eq!(value(&headers, "sec-websocket-key"), Some("abc"));
+        assert!(!headers.contains_key("x-private"));
+        assert!(!headers.contains_key("keep-alive"));
+    }
+
+    #[test]
+    fn keeping_upgrade_without_one_is_plain_stripping() {
+        let mut headers = map(&[("connection", "close"), ("x-kept", "1")]);
+        strip_hop_by_hop_keeping_upgrade(&mut headers);
+        assert!(!headers.contains_key("connection"));
+        assert_eq!(headers.len(), 1);
     }
 
     #[test]

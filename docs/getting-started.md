@@ -144,7 +144,14 @@ The last 100 revisions are kept.
 curl -s $A/status      # listeners, database path, subsystem counts, uptime, live config version
 ```
 
-## 10. Validation errors name every bad field
+## 10. WebSockets and other protocol upgrades
+
+Requests with `Connection: Upgrade` / `Upgrade: websocket` are passed through:
+if the upstream answers `101`, the proxy relays bytes both ways until either
+side closes. Point a subsystem at any WebSocket server and connect to the
+proxy with the subsystem's `Host`; no extra configuration is needed.
+
+## 11. Validation errors name every bad field
 
 ```sh
 curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":5}' \
@@ -156,12 +163,19 @@ curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":
 Other errors: `404` for something that does not exist, `409` for a duplicate
 (subsystem name, host pattern, route prefix) or an upstream a route still uses.
 
-## 11. The configuration survives a restart
+## 12. Shutting down
 
-Stop the proxy (Ctrl-C) and start it again with `cargo run`. The same requests
-route the same way: the configuration is in `./state/fast-proxy.db`.
+Ctrl-C starts a graceful shutdown: the proxy stops accepting new connections,
+closes idle ones, and lets requests that are already in flight (and open
+WebSockets) finish for up to `data_plane.shutdown_grace` (30 seconds by
+default). Anything still open after that is closed. The admin API stays up
+until the data plane has drained.
+
+## 13. The configuration survives a restart
+
+Start the proxy again with `cargo run`. The same requests route the same way:
+the configuration is in `./state/fast-proxy.db`.
 
 ## Not available yet
 
-Metrics, the admin UI pages for all of this, WebSocket passthrough, and
-graceful draining are still to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).
+Metrics and the admin UI pages for all of this are still to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).

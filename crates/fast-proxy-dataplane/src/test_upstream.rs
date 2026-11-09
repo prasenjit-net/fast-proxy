@@ -211,3 +211,52 @@ async fn handle(
         }
     })
 }
+
+/// A real WebSocket server that echoes every text and binary message, and
+/// records the headers of each handshake it saw.
+pub struct WsEchoServer {
+    pub addr: SocketAddr,
+    pub handshakes: Arc<Mutex<Vec<HeaderMap>>>,
+}
+
+impl WsEchoServer {
+    // The handshake callback's error type is dictated by tokio-tungstenite.
+    #[allow(clippy::result_large_err)]
+    pub async fn start() -> Self {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handshakes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = handshakes.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let recorded = recorded.clone();
+                tokio::spawn(async move {
+                    let callback = |request: &Request, response: Response| {
+                        recorded.lock().unwrap().push(request.headers().clone());
+                        Ok(response)
+                    };
+                    let Ok(mut socket) =
+                        tokio_tungstenite::accept_hdr_async(stream, callback).await
+                    else {
+                        return;
+                    };
+                    while let Some(Ok(message)) = socket.next().await {
+                        if matches!(message, Message::Text(_) | Message::Binary(_))
+                            && socket.send(message).await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        Self { addr, handshakes }
+    }
+}

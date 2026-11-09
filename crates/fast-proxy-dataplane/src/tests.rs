@@ -236,9 +236,12 @@ async fn shutdown_stops_accepting_new_connections() {
     let harness = start().await;
     let addr = harness.addr;
     harness.shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(2), harness.plane.stopped())
-        .await
-        .expect("accept loops should stop");
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        harness.plane.stopped(Duration::from_secs(1)),
+    )
+    .await
+    .expect("accept loops should stop");
     assert!(TcpStream::connect(addr).await.is_err());
 }
 

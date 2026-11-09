@@ -37,8 +37,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   broadcasts `ConfigChanged`. All admin writes must go through it.
 - `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
   `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
-  (fixed 404/503/502/504), `upstream_client` (pooled forwarding), `headers`
-  (hop-by-hop, `X-Forwarded-*`). It reads
+  (fixed 404/503/502/504), `upstream_client` (pooled forwarding, protocol
+  upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
+  connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).

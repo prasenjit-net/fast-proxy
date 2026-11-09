@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::connections::ConnectionTracker;
+use crate::connections::{ConnectionContext, ConnectionTracker};
 use crate::{BoundListener, Forward, RequestPipeline};
 
 /// How long a client may take to send complete request headers.
@@ -18,22 +18,46 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// Upper bound for buffered request head data (and so for header size).
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 
+/// What a drain left behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrainReport {
+    /// Connections (including upgraded tunnels) still open when the grace
+    /// period ended, which were closed forcibly.
+    pub forced_connections: usize,
+}
+
+/// Cancellation signals every connection watches.
+#[derive(Clone)]
+struct Signals {
+    /// Stop accepting; finish in-flight requests, then close.
+    shutdown: CancellationToken,
+    /// The grace period is over: close right now.
+    force_close: CancellationToken,
+}
+
 /// The running data plane: one accept loop per bound listener.
 pub struct DataPlane {
     local_addrs: Vec<(String, SocketAddr)>,
     accept_loops: Vec<JoinHandle<()>>,
     connections: Arc<ConnectionTracker>,
+    force_close: CancellationToken,
 }
 
 impl DataPlane {
-    /// Starts serving on the bound listeners. Cancelling `shutdown` stops
-    /// accepting new connections; connections already open keep running.
+    /// Starts serving on the bound listeners. Cancelling `shutdown` begins a
+    /// graceful stop: no new connections are accepted, idle ones close, and
+    /// in-flight requests may finish. Await [`DataPlane::stopped`] to drain.
     pub fn start<F: Forward>(
         listeners: Vec<BoundListener>,
         pipeline: Arc<RequestPipeline<F>>,
         shutdown: CancellationToken,
     ) -> Self {
         let connections = ConnectionTracker::new();
+        let force_close = CancellationToken::new();
+        let signals = Signals {
+            shutdown,
+            force_close: force_close.clone(),
+        };
         let local_addrs = listeners
             .iter()
             .map(|bound| (bound.name.clone(), bound.local_addr()))
@@ -45,7 +69,7 @@ impl DataPlane {
                     bound,
                     pipeline.clone(),
                     connections.clone(),
-                    shutdown.clone(),
+                    signals.clone(),
                 ))
             })
             .collect();
@@ -53,6 +77,7 @@ impl DataPlane {
             local_addrs,
             accept_loops,
             connections,
+            force_close,
         }
     }
 
@@ -66,12 +91,25 @@ impl DataPlane {
         self.connections.active()
     }
 
-    /// Resolves once every accept loop has stopped (after shutdown).
-    pub async fn stopped(self) {
+    /// Waits for the accept loops to stop (after shutdown was signalled),
+    /// then for open connections to finish, for at most `grace`. Anything
+    /// still open after that is closed forcibly.
+    pub async fn stopped(self, grace: Duration) -> DrainReport {
         for accept_loop in self.accept_loops {
             // A panicked accept loop has already logged; nothing more to do.
             let _ = accept_loop.await;
         }
+        let drained = tokio::time::timeout(grace, self.connections.wait_idle()).await;
+        if drained.is_ok() {
+            return DrainReport {
+                forced_connections: 0,
+            };
+        }
+        let forced_connections = self.connections.active();
+        self.force_close.cancel();
+        // Closing is prompt; wait so the caller knows nothing is left running.
+        self.connections.wait_idle().await;
+        DrainReport { forced_connections }
     }
 }
 
@@ -79,21 +117,26 @@ async fn accept_loop<F: Forward>(
     bound: BoundListener,
     pipeline: Arc<RequestPipeline<F>>,
     connections: Arc<ConnectionTracker>,
-    shutdown: CancellationToken,
+    signals: Signals,
 ) {
     loop {
         let accepted = tokio::select! {
-            () = shutdown.cancelled() => return,
+            () = signals.shutdown.cancelled() => return,
             accepted = bound.listener.accept() => accepted,
         };
         match accepted {
             Ok((stream, peer)) => {
-                let guard = connections.open();
-                let pipeline = pipeline.clone();
-                tokio::spawn(async move {
-                    serve_connection(stream, peer, pipeline).await;
-                    drop(guard);
-                });
+                let context = ConnectionContext {
+                    guard: Arc::new(connections.open()),
+                    force_close: signals.force_close.clone(),
+                };
+                tokio::spawn(serve_connection(
+                    stream,
+                    peer,
+                    pipeline.clone(),
+                    context,
+                    signals.shutdown.clone(),
+                ));
             }
             // Typically too many open files or an aborted handshake; back off
             // briefly so a persistent failure cannot spin the loop.
@@ -109,9 +152,13 @@ async fn serve_connection<F: Forward>(
     stream: TcpStream,
     peer: SocketAddr,
     pipeline: Arc<RequestPipeline<F>>,
+    context: ConnectionContext,
+    shutdown: CancellationToken,
 ) {
-    let service = service_fn(move |request| {
+    let force_close = context.force_close.clone();
+    let service = service_fn(move |mut request| {
         let pipeline = pipeline.clone();
+        request.extensions_mut().insert(context.clone());
         async move { Ok::<_, Infallible>(pipeline.handle(request, peer).await) }
     });
     let mut builder = auto::Builder::new(TokioExecutor::new());
@@ -121,11 +168,23 @@ async fn serve_connection<F: Forward>(
         .header_read_timeout(HEADER_READ_TIMEOUT)
         .max_buf_size(MAX_HEAD_BYTES)
         .keep_alive(true);
-    // Upgrades stay enabled so WebSocket passthrough (D5) can build on this.
-    let result = builder
-        .http1_only()
-        .serve_connection_with_upgrades(TokioIo::new(stream), service)
-        .await;
+    // Upgrades are enabled so a protocol switch (WebSocket) can take over the socket.
+    let builder = builder.http1_only();
+    let connection = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
+    tokio::pin!(connection);
+
+    let result = tokio::select! {
+        result = connection.as_mut() => result,
+        () = shutdown.cancelled() => {
+            // Finish the request in flight (idle connections close at once),
+            // but never past the drain deadline.
+            connection.as_mut().graceful_shutdown();
+            tokio::select! {
+                result = connection.as_mut() => result,
+                () = force_close.cancelled() => return,
+            }
+        }
+    };
     if let Err(err) = result {
         tracing::debug!(%peer, "connection ended with error: {err}");
     }

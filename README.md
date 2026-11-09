@@ -8,8 +8,8 @@ Rust, shipped as a single binary with an embedded admin UI.
 > **Status: early development (milestone 1 in progress).** The proxy works end to
 > end: configure subsystems, hosts, upstreams and routes through the admin REST
 > API, and traffic is routed live, with the configuration persisted in SQLite.
-> Revision history with rollback and a request resolver are in. Still to come in
-> M1: the admin UI pages, metrics, WebSocket passthrough and graceful draining. Try it with the
+> Revision history with rollback, a request resolver, WebSocket passthrough and
+> graceful draining are in. Still to come in M1: the admin UI pages and metrics. Try it with the
 > [getting-started walkthrough](docs/getting-started.md); see the
 > [roadmap](docs/ROADMAP.md) for the plan.
 
