@@ -304,12 +304,12 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream MD: Model
 
-- [ ] **MD1 (M) Endpoint identity, state and weights.** `EndpointId`,
+- [x] **MD1 (M) Endpoint identity, state and weights.** `EndpointId`,
   `EndpointState`, `EndpointConfig { id, addr, weight, state }`; weight
   `1..=1000`; at most 64 endpoints per group.
   *Done when:* table-driven tests accept and reject each case with a
   field-specific message.
-- [ ] **MD2 (M) Group policy types.** `LbPolicy` (algorithm, hash key source),
+- [x] **MD2 (M) Group policy types.** `LbPolicy` (algorithm, hash key source),
   `HealthCheck` (none/http/tcp, path, status range, interval, timeout, rise,
   fall), `PassiveHealth`, `FailurePolicy`, `RetryBudget`; route `RetryPolicy`.
   All validated, with bounds (for example interval 100 ms to 10 min, rise and
@@ -319,17 +319,17 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream S: Store
 
-- [ ] **S1 (M) Schema.** Edit `schema.sql` in place with the columns in
+- [x] **S1 (M) Schema.** Edit `schema.sql` in place with the columns in
   section 5; bump `SCHEMA_VERSION`; unique `(group_id, addr)`.
   *Done when:* a fresh database opens, and an old-version file is rejected with
   the existing clear error.
-- [ ] **S2 (M) Repository operations.** Endpoint create / update / delete /
+- [x] **S2 (M) Repository operations.** Endpoint create / update / delete /
   set-state; group settings update; group create takes its endpoints atomically
   (at least one); refuse deleting a group's last endpoint (`Conflict`). Each
   write still goes through `Database::write` and records a revision.
   *Done when:* success and failure tests cover uniqueness, the last-endpoint
   rule, cascade, and revision rows.
-- [ ] **S3 (M) Revisions with endpoint ids and policies.** Extend the revision
+- [x] **S3 (M) Revisions with endpoint ids and policies.** Extend the revision
   JSON; make `restore` keep endpoint ids (E1).
   *Done when:* a test edits endpoints and policies, rolls back to each prior
   revision, and compares `load_all()` (including ids) to the stored config.

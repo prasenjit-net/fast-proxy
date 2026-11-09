@@ -1,7 +1,13 @@
-use fast_proxy_model::{HostId, RouteId, SubsystemId, UpstreamGroupId};
+use fast_proxy_model::{
+    EndpointId, EndpointState, FailurePolicy, HostId, LbAlgorithm, RouteId, SubsystemId,
+    UpstreamGroupId,
+};
 
-use super::{hosts, routes, subsystems, upstreams};
-use crate::test_support::{commit, host, route_fields, seed, subsystem_fields, upstream_fields};
+use super::{endpoints, hosts, routes, subsystems, upstreams};
+use crate::test_support::{
+    commit, create_group, endpoint_fields, host, route_fields, seed, subsystem_fields,
+    upstream_fields,
+};
 use crate::{Database, StoreError, SubsystemFields};
 
 fn db() -> Database {
@@ -198,34 +204,104 @@ fn host_operations_on_missing_things_are_not_found() {
 // ---- upstreams --------------------------------------------------------
 
 #[test]
-fn creates_and_updates_an_upstream_with_its_single_endpoint() {
+fn creates_a_group_with_its_endpoints_and_policy_and_updates_the_settings() {
     let mut db = db();
     let a = seed(&mut db, "alpha", "a.example.com");
+    let mut fields = upstream_fields("api");
+    fields.policy.lb.algorithm = LbAlgorithm::LeastConnections;
     let id = commit(&mut db, "up", |conn| {
         upstreams::create(
             conn,
             a.subsystem,
-            &upstream_fields("api", "api.internal:8080"),
+            &fields,
+            &[
+                endpoint_fields("api1.internal:8080"),
+                endpoint_fields("api2.internal:8080"),
+            ],
         )
     })
     .unwrap()
     .value;
+
+    let mut renamed = upstream_fields("api2");
+    renamed.policy.failure = FailurePolicy::FailClosed;
     commit(&mut db, "up", |conn| {
-        upstreams::update(
-            conn,
-            a.subsystem,
-            id,
-            &upstream_fields("api2", "api2.internal:9090"),
-        )
+        upstreams::update(conn, a.subsystem, id, &renamed)
     })
     .unwrap();
 
     let got = db.read(|c| subsystems::get(c, a.subsystem)).unwrap();
     let group = got.upstream_groups.iter().find(|g| g.id == id).unwrap();
     assert_eq!(group.name, "api2");
-    assert_eq!(group.endpoints.len(), 1);
-    assert_eq!(group.endpoints[0].addr.to_string(), "api2.internal:9090");
-    assert_eq!(count(&db, "upstream_endpoint"), 2);
+    assert_eq!(group.policy.failure, FailurePolicy::FailClosed);
+    assert_eq!(
+        group.policy.lb.algorithm,
+        LbAlgorithm::RoundRobin,
+        "update replaces the policy"
+    );
+    assert_eq!(group.endpoints.len(), 2, "update leaves endpoints alone");
+    assert_eq!(count(&db, "upstream_endpoint"), 3);
+}
+
+#[test]
+fn a_group_needs_one_to_64_endpoints_and_unique_addresses() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    let none = commit(&mut db, "up", |c| {
+        upstreams::create(c, a.subsystem, &upstream_fields("none"), &[])
+    })
+    .unwrap_err();
+    assert!(matches!(&none, StoreError::Invalid(f) if f[0].field == "endpoints"));
+
+    let many: Vec<_> = (0..65)
+        .map(|i| endpoint_fields(&format!("h{i}:1")))
+        .collect();
+    let too_many = commit(&mut db, "up", |c| {
+        upstreams::create(c, a.subsystem, &upstream_fields("many"), &many)
+    })
+    .unwrap_err();
+    assert!(matches!(&too_many, StoreError::Invalid(f) if f[0].field == "endpoints"));
+    commit(&mut db, "up", |c| {
+        upstreams::create(c, a.subsystem, &upstream_fields("max"), &many[..64])
+    })
+    .unwrap();
+
+    let dup = commit(&mut db, "up", |c| {
+        upstreams::create(
+            c,
+            a.subsystem,
+            &upstream_fields("dup"),
+            &[endpoint_fields("x:1"), endpoint_fields("x:1")],
+        )
+    })
+    .unwrap_err();
+    assert!(matches!(dup, StoreError::Conflict(_)));
+    assert_eq!(
+        count(&db, "upstream_group"),
+        2,
+        "the failed create left nothing behind"
+    );
+}
+
+#[test]
+fn an_invalid_policy_or_weight_is_rejected_with_its_field() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    let mut bad_policy = upstream_fields("p");
+    bad_policy.policy.passive.max_ejection_percent = 0;
+    let err = commit(&mut db, "up", |c| {
+        upstreams::create(c, a.subsystem, &bad_policy, &[endpoint_fields("x:1")])
+    })
+    .unwrap_err();
+    assert!(matches!(&err, StoreError::Invalid(f) if f[0].field == "passive.maxEjectionPercent"));
+
+    let mut heavy = endpoint_fields("x:1");
+    heavy.weight = 1001;
+    let err = commit(&mut db, "up", |c| {
+        upstreams::create(c, a.subsystem, &upstream_fields("w"), &[heavy])
+    })
+    .unwrap_err();
+    assert!(matches!(&err, StoreError::Invalid(f) if f[0].field == "endpoints.0.weight"));
 }
 
 #[test]
@@ -235,13 +311,13 @@ fn an_upstream_name_is_unique_within_a_subsystem_only() {
     let b = seed(&mut db, "beta", "b.example.com");
     // "backend" exists in both seeds already; a second one in alpha conflicts.
     let err = commit(&mut db, "dup", |c| {
-        upstreams::create(c, a.subsystem, &upstream_fields("backend", "x:1"))
+        create_group(c, a.subsystem, "backend", "x:1")
     })
     .unwrap_err();
     assert!(matches!(err, StoreError::Conflict(_)));
     // Renaming within beta to a fresh name works.
     commit(&mut db, "ok", |c| {
-        upstreams::update(c, b.subsystem, b.group, &upstream_fields("other", "x:1"))
+        upstreams::update(c, b.subsystem, b.group, &upstream_fields("other"))
     })
     .unwrap();
 }
@@ -266,7 +342,7 @@ fn deletes_an_unused_upstream_and_reports_missing_ones() {
     let mut db = db();
     let a = seed(&mut db, "alpha", "a.example.com");
     let spare = commit(&mut db, "up", |c| {
-        upstreams::create(c, a.subsystem, &upstream_fields("spare", "x:1"))
+        create_group(c, a.subsystem, "spare", "x:1")
     })
     .unwrap()
     .value;
@@ -277,18 +353,133 @@ fn deletes_an_unused_upstream_and_reports_missing_ones() {
     let again = commit(&mut db, "del", |c| upstreams::delete(c, a.subsystem, spare));
     assert!(matches!(again.unwrap_err(), StoreError::NotFound(_)));
     let update = commit(&mut db, "up", |c| {
-        upstreams::update(
-            c,
-            a.subsystem,
-            UpstreamGroupId(999),
-            &upstream_fields("x", "x:1"),
-        )
+        upstreams::update(c, a.subsystem, UpstreamGroupId(999), &upstream_fields("x"))
     });
     assert!(matches!(update.unwrap_err(), StoreError::NotFound(_)));
     let create = commit(&mut db, "up", |c| {
-        upstreams::create(c, SubsystemId(999), &upstream_fields("x", "x:1"))
+        create_group(c, SubsystemId(999), "x", "x:1")
     });
     assert!(matches!(create.unwrap_err(), StoreError::NotFound(_)));
+}
+
+// ---- endpoints --------------------------------------------------------
+
+fn only_endpoint(db: &Database, a: &crate::test_support::Fixture) -> EndpointId {
+    let got = db.read(|c| subsystems::get(c, a.subsystem)).unwrap();
+    got.upstream_groups[0].endpoints[0].id
+}
+
+#[test]
+fn adds_updates_sets_state_and_removes_endpoints() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    let first = only_endpoint(&db, &a);
+    let second = commit(&mut db, "add", |c| {
+        endpoints::add(c, a.subsystem, a.group, &endpoint_fields("b:2"))
+    })
+    .unwrap()
+    .value;
+    let mut changed = endpoint_fields("c:3");
+    changed.weight = 5;
+    commit(&mut db, "edit", |c| {
+        endpoints::update(c, a.subsystem, a.group, second, &changed)
+    })
+    .unwrap();
+    commit(&mut db, "drain", |c| {
+        endpoints::set_state(c, a.subsystem, a.group, second, EndpointState::Draining)
+    })
+    .unwrap();
+
+    let got = db.read(|c| subsystems::get(c, a.subsystem)).unwrap();
+    let endpoint = got.upstream_groups[0]
+        .endpoints
+        .iter()
+        .find(|e| e.id == second)
+        .unwrap();
+    assert_eq!(endpoint.addr.to_string(), "c:3");
+    assert_eq!(endpoint.weight, 5);
+    assert_eq!(endpoint.state, EndpointState::Draining);
+
+    commit(&mut db, "rm", |c| {
+        endpoints::delete(c, a.subsystem, a.group, second)
+    })
+    .unwrap();
+    let got = db.read(|c| subsystems::get(c, a.subsystem)).unwrap();
+    assert_eq!(got.upstream_groups[0].endpoints[0].id, first);
+    assert_eq!(got.upstream_groups[0].endpoints.len(), 1);
+}
+
+#[test]
+fn the_last_endpoint_cannot_be_removed() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    let only = only_endpoint(&db, &a);
+    let err = commit(&mut db, "rm", |c| {
+        endpoints::delete(c, a.subsystem, a.group, only)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Conflict(m) if m.contains("last endpoint")),
+        "{err}"
+    );
+    assert_eq!(count(&db, "upstream_endpoint"), 1);
+}
+
+#[test]
+fn endpoint_writes_reject_duplicates_missing_rows_and_other_groups() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    let b = seed(&mut db, "beta", "b.example.com");
+    let dup = commit(&mut db, "add", |c| {
+        endpoints::add(c, a.subsystem, a.group, &endpoint_fields("127.0.0.1:3000"))
+    })
+    .unwrap_err();
+    assert!(matches!(dup, StoreError::Conflict(_)));
+
+    let foreign = only_endpoint(&db, &b);
+    let wrong_group = commit(&mut db, "state", |c| {
+        endpoints::set_state(c, a.subsystem, a.group, foreign, EndpointState::Disabled)
+    });
+    assert!(matches!(wrong_group.unwrap_err(), StoreError::NotFound(_)));
+    let wrong_subsystem = commit(&mut db, "add", |c| {
+        endpoints::add(c, b.subsystem, a.group, &endpoint_fields("z:9"))
+    });
+    assert!(matches!(
+        wrong_subsystem.unwrap_err(),
+        StoreError::NotFound(_)
+    ));
+    let missing = commit(&mut db, "edit", |c| {
+        endpoints::update(
+            c,
+            a.subsystem,
+            a.group,
+            EndpointId(999),
+            &endpoint_fields("z:9"),
+        )
+    });
+    assert!(matches!(missing.unwrap_err(), StoreError::NotFound(_)));
+}
+
+#[test]
+fn a_group_holds_at_most_64_endpoints() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com");
+    for i in 1..64 {
+        commit(&mut db, "add", |c| {
+            endpoints::add(
+                c,
+                a.subsystem,
+                a.group,
+                &endpoint_fields(&format!("h{i}:1")),
+            )
+        })
+        .unwrap();
+    }
+    let err = commit(&mut db, "add", |c| {
+        endpoints::add(c, a.subsystem, a.group, &endpoint_fields("one-more:1"))
+    })
+    .unwrap_err();
+    assert!(matches!(err, StoreError::Conflict(_)));
 }
 
 // ---- routes -----------------------------------------------------------

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_model::{
-    Config, EndpointAddr, EndpointConfig, HostPattern, RouteConfig, RouteId, RoutePrefix,
-    SubsystemConfig, SubsystemId, SubsystemName, UpstreamGroupConfig, UpstreamGroupId,
-    UpstreamPrefix,
+    Config, EndpointAddr, EndpointConfig, EndpointId, EndpointState, GroupPolicy, HostPattern,
+    RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemId, SubsystemName,
+    UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
 };
 use fast_proxy_routing::{compile, SnapshotHolder};
 use fast_proxy_telemetry::{AccessLog, Metrics};
@@ -33,6 +33,7 @@ pub fn route(id: i64, prefix: &str) -> RouteConfig {
         preserve_host: true,
         connect_timeout: Duration::from_secs(5),
         response_timeout: Duration::from_secs(30),
+        retry: RetryPolicy::default(),
         enabled: true,
     }
 }
@@ -55,9 +56,12 @@ pub fn site_to(
         upstream_groups: vec![UpstreamGroupConfig {
             id: UpstreamGroupId(1),
             name: "backend".into(),
+            policy: GroupPolicy::default(),
             endpoints: vec![EndpointConfig {
+                id: EndpointId(1),
                 addr: EndpointAddr::parse(&endpoint.to_string()).unwrap(),
                 weight: 1,
+                state: EndpointState::Enabled,
             }],
         }],
         routes,

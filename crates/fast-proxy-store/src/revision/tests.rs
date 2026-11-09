@@ -1,8 +1,10 @@
-use fast_proxy_model::Config;
+use fast_proxy_model::{Config, EndpointState, LbAlgorithm, RetryPolicy};
 
 use super::{get, list};
-use crate::repository::{routes, subsystems};
-use crate::test_support::{commit, route_fields, seed, subsystem_fields};
+use crate::repository::{endpoints, routes, subsystems, upstreams};
+use crate::test_support::{
+    commit, endpoint_fields, route_fields, seed, subsystem_fields, upstream_fields,
+};
 use crate::{Database, Mutation, StoreError};
 
 fn db() -> Database {
@@ -200,4 +202,60 @@ fn an_invalid_value_inside_a_stored_revision_is_an_internal_error() {
         db.read(|c| get(c, 1)).unwrap_err(),
         StoreError::Internal(_)
     ));
+}
+
+#[test]
+fn rollback_restores_endpoint_ids_states_policies_and_route_retries() {
+    let mut db = db();
+    let a = seed(&mut db, "alpha", "a.example.com"); // v1
+    let second = commit(&mut db, "add", |c| {
+        endpoints::add(c, a.subsystem, a.group, &endpoint_fields("b:2"))
+    })
+    .unwrap()
+    .value; // v2
+    commit(&mut db, "drain", |c| {
+        endpoints::set_state(c, a.subsystem, a.group, second, EndpointState::Draining)
+    })
+    .unwrap(); // v3
+    commit(&mut db, "policy", |c| {
+        let mut fields = upstream_fields("backend");
+        fields.policy.lb.algorithm = LbAlgorithm::ConsistentHash;
+        fields.policy.health.rise = 7;
+        upstreams::update(c, a.subsystem, a.group, &fields)
+    })
+    .unwrap(); // v4
+    commit(&mut db, "retry", |c| {
+        let route = db_route(c, a.subsystem);
+        let mut fields = route_fields("/", a.group);
+        fields.retry = RetryPolicy {
+            max_attempts: 4,
+            idempotent_on_5xx: false,
+            on_timeout: true,
+        };
+        routes::update(c, a.subsystem, route, &fields)
+    })
+    .unwrap(); // v5
+    commit(&mut db, "remove", |c| {
+        endpoints::delete(c, a.subsystem, a.group, second)
+    })
+    .unwrap(); // v6
+
+    let stored: Vec<Config> = (1..=6)
+        .map(|v| db.read(|c| get(c, v)).unwrap().config)
+        .collect();
+    for version in (1..=6u64).rev() {
+        restore_as_new_revision(&mut db, version);
+        assert_eq!(
+            db.load_all().unwrap(),
+            stored[(version - 1) as usize],
+            "after rolling back to v{version}"
+        );
+    }
+}
+
+fn db_route(
+    conn: &rusqlite::Connection,
+    subsystem: fast_proxy_model::SubsystemId,
+) -> fast_proxy_model::RouteId {
+    subsystems::get(conn, subsystem).unwrap().routes[0].id
 }

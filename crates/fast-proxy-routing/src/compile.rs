@@ -120,8 +120,8 @@ mod tests {
     use std::time::Duration;
 
     use fast_proxy_model::{
-        EndpointAddr, EndpointConfig, HostPattern, RouteConfig, RouteId, SubsystemId,
-        SubsystemName, UpstreamPrefix,
+        EndpointAddr, EndpointConfig, EndpointId, EndpointState, GroupPolicy, HostPattern,
+        RetryPolicy, RouteConfig, RouteId, SubsystemId, SubsystemName, UpstreamPrefix,
     };
 
     use super::*;
@@ -130,9 +130,12 @@ mod tests {
         UpstreamGroupConfig {
             id: UpstreamGroupId(id),
             name: name.into(),
+            policy: GroupPolicy::default(),
             endpoints: vec![EndpointConfig {
+                id: EndpointId(id),
                 addr: EndpointAddr::parse(addr).unwrap(),
                 weight: 1,
+                state: EndpointState::Enabled,
             }],
         }
     }
@@ -147,6 +150,7 @@ mod tests {
             preserve_host: true,
             connect_timeout: Duration::from_secs(5),
             response_timeout: Duration::from_secs(30),
+            retry: RetryPolicy::default(),
             enabled: true,
         }
     }

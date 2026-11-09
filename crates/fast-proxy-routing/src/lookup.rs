@@ -55,8 +55,9 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use fast_proxy_model::{
-        Config, EndpointAddr, EndpointConfig, HostPattern, RouteConfig, RouteId, RoutePrefix,
-        SubsystemConfig, SubsystemName, UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
+        Config, EndpointAddr, EndpointConfig, EndpointId, EndpointState, GroupPolicy, HostPattern,
+        RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemName,
+        UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
     };
 
     use super::*;
@@ -78,9 +79,12 @@ mod tests {
             upstream_groups: vec![UpstreamGroupConfig {
                 id: UpstreamGroupId(id),
                 name: "backend".into(),
+                policy: GroupPolicy::default(),
                 endpoints: vec![EndpointConfig {
+                    id: EndpointId(id),
                     addr: EndpointAddr::parse(addr).unwrap(),
                     weight: 1,
+                    state: EndpointState::Enabled,
                 }],
             }],
             routes: prefixes
@@ -95,6 +99,7 @@ mod tests {
                     preserve_host: true,
                     connect_timeout: std::time::Duration::from_secs(5),
                     response_timeout: std::time::Duration::from_secs(30),
+                    retry: RetryPolicy::default(),
                     enabled: true,
                 })
                 .collect(),

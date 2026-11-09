@@ -2,7 +2,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use fast_proxy_model::{
-    parse_timeout_ms, RouteId, RoutePrefix, SubsystemId, UpstreamGroupId, UpstreamPrefix,
+    parse_timeout_ms, RetryPolicy, RouteId, RoutePrefix, SubsystemId, UpstreamGroupId,
+    UpstreamPrefix,
 };
 use fast_proxy_store::repository::{routes, subsystems};
 use fast_proxy_store::{Mutation, RouteFields};
@@ -77,6 +78,7 @@ impl RouteRequest {
             preserve_host: self.preserve_host,
             connect_timeout,
             response_timeout,
+            retry: RetryPolicy::default(),
             enabled: self.enabled,
         })
     }

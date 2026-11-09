@@ -2,13 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_model::{
-    EndpointAddr, HostPattern, RoutePrefix, SubsystemId, SubsystemName, UpstreamGroupId,
-    UpstreamPrefix,
+    EndpointAddr, EndpointState, GroupPolicy, HostPattern, RetryPolicy, RoutePrefix, SubsystemId,
+    SubsystemName, UpstreamGroupId, UpstreamPrefix,
 };
 use fast_proxy_routing::Lookup;
 use fast_proxy_store::repository::{hosts, routes, subsystems, upstreams};
 use fast_proxy_store::{
-    Connection, Mutation, RouteFields, Store, StoreError, SubsystemFields, UpstreamFields,
+    Connection, EndpointFields, Mutation, RouteFields, Store, StoreError, SubsystemFields,
+    UpstreamFields,
 };
 
 use crate::{ConfigChanged, ConfigService, StartError};
@@ -40,9 +41,13 @@ fn create_site(
             id,
             &UpstreamFields {
                 name: "backend".into(),
+                policy: GroupPolicy::default(),
+            },
+            &[EndpointFields {
                 addr: EndpointAddr::parse(backend).unwrap(),
                 weight: 1,
-            },
+                state: EndpointState::Enabled,
+            }],
         )?;
         routes::create(conn, id, &root_route(group))?;
         Ok(Mutation {
@@ -61,6 +66,7 @@ fn root_route(group: UpstreamGroupId) -> RouteFields {
         preserve_host: true,
         connect_timeout: Duration::from_secs(5),
         response_timeout: Duration::from_secs(30),
+        retry: RetryPolicy::default(),
         enabled: true,
     }
 }

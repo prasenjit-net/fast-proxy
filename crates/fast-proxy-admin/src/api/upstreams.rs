@@ -1,9 +1,9 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use fast_proxy_model::{EndpointAddr, SubsystemId, UpstreamGroupId};
-use fast_proxy_store::repository::{subsystems, upstreams};
-use fast_proxy_store::{Mutation, UpstreamFields};
+use fast_proxy_model::{EndpointAddr, EndpointState, GroupPolicy, SubsystemId, UpstreamGroupId};
+use fast_proxy_store::repository::{endpoints, subsystems, upstreams};
+use fast_proxy_store::{EndpointFields, Mutation, StoreError, UpstreamFields};
 use serde::Deserialize;
 
 use super::detail::{subsystem_name, upstream_dto, UpstreamDto};
@@ -29,8 +29,17 @@ fn default_weight() -> u32 {
     1
 }
 
+/// A validated request: the group's name and its single endpoint (until the
+/// admin API exposes multi-endpoint groups).
+#[derive(Debug, Clone)]
+struct ParsedUpstream {
+    name: String,
+    addr: EndpointAddr,
+    weight: u32,
+}
+
 impl UpstreamRequest {
-    fn into_fields(self) -> AppResult<UpstreamFields> {
+    fn into_parsed(self) -> AppResult<ParsedUpstream> {
         let mut errors = FieldErrors::default();
         let name = self.name.trim().to_string();
         if name.is_empty() || name.chars().count() > MAX_NAME_LEN {
@@ -44,7 +53,7 @@ impl UpstreamRequest {
         let Some(addr) = addr else {
             unreachable!("finish() fails when the address is invalid");
         };
-        Ok(UpstreamFields {
+        Ok(ParsedUpstream {
             name,
             addr,
             weight: self.weight,
@@ -52,12 +61,12 @@ impl UpstreamRequest {
     }
 }
 
-fn dto_from(id: UpstreamGroupId, fields: &UpstreamFields) -> UpstreamDto {
+fn dto_from(id: UpstreamGroupId, parsed: &ParsedUpstream) -> UpstreamDto {
     UpstreamDto {
         id: id.0,
-        name: fields.name.clone(),
-        addr: fields.addr.to_string(),
-        weight: fields.weight,
+        name: parsed.name.clone(),
+        addr: parsed.addr.to_string(),
+        weight: parsed.weight,
     }
 }
 
@@ -89,14 +98,23 @@ pub async fn create_upstream(
     ApiJson(body): ApiJson<UpstreamRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<UpstreamDto>>)> {
     let id = SubsystemId(id);
-    let fields = body.into_fields()?;
-    let for_response = fields.clone();
+    let parsed = body.into_parsed()?;
+    let for_response = parsed.clone();
     let applied = state
         .config
         .apply(move |conn| {
             let subsystem = subsystem_name(conn, id)?;
+            let fields = UpstreamFields {
+                name: parsed.name.clone(),
+                policy: GroupPolicy::default(),
+            };
+            let endpoint = EndpointFields {
+                addr: parsed.addr,
+                weight: parsed.weight,
+                state: EndpointState::Enabled,
+            };
             Ok(Mutation {
-                value: upstreams::create(conn, id, &fields)?,
+                value: upstreams::create(conn, id, &fields, &[endpoint])?,
                 summary: format!("upstream created: {} in {subsystem}", fields.name),
             })
         })
@@ -117,13 +135,30 @@ pub async fn update_upstream(
     ApiJson(body): ApiJson<UpstreamRequest>,
 ) -> AppResult<Json<Envelope<UpstreamDto>>> {
     let (id, upstream_id) = (SubsystemId(id), UpstreamGroupId(upstream_id));
-    let fields = body.into_fields()?;
-    let for_response = fields.clone();
+    let parsed = body.into_parsed()?;
+    let for_response = parsed.clone();
     let applied = state
         .config
         .apply(move |conn| {
             let subsystem = subsystem_name(conn, id)?;
+            let current = subsystems::get(conn, id)?
+                .upstream_groups
+                .into_iter()
+                .find(|group| group.id == upstream_id)
+                .ok_or_else(|| StoreError::NotFound(format!("upstream {}", upstream_id.0)))?;
+            let fields = UpstreamFields {
+                name: parsed.name.clone(),
+                policy: current.policy,
+            };
             upstreams::update(conn, id, upstream_id, &fields)?;
+            if let Some(endpoint) = current.endpoints.first() {
+                let replacement = EndpointFields {
+                    addr: parsed.addr.clone(),
+                    weight: parsed.weight,
+                    state: endpoint.state,
+                };
+                endpoints::update(conn, id, upstream_id, endpoint.id, &replacement)?;
+            }
             Ok(Mutation {
                 value: (),
                 summary: format!("upstream updated: {} in {subsystem}", fields.name),

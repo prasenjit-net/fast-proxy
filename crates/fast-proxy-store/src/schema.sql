@@ -1,4 +1,4 @@
--- Schema v1. The project is not deployed, so changes edit this file directly
+-- Schema v2. The project is not deployed, so changes edit this file directly
 -- (no migrations); SCHEMA_VERSION in database.rs must be bumped with it.
 
 CREATE TABLE subsystem (
@@ -20,6 +20,23 @@ CREATE TABLE upstream_group (
   id           INTEGER PRIMARY KEY,
   subsystem_id INTEGER NOT NULL REFERENCES subsystem(id) ON DELETE CASCADE,
   name         TEXT NOT NULL,
+  lb_algorithm         TEXT    NOT NULL DEFAULT 'round_robin',
+  lb_hash_key          TEXT    NOT NULL DEFAULT 'client_ip',
+  failure_policy       TEXT    NOT NULL DEFAULT 'fail_open',
+  health_check         TEXT    NOT NULL DEFAULT 'none',
+  health_path          TEXT    NOT NULL DEFAULT '/',
+  health_status_min    INTEGER NOT NULL DEFAULT 200,
+  health_status_max    INTEGER NOT NULL DEFAULT 399,
+  health_interval_ms   INTEGER NOT NULL DEFAULT 5000,
+  health_timeout_ms    INTEGER NOT NULL DEFAULT 2000,
+  health_rise          INTEGER NOT NULL DEFAULT 2,
+  health_fall          INTEGER NOT NULL DEFAULT 3,
+  passive_failures     INTEGER NOT NULL DEFAULT 3,
+  passive_base_ms      INTEGER NOT NULL DEFAULT 10000,
+  passive_max_ms       INTEGER NOT NULL DEFAULT 300000,
+  passive_max_percent  INTEGER NOT NULL DEFAULT 50,
+  retry_budget_percent INTEGER NOT NULL DEFAULT 20,
+  retry_budget_min_per_sec INTEGER NOT NULL DEFAULT 10,
   UNIQUE (subsystem_id, name)
 );
 
@@ -27,7 +44,9 @@ CREATE TABLE upstream_endpoint (
   id       INTEGER PRIMARY KEY,
   group_id INTEGER NOT NULL REFERENCES upstream_group(id) ON DELETE CASCADE,
   addr     TEXT NOT NULL,
-  weight   INTEGER NOT NULL DEFAULT 1
+  weight   INTEGER NOT NULL DEFAULT 1,
+  state    TEXT NOT NULL DEFAULT 'enabled',
+  UNIQUE (group_id, addr)
 );
 
 -- upstream_group_id uses the default NO ACTION rather than RESTRICT: both
@@ -44,6 +63,9 @@ CREATE TABLE route (
   preserve_host       INTEGER NOT NULL DEFAULT 1,
   connect_timeout_ms  INTEGER NOT NULL DEFAULT 5000,
   response_timeout_ms INTEGER NOT NULL DEFAULT 30000,
+  retry_max_attempts  INTEGER NOT NULL DEFAULT 2,
+  retry_idempotent_on_5xx INTEGER NOT NULL DEFAULT 1,
+  retry_on_timeout    INTEGER NOT NULL DEFAULT 0,
   enabled             INTEGER NOT NULL DEFAULT 1,
   UNIQUE (subsystem_id, prefix)
 );
