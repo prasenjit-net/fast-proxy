@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::net::SocketAddr;
 
 use bytes::Bytes;
 use fast_proxy_routing::{CompiledRoute, CompiledSubsystem};
@@ -19,6 +20,10 @@ pub struct Target<'snapshot> {
     pub consumed_prefix_len: usize,
     /// The request's id, already validated or generated.
     pub request_id: &'snapshot str,
+    /// The client's socket address, as seen by the listener.
+    pub client_addr: SocketAddr,
+    /// Whether the client asked for JSON, so error responses match.
+    pub wants_json: bool,
 }
 
 /// Sends a routed request to its upstream and returns the response. It

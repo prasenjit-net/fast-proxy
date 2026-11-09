@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use fast_proxy_routing::{CompiledRoute, CompiledSubsystem, Lookup, Snapshot, SnapshotHolder};
@@ -5,6 +6,7 @@ use http::{header, Request, Response};
 use hyper::body::Incoming;
 
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
+use crate::responses::accepts_json;
 use crate::{FixedResponse, Forward, ResponseBody, Target};
 
 /// What the snapshot says should happen to a request.
@@ -34,12 +36,17 @@ impl<F: Forward> RequestPipeline<F> {
     }
 
     /// Handles one request. Never fails: every problem becomes a response.
-    pub async fn handle(&self, request: Request<Incoming>) -> Response<ResponseBody> {
+    pub async fn handle(
+        &self,
+        request: Request<Incoming>,
+        client_addr: SocketAddr,
+    ) -> Response<ResponseBody> {
         let snapshot = self.snapshots.load();
         let request_id = request_id_for(request.headers());
+        let wants_json = accepts_json(request.headers());
 
         let (subsystem, route, consumed_prefix_len) = match resolve(&snapshot, &request) {
-            Resolved::Respond(fixed) => return fixed.render(&request_id, request.headers()),
+            Resolved::Respond(fixed) => return fixed.render(&request_id, wants_json),
             Resolved::Forward {
                 subsystem,
                 route,
@@ -52,6 +59,8 @@ impl<F: Forward> RequestPipeline<F> {
             route,
             consumed_prefix_len,
             request_id: &request_id,
+            client_addr,
+            wants_json,
         };
         let mut response = self.forwarder.forward(request, target).await;
         response

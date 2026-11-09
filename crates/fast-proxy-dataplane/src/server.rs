@@ -112,7 +112,7 @@ async fn serve_connection<F: Forward>(
 ) {
     let service = service_fn(move |request| {
         let pipeline = pipeline.clone();
-        async move { Ok::<_, Infallible>(pipeline.handle(request).await) }
+        async move { Ok::<_, Infallible>(pipeline.handle(request, peer).await) }
     });
     let mut builder = auto::Builder::new(TokioExecutor::new());
     builder

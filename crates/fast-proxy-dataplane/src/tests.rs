@@ -2,24 +2,19 @@
 //! an ephemeral port, driven over raw TCP, with a fake forwarder standing in
 //! for the upstream client (task D4).
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use fast_proxy_model::{
-    Config, EndpointAddr, EndpointConfig, HostPattern, RouteConfig, RouteId, RoutePrefix,
-    SubsystemConfig, SubsystemId, SubsystemName, UpstreamGroupConfig, UpstreamGroupId,
-    UpstreamPrefix,
-};
+use fast_proxy_model::{Config, SubsystemConfig};
 use fast_proxy_routing::{compile, SnapshotHolder};
 use http::{Request, Response};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::test_support::{eventually, get, route, send_raw, site_to, Harness};
 use crate::{bind, DataPlane, Forward, ListenerSpec, RequestPipeline, ResponseBody, Target};
 
 /// Answers every routed request with a description of how it was routed.
@@ -48,36 +43,15 @@ impl Forward for EchoForward {
 }
 
 fn site(id: i64, name: &str, host: &str, prefixes: &[&str], enabled: bool) -> SubsystemConfig {
-    SubsystemConfig {
-        id: SubsystemId(id),
-        name: SubsystemName::parse(name).unwrap(),
-        enabled,
-        description: String::new(),
-        hosts: vec![HostPattern::parse(host).unwrap()],
-        upstream_groups: vec![UpstreamGroupConfig {
-            id: UpstreamGroupId(id),
-            name: "backend".into(),
-            endpoints: vec![EndpointConfig {
-                addr: EndpointAddr::parse(&format!("127.0.0.1:{}", 3000 + id)).unwrap(),
-                weight: 1,
-            }],
-        }],
-        routes: prefixes
-            .iter()
-            .enumerate()
-            .map(|(index, prefix)| RouteConfig {
-                id: RouteId(id * 100 + index as i64),
-                prefix: RoutePrefix::parse(prefix).unwrap(),
-                upstream_group_id: UpstreamGroupId(id),
-                strip_prefix: false,
-                upstream_prefix: UpstreamPrefix::default(),
-                preserve_host: true,
-                connect_timeout: Duration::from_secs(5),
-                response_timeout: Duration::from_secs(30),
-                enabled: true,
-            })
-            .collect(),
-    }
+    let endpoint = ([127, 0, 0, 1], 3000 + id as u16).into();
+    let routes = prefixes
+        .iter()
+        .enumerate()
+        .map(|(index, prefix)| route(id * 100 + index as i64, prefix))
+        .collect();
+    let mut subsystem = site_to(id, name, host, endpoint, routes);
+    subsystem.enabled = enabled;
+    subsystem
 }
 
 fn config() -> Config {
@@ -90,94 +64,8 @@ fn config() -> Config {
     }
 }
 
-struct Harness {
-    plane: DataPlane,
-    holder: Arc<SnapshotHolder>,
-    addr: SocketAddr,
-    shutdown: CancellationToken,
-}
-
 async fn start() -> Harness {
-    let holder = Arc::new(SnapshotHolder::new());
-    holder.swap(compile(1, &config()).unwrap());
-    let specs = [ListenerSpec {
-        name: "http".into(),
-        addr: ([127, 0, 0, 1], 0).into(),
-    }];
-    let bound = bind(&specs).await.unwrap();
-    let shutdown = CancellationToken::new();
-    let pipeline = Arc::new(RequestPipeline::new(holder.clone(), EchoForward));
-    let plane = DataPlane::start(bound, pipeline, shutdown.clone());
-    let addr = plane.local_addrs()[0].1;
-    Harness {
-        plane,
-        holder,
-        addr,
-        shutdown,
-    }
-}
-
-struct Reply {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: String,
-}
-
-impl Reply {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    }
-}
-
-/// Sends `raw` and reads until the server closes the connection.
-async fn send_raw(addr: SocketAddr, raw: &str) -> Reply {
-    let mut stream = TcpStream::connect(addr).await.unwrap();
-    stream.write_all(raw.as_bytes()).await.unwrap();
-    let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes).await.unwrap();
-    let text = String::from_utf8(bytes).unwrap();
-    let (head, body) = text.split_once("\r\n\r\n").unwrap();
-    let mut lines = head.lines();
-    let status = lines
-        .next()
-        .unwrap()
-        .split(' ')
-        .nth(1)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let headers = lines
-        .map(|line| {
-            let (key, value) = line.split_once(':').unwrap();
-            (key.to_string(), value.trim().to_string())
-        })
-        .collect();
-    Reply {
-        status,
-        headers,
-        body: body.to_string(),
-    }
-}
-
-async fn get(addr: SocketAddr, host: &str, path: &str, extra: &str) -> Reply {
-    send_raw(
-        addr,
-        &format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{extra}Connection: close\r\n\r\n"),
-    )
-    .await
-}
-
-async fn eventually(mut condition: impl FnMut() -> bool) -> bool {
-    for _ in 0..100 {
-        if condition() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    false
+    Harness::start(config(), EchoForward).await
 }
 
 #[tokio::test]

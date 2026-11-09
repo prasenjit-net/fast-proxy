@@ -50,10 +50,10 @@ impl FixedResponse {
         }
     }
 
-    /// Builds the response: JSON when the client's `Accept` asks for it,
-    /// plain text otherwise, always carrying the request id.
-    pub fn render(self, request_id: &str, request_headers: &HeaderMap) -> Response<ResponseBody> {
-        let (content_type, body) = if wants_json(request_headers) {
+    /// Builds the response: JSON when `wants_json`, plain text otherwise,
+    /// always carrying the request id.
+    pub fn render(self, request_id: &str, wants_json: bool) -> Response<ResponseBody> {
+        let (content_type, body) = if wants_json {
             let body = format!(
                 r#"{{"error":{{"code":"{}","message":"{}","requestId":"{}"}}}}"#,
                 self.code(),
@@ -76,7 +76,8 @@ impl FixedResponse {
     }
 }
 
-fn wants_json(headers: &HeaderMap) -> bool {
+/// Whether the client's `Accept` header asks for JSON.
+pub fn accepts_json(headers: &HeaderMap) -> bool {
     headers
         .get_all(header::ACCEPT)
         .iter()
@@ -123,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn renders_plain_text_by_default_with_the_request_id() {
         for kind in ALL {
-            let response = kind.render("rid-1", &HeaderMap::new());
+            let response = kind.render("rid-1", false);
             assert_eq!(response.status(), kind.status());
             assert_eq!(response.headers()["x-request-id"], "rid-1");
             assert_eq!(
@@ -141,7 +142,8 @@ mod tests {
             header::ACCEPT,
             "text/html, Application/JSON;q=0.9".parse().unwrap(),
         );
-        let response = FixedResponse::UnknownHost.render("rid-2", &headers);
+        assert!(accepts_json(&headers));
+        let response = FixedResponse::UnknownHost.render("rid-2", true);
         assert_eq!(response.headers()["content-type"], "application/json");
         assert_eq!(
             body_text(response).await,
@@ -151,9 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn json_bodies_are_always_valid_even_for_hostile_ids() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::ACCEPT, "application/json".parse().unwrap());
-        let response = FixedResponse::NoRoute.render(r#"a"b\c"#, &headers);
+        let response = FixedResponse::NoRoute.render(r#"a"b\c"#, true);
         assert!(body_text(response)
             .await
             .contains(r#""requestId":"a\"b\\c""#));

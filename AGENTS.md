@@ -34,7 +34,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   broadcasts `ConfigChanged`. All admin writes must go through it.
 - `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
   `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
-  (fixed 404/503/502/504). It reads snapshots only and never depends on the store.
+  (fixed 404/503/502/504), `upstream_client` (pooled forwarding), `headers`
+  (hop-by-hop, `X-Forwarded-*`), `upstream_uri` (path rewriting). It reads
+  snapshots only and never depends on the store.
 - `docs/adr/` records design decisions.
 - `ui/src/lib/api.ts` is the typed frontend API client.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.

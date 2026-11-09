@@ -201,8 +201,9 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   are controllable, body streaming does not buffer.
   *Done when:* notes are merged and the open **(confirm)** items are resolved.
   *Status:* ADRs 0001-0004 are written in `docs/adr/`. D1 (rusqlite) and D6
-  (prometheus crate) were confirmed by the owner on 2026-11-09. Still open:
-  the hyper client / metrics spike.
+  (prometheus crate) were confirmed by the owner on 2026-11-09. The hyper
+  client spike is done (results in ADR 0002). Still open: the metrics crate
+  spike, folded into T1.
 - [x] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
   `/api/error-demo`, the Components page, `TasksCard`, their tests, and the
   related README sections. Keep access log, events, and the WebSocket plumbing.
@@ -369,14 +370,17 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   client in D4; tests use a fake). `FixedResponse` renders all five fixed
   responses, including 502/504, which D4 will return on upstream failures.
   The 404/503/404 cases are tested end to end over TCP.
-- [ ] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
+- [~] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
   named in `Connection` (RFC 9110), both directions, while preserving
   `Upgrade` for upgrades (D6 task); set `X-Forwarded-For/Proto/Host` per D10;
   honor `preserve_host` (D11); generate `x-request-id` if absent and propagate
   it upstream and in the response.
   *Done when:* unit tests on header maps and an integration test with an echo
   upstream confirm what the backend actually receives.
-- [ ] **D4 (L) Upstream client and forwarding** (`client.rs`): pooled hyper-util
+  *Status:* done except keeping `Upgrade` for upgrade requests, which lands
+  with D5. `trusted_proxies` entries are parsed by `TrustedProxies::parse`;
+  the binary must call it at startup (D7) so a bad CIDR aborts with a clear error.
+- [x] **D4 (L) Upstream client and forwarding** (`client.rs`): pooled hyper-util
   client, per-route connect and response-header timeouts, request and response
   bodies streamed (no buffering), `100-continue` and chunked bodies handled,
   client disconnect cancels the upstream request. Build the upstream URI from
@@ -385,6 +389,9 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   *Done when:* tests cover GET, POST with large streamed body, chunked
   response, slow upstream (504), refused connection (502), and path/query
   rewriting cases.
+  *Result:* all covered end to end (64 MiB body, not hundreds of MB). A connect
+  timeout also maps to 504; that mapping is unit tested but not exercised
+  against an unroutable address.
 - [ ] **D5 (M) Upgrade/WebSocket passthrough** (`upgrade.rs`): forward the
   upgrade request, relay the `101` response, then copy bytes in both
   directions until either side closes.

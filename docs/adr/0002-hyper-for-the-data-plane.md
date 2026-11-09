@@ -1,6 +1,6 @@
 # ADR 0002: hyper and hyper-util for the data plane
 
-Status: proposed. Plan reference: M1 D5.
+Status: accepted (spike confirmed, 2026-11-09). Plan reference: M1 D5.
 
 ## Context
 
@@ -20,7 +20,25 @@ and the legacy pooled client). Axum stays admin-only, in `fast-proxy-admin`.
   slot into the same builders.
 - More code than a higher-level proxy library, but each piece is small and
   testable.
-- Risk: the pooled client may lack a control we need (per-request timeouts,
-  cancel on client drop). If so, fall back to a thin pool over
-  `hyper::client::conn`. This is checked by the spike in the M1 plan (P1),
-  which has not been run yet.
+- The pooled client from `hyper-util` is sufficient; the planned fallback (a thin
+  pool over `hyper::client::conn`) is not needed.
+
+## Spike results (P1)
+
+Verified by the forwarding tests in `fast-proxy-dataplane`:
+
+- **Pool reuse:** five sequential requests used one upstream connection.
+- **Timeouts:** the connect timeout is a property of the connector, not of a
+  request, so the client keeps one pool per distinct connect timeout. The
+  response timeout is applied per request with `tokio::time::timeout` (504).
+- **No buffering:** a 64 MiB request body streams through; the first half of a
+  request body reaches the upstream while the client is still sending the
+  second half; the first chunk of a chunked response reaches the client while
+  the upstream body is still open.
+- **Cancellation:** when the client disconnects, the upstream request is
+  dropped within the test's 3 second window.
+- **Framing:** chunked request bodies and `Expect: 100-continue` work.
+
+Not covered: a connect timeout against an unroutable address (only the error
+classification is unit tested), and a memory ceiling check with a body of
+hundreds of MB.

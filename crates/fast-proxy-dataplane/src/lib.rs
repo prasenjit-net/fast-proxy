@@ -7,12 +7,22 @@
 
 mod connections;
 mod forward;
+mod headers;
 mod listener;
 mod pipeline;
 mod request_id;
 mod responses;
 mod server;
+mod trusted_proxies;
+mod upstream_client;
+mod upstream_uri;
 
+#[cfg(test)]
+mod forwarding_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod test_upstream;
 #[cfg(test)]
 mod tests;
 
@@ -21,3 +31,5 @@ pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use responses::FixedResponse;
 pub use server::DataPlane;
+pub use trusted_proxies::{TrustedProxies, TrustedProxyError};
+pub use upstream_client::UpstreamClient;
