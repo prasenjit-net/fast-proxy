@@ -74,12 +74,15 @@ async fn a_dead_backend_is_ejected_after_the_configured_consecutive_failures() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let dead = runtime(&proxy, 0);
 
+    // Each failed attempt is retried on the healthy endpoint, so clients see
+    // no errors while the dead one collects its three strikes.
     let statuses = drive(&proxy, || dead.is_ejected(monotonic_ms())).await;
     assert_eq!(
-        statuses.iter().filter(|s| **s == 502).count(),
+        statuses.len(),
         3,
-        "{statuses:?}"
+        "ejected after exactly three requests: {statuses:?}"
     );
+    assert!(statuses.iter().all(|s| *s == 200), "{statuses:?}");
 
     for _ in 0..10 {
         assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 200);
@@ -120,15 +123,27 @@ async fn a_failed_trial_ejects_again_and_only_one_request_is_risked() {
     drive(&proxy, || dead.is_ejected(monotonic_ms())).await;
 
     tokio::time::sleep(Duration::from_millis(250)).await;
-    let mut failures = 0;
+    let connect_failures = |proxy: &Harness| {
+        proxy
+            .metrics
+            .render()
+            .lines()
+            .filter(|line| line.contains(r#"outcome="connect""#))
+            .filter_map(|line| line.rsplit(' ').next()?.parse::<u64>().ok())
+            .sum::<u64>()
+    };
+    let before = connect_failures(&proxy);
     for _ in 0..10 {
-        if get(proxy.addr, HOST, "/", "").await.status != 200 {
-            failures += 1;
-        }
+        assert_eq!(
+            get(proxy.addr, HOST, "/", "").await.status,
+            200,
+            "retries hide the trial"
+        );
     }
     assert_eq!(
-        failures, 1,
-        "one trial request fails, then the endpoint is out again"
+        connect_failures(&proxy) - before,
+        1,
+        "exactly one trial request was risked"
     );
     assert!(dead.is_ejected(monotonic_ms()));
 }

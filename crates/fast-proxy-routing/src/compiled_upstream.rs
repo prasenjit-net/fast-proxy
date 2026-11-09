@@ -1,4 +1,4 @@
-use fast_proxy_balancing::{Balancer, Candidate, RuntimeRegistry};
+use fast_proxy_balancing::{Balancer, Candidate, RetryBudget, RuntimeRegistry};
 use fast_proxy_model::{
     parse_weight, EndpointAddr, EndpointId, EndpointState, GroupPolicy, UpstreamGroupConfig,
     UpstreamGroupId, MAX_ENDPOINTS_PER_GROUP,
@@ -35,6 +35,8 @@ pub struct CompiledUpstream {
     /// Live state per endpoint, in the same order as `endpoints`.
     pub candidates: Vec<Candidate>,
     pub balancer: Balancer,
+    /// Caps this group's retries (see [`RetryBudget`]).
+    pub retry_budget: RetryBudget,
 }
 
 impl CompiledUpstream {
@@ -83,6 +85,7 @@ impl CompiledUpstream {
             name: group.name.clone(),
             policy: group.policy.clone(),
             balancer: Balancer::new(&group.policy.lb, group.policy.failure, &weights),
+            retry_budget: RetryBudget::new(group.policy.retry_budget),
             endpoints,
             candidates,
         })

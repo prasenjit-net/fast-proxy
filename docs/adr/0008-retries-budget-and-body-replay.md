@@ -1,7 +1,6 @@
 # ADR 0008: retries, retry budget and body replay
 
-Status: accepted for E10 and E11; **E12 (body replay) is provisional** until
-spike G2 reports. Plan reference: M2 E10, E11, E12.
+Status: accepted. Spike G2 confirmed E12 (findings below). Plan reference: M2 E10, E11, E12.
 
 ## Context
 
@@ -17,18 +16,35 @@ never duplicate side effects or amplify an outage.
   body byte was sent. A retry excludes the endpoint that just failed.
 - Per-group retry budget: retries may not exceed 20% of recent requests, with a
   floor of 10 retries per second.
-- Body replay (E12): `Incoming` cannot be cloned. A small lendable body wrapper
-  would let a connect failure reclaim a never-polled body. This depends on the
-  hyper-util client not polling the body before connecting; **spike G2 verifies
-  this**. If it fails, only bodyless requests are retried.
+- Body replay (E12): `Incoming` cannot be cloned and the pooled client takes the
+  body by value, so the data plane keeps the body behind a shared pointer
+  (`BodyOwner`) and gives each attempt a `ReplayBody` view. A request is
+  replayable while no attempt has polled the body; a request with no body is
+  always replayable.
+- Refinement of E10: besides connect failures and idempotent 502/503/504, an
+  idempotent request is also retried when the connection broke after the
+  request was handed over (`reset`). A non-idempotent request is retried only
+  after a connect failure, even if its body was never polled, because hyper does
+  not say whether the head reached the peer.
+- The budget is kept per compiled group, so a configuration change starts it
+  empty (at most ten seconds of history are lost).
 
-## Findings (to be filled in by spike G2)
+## Findings (spike G2, pinned by tests in `replay_body.rs`)
 
-Pending: (a) body not polled before connect, (b) error shape for a reused pooled
-connection closed by the peer, (c) lendable wrapper reclaim behaviour.
+a. **The hyper-util legacy client does not poll the request body before it has
+   a connection.** After a connect failure (`Error::is_connect()` is true) the
+   body is untouched and the next attempt sends all of it.
+b. **A peer that drops the connection after the request was sent** gives an
+   error that is not a connect error, and the body has been polled, so the
+   request is not replayable. A reused pooled connection closed by the peer
+   cannot be provoked deterministically; such failures surface as non-connect
+   errors and are handled by the conservative rule above.
+c. **The shared-pointer wrapper works**: reclaim after a connect failure, no
+   replay after the first poll, an empty body is always replayable.
 
 ## Consequences
 
 - A failing group cannot be hammered by its own retries.
-- Worst case for E12: requests with bodies are not retried; connect failures on
-  bodyless requests still are.
+- Retried requests with bodies are safe: they are sent in full once, or not at
+  all, to an endpoint that never saw them.
+- Upgrades get exactly one attempt.

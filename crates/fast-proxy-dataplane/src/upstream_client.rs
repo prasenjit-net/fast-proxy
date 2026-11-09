@@ -1,39 +1,43 @@
 use std::collections::HashMap;
-use std::error::Error;
-use std::io;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
-use fast_proxy_balancing::{monotonic_ms, record_outcome, InFlightGuard, Outcome, Transition};
-use fast_proxy_routing::build_upstream_uri;
+use fast_proxy_balancing::{
+    monotonic_ms, record_outcome, Candidate, EndpointRuntime, InFlightGuard, Outcome, Transition,
+};
+use fast_proxy_routing::{build_upstream_uri, CompiledEndpoint};
+use fast_proxy_telemetry::{
+    EndpointLabels, Metrics, RetryReason, UpstreamErrorKind, UpstreamOutcome,
+};
 use http::{Request, Response, StatusCode};
-use http_body_util::{BodyExt, Empty};
 use hyper::body::Incoming;
-use hyper::upgrade::OnUpgrade;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use tokio_util::sync::CancellationToken;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
 
-use crate::connections::{ConnectionContext, ConnectionGuard};
+use crate::connections::ConnectionContext;
 use crate::headers::{self, ClientInfo};
+use crate::protocol_switch::{into_client_response, switch_protocols};
+use crate::replay_body::{BodyOwner, ReplayBody};
+use crate::retry_policy::{retry_reason, AttemptFailure};
+use crate::selection::select_endpoint;
 use crate::trusted_proxies::TrustedProxies;
-use crate::{FixedResponse, Forward, ResponseBody, Target};
-use fast_proxy_telemetry::{EndpointLabels, Metrics, UpstreamErrorKind, UpstreamOutcome};
-use std::sync::Arc;
+use crate::upstream_errors::{kind_for, outcome_of_error, outcome_of_status};
+use crate::{FixedResponse, Forward, Forwarded, ResponseBody, Target};
 
-type HttpClient = Client<HttpConnector, Incoming>;
+type HttpClient = Client<HttpConnector, ReplayBody>;
 
 /// How long an unused upstream connection stays pooled.
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Forwards routed requests to their upstream over pooled HTTP/1.1
-/// connections, streaming both bodies without buffering.
+/// connections, streaming both bodies without buffering, and retries
+/// failed attempts on another endpoint within the route's retry policy and
+/// the group's retry budget.
 ///
 /// The connect timeout belongs to the connector, so one client (and pool)
 /// is kept per distinct connect timeout; the response timeout is applied
-/// per request.
+/// per attempt.
 pub struct UpstreamClient {
     trusted_proxies: TrustedProxies,
     metrics: Arc<Metrics>,
@@ -56,9 +60,7 @@ impl UpstreamClient {
             .or_insert_with(|| build_client(connect_timeout))
             .clone()
     }
-}
 
-impl UpstreamClient {
     /// Counts an upstream failure and builds the matching 502/504 response.
     fn failed(&self, target: &Target<'_>, kind: UpstreamErrorKind) -> Response<ResponseBody> {
         self.metrics
@@ -71,9 +73,9 @@ impl UpstreamClient {
     }
 }
 
-/// Clears a half-open trial claim when a request ends without a verdict
+/// Clears a half-open trial claim when an attempt ends without a verdict
 /// (the client left mid-request), so the endpoint is not stuck waiting.
-struct TrialRelease<'a>(&'a fast_proxy_balancing::EndpointRuntime);
+struct TrialRelease<'a>(&'a EndpointRuntime);
 
 impl Drop for TrialRelease<'_> {
     fn drop(&mut self) {
@@ -81,12 +83,26 @@ impl Drop for TrialRelease<'_> {
     }
 }
 
+/// The endpoint one attempt goes to.
+#[derive(Clone, Copy)]
+struct Chosen<'a> {
+    index: usize,
+    endpoint: &'a CompiledEndpoint,
+    candidate: &'a Candidate,
+}
+
+/// How one attempt ended.
+enum AttemptEnd {
+    Response(Response<Incoming>),
+    Failed(UpstreamErrorKind),
+}
+
 impl UpstreamClient {
     /// Feeds one finished attempt to the metrics and to passive health, and
     /// logs the transition it caused (an ejection or a recovery).
-    fn report(&self, target: &Target<'_>, outcome: UpstreamOutcome) {
+    fn report(&self, target: &Target<'_>, chosen: Chosen<'_>, outcome: UpstreamOutcome) {
         let upstream = &target.route.upstream;
-        let addr = target.endpoint.addr.to_string();
+        let addr = chosen.endpoint.addr.to_string();
         let labels = EndpointLabels {
             subsystem: target.subsystem.name.as_str(),
             upstream: &upstream.name,
@@ -99,7 +115,7 @@ impl UpstreamClient {
         };
         let transition = record_outcome(
             &upstream.candidates,
-            target.endpoint_index,
+            chosen.index,
             verdict,
             &upstream.policy.passive,
             monotonic_ms(),
@@ -118,6 +134,92 @@ impl UpstreamClient {
             None => {}
         }
     }
+
+    /// Sends one attempt to `chosen` and reports how it went.
+    async fn attempt(
+        &self,
+        client: &HttpClient,
+        request: Request<ReplayBody>,
+        target: &Target<'_>,
+        chosen: Chosen<'_>,
+    ) -> AttemptEnd {
+        let _trial = TrialRelease(&chosen.candidate.runtime);
+        let sent = Instant::now();
+        let route = target.route;
+        let outcome = tokio::time::timeout(route.response_timeout, client.request(request)).await;
+        match outcome {
+            Err(_elapsed) => {
+                tracing::warn!(upstream = %chosen.endpoint.addr, "upstream response timed out");
+                self.report(target, chosen, UpstreamOutcome::Timeout);
+                AttemptEnd::Failed(UpstreamErrorKind::Timeout)
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(upstream = %chosen.endpoint.addr, "upstream request failed: {err}");
+                let kind = kind_for(err.is_connect(), &err);
+                self.report(target, chosen, outcome_of_error(kind));
+                AttemptEnd::Failed(kind)
+            }
+            Ok(Ok(response)) => {
+                let micros = u64::try_from(sent.elapsed().as_micros()).unwrap_or(u64::MAX);
+                chosen
+                    .candidate
+                    .runtime
+                    .record_latency(micros, monotonic_ms());
+                self.report(target, chosen, outcome_of_status(response.status()));
+                AttemptEnd::Response(response)
+            }
+        }
+    }
+
+    /// Decides whether to try again after `failed`, and where: the retry
+    /// rules, then the group's budget, then another endpoint.
+    fn next_endpoint<'a>(
+        &self,
+        target: &Target<'a>,
+        head: &http::request::Parts,
+        failed: &FailedAttempt<'_>,
+    ) -> Option<Chosen<'a>> {
+        let reason: RetryReason = retry_reason(
+            failed.policy,
+            &head.method,
+            failed.failure,
+            failed.replayable,
+            failed.attempts_made,
+        )?;
+        let upstream = &target.route.upstream;
+        let subsystem = target.subsystem.name.as_str();
+        if !upstream.retry_budget.try_acquire_retry(monotonic_ms()) {
+            self.metrics
+                .retry_budget_exhausted(subsystem, &upstream.name);
+            return None;
+        }
+        let selection = select_endpoint(
+            upstream,
+            &head.headers,
+            target.client_addr.ip(),
+            Some(failed.index),
+        )?;
+        if selection.panic {
+            self.metrics.upstream_panic(subsystem, &upstream.name);
+        }
+        self.metrics
+            .upstream_retry(subsystem, &upstream.name, reason);
+        Some(Chosen {
+            index: selection.index,
+            endpoint: &upstream.endpoints[selection.index],
+            candidate: &upstream.candidates[selection.index],
+        })
+    }
+}
+
+/// What the retry rules need to know about a failed attempt.
+struct FailedAttempt<'a> {
+    index: usize,
+    failure: AttemptFailure,
+    /// The whole request body can still be sent again.
+    replayable: bool,
+    attempts_made: u32,
+    policy: &'a fast_proxy_model::RetryPolicy,
 }
 
 fn build_client(connect_timeout: Duration) -> HttpClient {
@@ -127,9 +229,38 @@ fn build_client(connect_timeout: Duration) -> HttpClient {
     Client::builder(TokioExecutor::new())
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .pool_timer(TokioTimer::new())
-        // Retries are an M2 feature; a silent retry could replay a request.
+        // Retrying is done by the attempt loop, under the route's policy and
+        // the group's budget; a silent retry here could replay a request.
         .retry_canceled_requests(false)
         .build(connector)
+}
+
+/// The request for one attempt: the shared head with `Host` and URI set for
+/// the chosen endpoint, and a fresh view of the body.
+fn build_attempt(
+    head: &http::request::Parts,
+    target: &Target<'_>,
+    chosen: Chosen<'_>,
+    body: ReplayBody,
+) -> Option<Request<ReplayBody>> {
+    let uri = build_upstream_uri(
+        target.route,
+        &chosen.endpoint.addr,
+        &head.uri,
+        target.consumed_prefix_len,
+    )?;
+    let mut request = Request::new(body);
+    let mut headers = head.headers.clone();
+    headers::apply_host(
+        &mut headers,
+        target.route.preserve_host,
+        &chosen.endpoint.addr.to_string(),
+    );
+    *request.method_mut() = head.method.clone();
+    *request.version_mut() = head.version;
+    *request.headers_mut() = headers;
+    *request.uri_mut() = uri;
+    Some(request)
 }
 
 impl Forward for UpstreamClient {
@@ -137,17 +268,9 @@ impl Forward for UpstreamClient {
         &'a self,
         mut request: Request<Incoming>,
         target: Target<'a>,
-    ) -> Response<ResponseBody> {
+    ) -> Forwarded {
         let route = target.route;
-        let Some(uri) = build_upstream_uri(
-            route,
-            &target.endpoint.addr,
-            request.uri(),
-            target.consumed_prefix_len,
-        ) else {
-            tracing::warn!(route = route.id.0, "cannot build an upstream URI");
-            return self.failed(&target, UpstreamErrorKind::Other);
-        };
+        let upstream = &route.upstream;
 
         // A protocol switch needs the client's side of the socket, which is
         // only available before the request is handed to the upstream client.
@@ -155,253 +278,127 @@ impl Forward for UpstreamClient {
         let context = request.extensions().get::<ConnectionContext>().cloned();
         let client_upgrade = upgrading.then(|| hyper::upgrade::on(&mut request));
 
-        let headers = request.headers_mut();
+        let (mut head, body) = request.into_parts();
         if upgrading {
-            headers::strip_hop_by_hop_keeping_upgrade(headers);
+            headers::strip_hop_by_hop_keeping_upgrade(&mut head.headers);
         } else {
-            headers::strip_hop_by_hop(headers);
+            headers::strip_hop_by_hop(&mut head.headers);
         }
         headers::apply_forwarded(
-            headers,
+            &mut head.headers,
             &ClientInfo {
                 ip: target.client_addr.ip(),
                 trusted: self.trusted_proxies.contains(target.client_addr.ip()),
                 scheme: "http",
             },
         );
-        headers::apply_host(
-            headers,
-            route.preserve_host,
-            &target.endpoint.addr.to_string(),
-        );
-        headers::apply_request_id(headers, target.request_id);
-        *request.uri_mut() = uri;
+        headers::apply_request_id(&mut head.headers, target.request_id);
 
+        let owner = BodyOwner::new(body);
         let client = self.client_for(route.connect_timeout);
-        let _trial = TrialRelease(&target.candidate.runtime);
-        let sent = Instant::now();
-        let outcome = tokio::time::timeout(route.response_timeout, client.request(request)).await;
-        match outcome {
-            Err(_elapsed) => {
-                tracing::warn!(upstream = %target.endpoint.addr, "upstream response timed out");
-                self.report(&target, UpstreamOutcome::Timeout);
-                self.failed(&target, UpstreamErrorKind::Timeout)
+        // A tunnel cannot be replayed, so an upgrade gets exactly one attempt.
+        let policy = if upgrading {
+            fast_proxy_model::RetryPolicy {
+                max_attempts: 1,
+                ..route.retry
             }
-            Ok(Err(err)) => {
-                tracing::warn!(upstream = %target.endpoint.addr, "upstream request failed: {err}");
-                let kind = kind_for(err.is_connect(), &err);
-                self.report(&target, outcome_of_error(kind));
-                self.failed(&target, kind)
-            }
-            Ok(Ok(response)) => {
-                let micros = u64::try_from(sent.elapsed().as_micros()).unwrap_or(u64::MAX);
-                target
-                    .candidate
-                    .runtime
-                    .record_latency(micros, monotonic_ms());
-                self.report(&target, outcome_of_status(response.status()));
-                match client_upgrade {
-                    Some(client_upgrade)
-                        if response.status() == StatusCode::SWITCHING_PROTOCOLS =>
-                    {
-                        let tunnel = target.candidate.runtime.track();
-                        switch_protocols(response, client_upgrade, context, tunnel)
+        } else {
+            route.retry
+        };
+        upstream.retry_budget.record_request(monotonic_ms());
+
+        let mut chosen = Chosen {
+            index: target.endpoint_index,
+            endpoint: target.endpoint,
+            candidate: target.candidate,
+        };
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let in_flight = chosen.candidate.runtime.track();
+            let Some(attempt) = build_attempt(&head, &target, chosen, owner.attempt()) else {
+                tracing::warn!(route = route.id.0, "cannot build an upstream URI");
+                let response = self.failed(&target, UpstreamErrorKind::Other);
+                return finished(response, chosen.index, attempts - 1, None);
+            };
+            let failure = match self.attempt(&client, attempt, &target, chosen).await {
+                AttemptEnd::Response(response) if !is_bad_status(response.status()) => {
+                    let response = match client_upgrade {
+                        Some(client_upgrade)
+                            if response.status() == StatusCode::SWITCHING_PROTOCOLS =>
+                        {
+                            let tunnel = chosen.candidate.runtime.track();
+                            switch_protocols(response, client_upgrade, context, tunnel)
+                        }
+                        _ => into_client_response(response),
+                    };
+                    return finished(response, chosen.index, attempts, Some(in_flight));
+                }
+                AttemptEnd::Response(response) => {
+                    let failed = FailedAttempt {
+                        index: chosen.index,
+                        failure: AttemptFailure::BadStatus,
+                        replayable: owner.is_replayable(),
+                        attempts_made: attempts,
+                        policy: &policy,
+                    };
+                    match self.next_endpoint(&target, &head, &failed) {
+                        Some(next) => {
+                            chosen = next;
+                            continue;
+                        }
+                        None => {
+                            let response = into_client_response(response);
+                            return finished(response, chosen.index, attempts, Some(in_flight));
+                        }
                     }
-                    _ => into_client_response(response),
+                }
+                AttemptEnd::Failed(kind) => kind,
+            };
+            let attempt_failure = match failure {
+                UpstreamErrorKind::Connect => AttemptFailure::Connect,
+                UpstreamErrorKind::Timeout => AttemptFailure::Timeout,
+                UpstreamErrorKind::Other => AttemptFailure::Reset,
+            };
+            let failed = FailedAttempt {
+                index: chosen.index,
+                failure: attempt_failure,
+                replayable: owner.is_replayable(),
+                attempts_made: attempts,
+                policy: &policy,
+            };
+            match self.next_endpoint(&target, &head, &failed) {
+                Some(next) => chosen = next,
+                None => {
+                    let response = self.failed(&target, failure);
+                    return finished(response, chosen.index, attempts, None);
                 }
             }
         }
     }
 }
 
-/// A 502, 503 or 504 from the upstream says the endpoint is unwell; every
-/// other status, 500 included, is the application talking.
-fn outcome_of_status(status: StatusCode) -> UpstreamOutcome {
-    match status {
-        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
-            UpstreamOutcome::BadStatus
-        }
-        _ => UpstreamOutcome::Success,
+fn is_bad_status(status: StatusCode) -> bool {
+    outcome_of_status(status) == UpstreamOutcome::BadStatus
+}
+
+fn finished(
+    response: Response<ResponseBody>,
+    endpoint_index: usize,
+    attempts: u32,
+    in_flight: Option<InFlightGuard>,
+) -> Forwarded {
+    Forwarded {
+        response,
+        endpoint_index,
+        attempts,
+        in_flight,
     }
-}
-
-fn outcome_of_error(kind: UpstreamErrorKind) -> UpstreamOutcome {
-    match kind {
-        UpstreamErrorKind::Connect => UpstreamOutcome::Connect,
-        UpstreamErrorKind::Timeout => UpstreamOutcome::Timeout,
-        UpstreamErrorKind::Other => UpstreamOutcome::Other,
-    }
-}
-
-/// Streams the upstream response to the client, minus hop-by-hop headers.
-fn into_client_response(response: Response<Incoming>) -> Response<ResponseBody> {
-    let (mut parts, body) = response.into_parts();
-    headers::strip_hop_by_hop(&mut parts.headers);
-    let body = body
-        .map_err(|err| Box::new(err) as Box<dyn Error + Send + Sync>)
-        .boxed();
-    Response::from_parts(parts, body)
-}
-
-/// The upstream agreed to switch protocols: answer the client with the same
-/// `101`, then relay bytes both ways until either side closes (or the drain
-/// deadline passes).
-fn switch_protocols(
-    mut response: Response<Incoming>,
-    client_upgrade: OnUpgrade,
-    context: Option<ConnectionContext>,
-    tunnel: InFlightGuard,
-) -> Response<ResponseBody> {
-    let upstream_upgrade = hyper::upgrade::on(&mut response);
-    let (mut parts, _) = response.into_parts();
-    headers::strip_hop_by_hop_keeping_upgrade(&mut parts.headers);
-
-    let (guard, force_close) = match context {
-        Some(context) => (Some(context.guard), context.force_close),
-        None => (None, CancellationToken::new()),
-    };
-    tokio::spawn(relay(
-        client_upgrade,
-        upstream_upgrade,
-        (guard, tunnel),
-        force_close,
-    ));
-
-    let empty = Empty::<Bytes>::new()
-        .map_err(|never| match never {})
-        .boxed();
-    Response::from_parts(parts, empty)
-}
-
-/// Copies bytes between the two upgraded connections. The guard keeps the
-/// tunnel counted as an open connection, and as in flight on its endpoint,
-/// for as long as it lives.
-async fn relay(
-    client: OnUpgrade,
-    upstream: OnUpgrade,
-    _guards: (Option<std::sync::Arc<ConnectionGuard>>, InFlightGuard),
-    force_close: CancellationToken,
-) {
-    let (client, upstream) = tokio::join!(client, upstream);
-    let (Ok(client), Ok(upstream)) = (client, upstream) else {
-        tracing::debug!("protocol switch was not completed by both sides");
-        return;
-    };
-    let (mut client, mut upstream) = (TokioIo::new(client), TokioIo::new(upstream));
-    tokio::select! {
-        result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
-            if let Err(err) = result {
-                tracing::debug!("upgraded connection ended with error: {err}");
-            }
-        }
-        () = force_close.cancelled() => {}
-    }
-}
-
-/// Classifies a failed upstream request: anything caused by a timeout is a
-/// timeout (504); otherwise a failure to connect is `Connect` and the rest
-/// is `Other` (both 502).
-fn kind_for(is_connect: bool, err: &(dyn Error + 'static)) -> UpstreamErrorKind {
-    if has_timeout_cause(err) {
-        UpstreamErrorKind::Timeout
-    } else if is_connect {
-        UpstreamErrorKind::Connect
-    } else {
-        UpstreamErrorKind::Other
-    }
-}
-
-fn has_timeout_cause(err: &(dyn Error + 'static)) -> bool {
-    let mut current = Some(err);
-    while let Some(cause) = current {
-        if let Some(io_err) = cause.downcast_ref::<io::Error>() {
-            if io_err.kind() == io::ErrorKind::TimedOut {
-                return true;
-            }
-        }
-        current = cause.source();
-    }
-    false
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fmt;
-
     use super::*;
-
-    #[derive(Debug)]
-    struct Wrapper(Box<dyn Error + Send + Sync>);
-
-    impl fmt::Display for Wrapper {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "wrapper")
-        }
-    }
-
-    impl Error for Wrapper {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            Some(self.0.as_ref())
-        }
-    }
-
-    #[test]
-    fn a_timed_out_cause_anywhere_in_the_chain_is_a_timeout() {
-        let timed_out = io::Error::new(io::ErrorKind::TimedOut, "deadline");
-        let nested = Wrapper(Box::new(Wrapper(Box::new(timed_out))));
-        assert_eq!(kind_for(false, &nested), UpstreamErrorKind::Timeout);
-        // A connect that timed out is still a timeout, not a connect error.
-        assert_eq!(kind_for(true, &nested), UpstreamErrorKind::Timeout);
-    }
-
-    #[test]
-    fn a_failed_connect_is_a_connect_error() {
-        let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
-        assert_eq!(
-            kind_for(true, &Wrapper(Box::new(refused))),
-            UpstreamErrorKind::Connect
-        );
-    }
-
-    #[test]
-    fn other_failures_are_other() {
-        assert_eq!(
-            kind_for(false, &io::Error::other("boom")),
-            UpstreamErrorKind::Other
-        );
-    }
-
-    #[test]
-    fn only_502_503_and_504_count_against_an_endpoint() {
-        for status in [502, 503, 504] {
-            let status = StatusCode::from_u16(status).unwrap();
-            assert_eq!(outcome_of_status(status), UpstreamOutcome::BadStatus);
-        }
-        for status in [200, 301, 404, 429, 500, 501] {
-            let status = StatusCode::from_u16(status).unwrap();
-            assert_eq!(
-                outcome_of_status(status),
-                UpstreamOutcome::Success,
-                "{status}"
-            );
-        }
-    }
-
-    #[test]
-    fn error_kinds_map_to_their_outcomes() {
-        assert_eq!(
-            outcome_of_error(UpstreamErrorKind::Connect),
-            UpstreamOutcome::Connect
-        );
-        assert_eq!(
-            outcome_of_error(UpstreamErrorKind::Timeout),
-            UpstreamOutcome::Timeout
-        );
-        assert_eq!(
-            outcome_of_error(UpstreamErrorKind::Other),
-            UpstreamOutcome::Other
-        );
-    }
 
     #[test]
     fn one_client_is_kept_per_distinct_connect_timeout() {

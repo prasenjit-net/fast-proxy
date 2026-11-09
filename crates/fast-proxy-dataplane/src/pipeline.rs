@@ -107,9 +107,6 @@ impl<F: Forward> RequestPipeline<F> {
                                 .metrics
                                 .upstream_panic(subsystem.name.as_str(), &upstream.name);
                         }
-                        in_flight = Some(candidate.runtime.track());
-                        fields.upstream = Some(endpoint.addr.to_string());
-                        fields.attempts = 1;
                         let target = Target {
                             subsystem,
                             route,
@@ -122,8 +119,16 @@ impl<F: Forward> RequestPipeline<F> {
                             wants_json,
                         };
                         let forwarding = Instant::now();
-                        let mut response = self.forwarder.forward(request, target).await;
+                        let forwarded = self.forwarder.forward(request, target).await;
                         fields.upstream_time = Some(forwarding.elapsed());
+                        fields.upstream = Some(
+                            upstream.endpoints[forwarded.endpoint_index]
+                                .addr
+                                .to_string(),
+                        );
+                        fields.attempts = forwarded.attempts;
+                        in_flight = forwarded.in_flight;
+                        let mut response = forwarded.response;
                         response
                             .headers_mut()
                             .insert(REQUEST_ID, header_value(&request_id));

@@ -16,6 +16,7 @@ mod clock;
 mod hashing;
 mod passive;
 mod registry;
+mod retry_budget;
 mod rng;
 mod runtime;
 
@@ -25,6 +26,7 @@ pub use clock::monotonic_ms;
 pub use hashing::{hash_bytes, hash_ip};
 pub use passive::{record_outcome, Outcome, Transition};
 pub use registry::RuntimeRegistry;
+pub use retry_budget::RetryBudget;
 pub use rng::Rng;
 pub use runtime::{EndpointRuntime, InFlightGuard, RuntimeStatus};
 

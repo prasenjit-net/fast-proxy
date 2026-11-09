@@ -9,6 +9,7 @@ use prometheus::{IntCounterVec, Opts, Registry};
 const ENDPOINT_REQUEST_LABELS: [&str; 4] = ["subsystem", "upstream", "endpoint", "outcome"];
 const ENDPOINT_LABELS: [&str; 3] = ["subsystem", "upstream", "endpoint"];
 const GROUP_LABELS: [&str; 2] = ["subsystem", "upstream"];
+const RETRY_LABELS: [&str; 3] = ["subsystem", "upstream", "reason"];
 const REGISTRATION: &str = "static metric definitions register on a fresh registry";
 
 /// How a request to an endpoint turned out, as far as health is concerned.
@@ -38,6 +39,30 @@ impl UpstreamOutcome {
     }
 }
 
+/// Why a request was tried again on another endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryReason {
+    /// The connection could not be established.
+    Connect,
+    /// The response timed out (retried only when the route opts in).
+    Timeout,
+    /// The connection broke after the request was sent.
+    Reset,
+    /// The upstream answered 502, 503 or 504.
+    BadStatus,
+}
+
+impl RetryReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Timeout => "timeout",
+            Self::Reset => "reset",
+            Self::BadStatus => "bad_status",
+        }
+    }
+}
+
 /// Identifies one endpoint in metric labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EndpointLabels<'a> {
@@ -51,6 +76,8 @@ pub(crate) struct UpstreamMetrics {
     requests: IntCounterVec,
     ejections: IntCounterVec,
     panics: IntCounterVec,
+    retries: IntCounterVec,
+    budget_exhausted: IntCounterVec,
 }
 
 fn counter(registry: &Registry, name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
@@ -76,6 +103,18 @@ impl UpstreamMetrics {
                 "Times an endpoint was taken out of rotation after repeated failures",
                 &ENDPOINT_LABELS,
             ),
+            retries: counter(
+                registry,
+                "fastproxy_upstream_retries_total",
+                "Requests tried again on another endpoint, by reason",
+                &["subsystem", "upstream", "reason"],
+            ),
+            budget_exhausted: counter(
+                registry,
+                "fastproxy_retry_budget_exhausted_total",
+                "Retries refused because the group's retry budget was spent",
+                &GROUP_LABELS,
+            ),
             panics: counter(
                 registry,
                 "fastproxy_upstream_panic_total",
@@ -99,6 +138,18 @@ impl UpstreamMetrics {
     pub(crate) fn ejected(&self, endpoint: EndpointLabels<'_>) {
         self.ejections
             .with_label_values(&[endpoint.subsystem, endpoint.upstream, endpoint.endpoint])
+            .inc();
+    }
+
+    pub(crate) fn retry(&self, subsystem: &str, upstream: &str, reason: RetryReason) {
+        self.retries
+            .with_label_values(&[subsystem, upstream, reason.label()])
+            .inc();
+    }
+
+    pub(crate) fn budget_exhausted(&self, subsystem: &str, upstream: &str) {
+        self.budget_exhausted
+            .with_label_values(&[subsystem, upstream])
             .inc();
     }
 
@@ -128,10 +179,17 @@ impl UpstreamMetrics {
                 }
             }
         }
-        for labels in label_sets(&self.panics, &GROUP_LABELS) {
-            if !live_groups.contains(&(labels[0].as_str(), labels[1].as_str())) {
-                let values: Vec<&str> = labels.iter().map(String::as_str).collect();
-                let _ = self.panics.remove_label_values(&values);
+        let per_group = [
+            (&self.panics, &GROUP_LABELS[..]),
+            (&self.budget_exhausted, &GROUP_LABELS[..]),
+            (&self.retries, &RETRY_LABELS[..]),
+        ];
+        for (vec, names) in per_group {
+            for labels in label_sets(vec, names) {
+                if !live_groups.contains(&(labels[0].as_str(), labels[1].as_str())) {
+                    let values: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let _ = vec.remove_label_values(&values);
+                }
             }
         }
     }
@@ -197,6 +255,33 @@ mod tests {
         ] {
             assert!(text.contains(expected), "missing {expected}\n{text}");
         }
+    }
+
+    #[test]
+    fn retries_and_budget_refusals_are_counted_and_their_series_deleted_with_the_group() {
+        let metrics = Metrics::new();
+        metrics.upstream_retry("shop", "backend", RetryReason::Connect);
+        metrics.upstream_retry("shop", "backend", RetryReason::BadStatus);
+        metrics.retry_budget_exhausted("shop", "backend");
+        metrics.upstream_retry("shop", "gone", RetryReason::Reset);
+        metrics.retry_budget_exhausted("shop", "gone");
+        let text = metrics.render();
+        for expected in [
+            r#"fastproxy_upstream_retries_total{reason="connect",subsystem="shop",upstream="backend"} 1"#,
+            r#"fastproxy_upstream_retries_total{reason="bad_status",subsystem="shop",upstream="backend"} 1"#,
+            r#"fastproxy_retry_budget_exhausted_total{subsystem="shop",upstream="backend"} 1"#,
+        ] {
+            assert!(text.contains(expected), "missing {expected}\n{text}");
+        }
+        for reason in [RetryReason::Timeout, RetryReason::Reset] {
+            metrics.upstream_retry("shop", "backend", reason);
+        }
+        assert!(metrics.render().contains(r#"reason="timeout""#));
+
+        metrics.retain_upstream_series(&live(&["a:1"]));
+        let text = metrics.render();
+        assert!(!text.contains(r#"upstream="gone""#), "{text}");
+        assert!(text.contains(r#"upstream="backend""#));
     }
 
     #[test]

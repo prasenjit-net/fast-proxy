@@ -9,4 +9,4 @@ pub use metrics::{
     ActiveRequest, Counts, Metrics, ReloadOutcome, TrafficTotals, UpstreamErrorKind, NO_ROUTE,
     UNMATCHED_SUBSYSTEM,
 };
-pub use upstream_metrics::{EndpointLabels, UpstreamOutcome};
+pub use upstream_metrics::{EndpointLabels, RetryReason, UpstreamOutcome};

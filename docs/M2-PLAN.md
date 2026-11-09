@@ -289,7 +289,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   0007 health and ejection (E6, E7, E15), 0008 retries, budget and body replay
   (E10-E12).
   *Done when:* the ADRs are merged and no **(confirm)** item is open.
-- [ ] **G2 (M) Spike: request body replay and pooled-connection failures.**
+- [x] **G2 (M) Spike: request body replay and pooled-connection failures.**
   Verify with a throwaway test: (a) the hyper-util legacy client does **not**
   poll the request body before a connection is established, so a connect
   failure leaves a never-polled body reclaimable; (b) what error a request gets
@@ -297,7 +297,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   was already polled; (c) that a "lendable" body wrapper works (reclaim after a
   connect failure, no reclaim after the first poll).
   *Done when:* findings are in ADR 0008 and E12 is confirmed or reduced to
-  "bodyless requests only".
+  "bodyless requests only". (Confirmed in PR7.)
 - [x] **G3 (S) Decide the defaults table.** Turn E4-E11 into the documented
   defaults (section 5 and the admin docs) once confirmed; this is the single
   source the model validation and UI forms use.
@@ -416,7 +416,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   picks counted.
   *Done when:* tests cover all-unhealthy with each policy, and with all
   endpoints draining or disabled (always 503, never panic mode).
-- [ ] **D5 (L) Retries.** Attempt loop with endpoint exclusion, the idempotency
+- [x] **D5 (L) Retries.** Attempt loop with endpoint exclusion, the idempotency
   and status rules (E10), the per-group budget (E11), and body replay as decided
   in G2; never for upgrades or after body bytes were sent.
   *Done when:* tests show a `GET` retried on `503`, a `POST` retried only on
@@ -449,7 +449,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream T: Telemetry
 
-- [~] **T1 (M) Upstream metrics.** (done in PR6: `upstream_requests_total` by outcome, `endpoint_ejections_total`, `upstream_panic_total`, series deleted for removed endpoints; still to come: `endpoint_healthy`, `in_flight`, `retries_total`, `retry_budget_exhausted_total`, `health_checks_total`) `fastproxy_upstream_endpoint_healthy`,
+- [~] **T1 (M) Upstream metrics.** (done in PR6: `upstream_requests_total` by outcome, `endpoint_ejections_total`, `upstream_panic_total`, series deleted for removed endpoints; PR7 adds `upstream_retries_total` and `retry_budget_exhausted_total`; still to come: `endpoint_healthy`, `in_flight`, `health_checks_total`) `fastproxy_upstream_endpoint_healthy`,
   `..._in_flight`, `fastproxy_upstream_requests_total` (by outcome),
   `fastproxy_upstream_retries_total` (by reason),
   `fastproxy_retry_budget_exhausted_total`, `fastproxy_health_checks_total`,

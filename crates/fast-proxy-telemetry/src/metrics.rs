@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::upstream_metrics::{EndpointLabels, UpstreamMetrics, UpstreamOutcome};
+use crate::upstream_metrics::{EndpointLabels, RetryReason, UpstreamMetrics, UpstreamOutcome};
 use prometheus::{
     Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
 };
@@ -191,6 +191,16 @@ impl Metrics {
     /// Counts one ejection of an endpoint.
     pub fn endpoint_ejected(&self, endpoint: EndpointLabels<'_>) {
         self.upstream.ejected(endpoint);
+    }
+
+    /// Counts one retry of a request on another endpoint.
+    pub fn upstream_retry(&self, subsystem: &str, upstream: &str, reason: RetryReason) {
+        self.upstream.retry(subsystem, upstream, reason);
+    }
+
+    /// Counts a retry refused because the group's budget is spent.
+    pub fn retry_budget_exhausted(&self, subsystem: &str, upstream: &str) {
+        self.upstream.budget_exhausted(subsystem, upstream);
     }
 
     /// Counts a request served in panic mode by an upstream group.
