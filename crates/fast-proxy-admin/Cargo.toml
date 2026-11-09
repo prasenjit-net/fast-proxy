@@ -1,0 +1,26 @@
+[package]
+name = "fast-proxy-admin"
+version = "0.0.0"
+edition = "2021"
+description = "Axum admin plane for fast-proxy: REST API, WebSocket push, and the embedded UI"
+publish = false
+
+[dependencies]
+fast-proxy-config-service = { path = "../fast-proxy-config-service" }
+fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-routing = { path = "../fast-proxy-routing" }
+fast-proxy-store = { path = "../fast-proxy-store" }
+fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+rust-embed = "8"
+mime_guess = "2"
+
+[dev-dependencies]
+tower = { workspace = true }
+http-body-util = { workspace = true }

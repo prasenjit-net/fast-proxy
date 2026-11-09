@@ -4,25 +4,84 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). It currently sits on a single-binary fullstack scaffold:
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestone 1 is complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI. TLS, load balancing, health checks, ACME and maintenance mode are the next milestones.
 
-- Rust backend using Axum, Tokio, Clap, Serde, Tracing, and `rust-embed`.
+- Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
 - The frontend build output is embedded into the Rust binary from `ui/dist`.
+- Design and plans are in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `adr/`).
 
 ## Repository Layout
 
-- `src/main.rs` wires CLI parsing, configuration, logging, application state, routes, and server startup.
-- `src/config.rs` defines TOML configuration and CLI overrides.
-- `src/error.rs` defines the shared API error envelope.
-- `src/static_assets.rs` serves embedded SPA assets and fallback routing.
-- `src/routes/` contains REST and WebSocket route handlers.
-- `src/services/` contains metrics, task storage, and event broadcasting.
-- `ui/src/lib/api.ts` is the typed frontend API client.
+Cargo workspace; the root package is the `fast-proxy` binary.
+
+- `src/main.rs` wires CLI parsing, configuration, and logging; `src/startup.rs`
+  assembles the store, config service, data plane, and admin plane.
+- `src/config/` defines the TOML configuration (`[data_plane]`, `[admin]`, `[logging]`, `[ui]`) and its validation; `src/cli.rs` defines the CLI overrides.
+- `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs`, `api/` (one
+  file per resource: subsystems, hosts, upstreams, routes), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
+- `crates/fast-proxy-telemetry/` holds `Metrics` (Prometheus registry, the single
+  source for `/metrics` and the live traffic stats) and the `AccessLog`
+  (non-blocking; `flush()` at shutdown). Metric labels must come only from
+  config names, never raw hosts or paths.
+- `crates/fast-proxy-model/` holds validated domain types (`HostPattern`,
+  `RoutePrefix`, `EndpointAddr`, ...) and the `Config` tree; no I/O.
+- `crates/fast-proxy-routing/` compiles a `Config` into an immutable `Snapshot`
+  (host and route matchers) shared through `SnapshotHolder`; also owns
+  `build_upstream_uri` (path rewriting), used by both the data plane and the
+  admin resolver so they can never disagree. No I/O.
+- `crates/fast-proxy-store/` is SQLite persistence: `Database` (sync core, all
+  writes via `Database::write`), `Store` (async handle on a dedicated thread),
+  `repository/` (one file per resource), `revision/`. The data plane must never
+  use it.
+- `crates/fast-proxy-config-service/` is the only writer: `ConfigService::apply`
+  validates (compiles) a change, persists it, swaps the live `Snapshot`, and
+  broadcasts `ConfigChanged`. All admin writes must go through it.
+- `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
+  `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
+  (fixed 404/503/502/504), `upstream_client` (pooled forwarding, protocol
+  upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
+  connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
+  snapshots only and never depends on the store.
+- `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
+  curl walkthrough (keep it working when the API changes).
+- `tests/` holds end-to-end tests that run the real binary; shared helpers (spawning
+  a configured proxy, backends, a tiny HTTP client) are in `tests/common/mod.rs`.
+  Tests that deliver real signals are `#[cfg(unix)]`.
+- `docs/benchmarks.md` records the performance baseline and how to reproduce it
+  (measured with `oha` against the `bench_backend` example in the data plane crate).
+- `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,
+  `types.ts`, `api.ts` one function per endpoint), `validation.ts` (client-side
+  checks that use the server's camelCase field names), and `navigation.ts`.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
-- `ui/src/components/` contains reusable UI components.
+- `ui/src/components/` contains reusable UI components; `forms/` has one form per
+  resource and `subsystem/` the detail page's sections.
 - `ui/src/pages/` contains route pages.
 - `ui/src/styles/index.css` contains Tailwind entrypoint and theme tokens.
+
+## Architecture rules
+
+These invariants hold across the codebase; do not break them without an ADR in `docs/adr/`.
+
+- **The data plane never touches the database.** It only reads the compiled
+  `Snapshot` through `SnapshotHolder`. `fast-proxy-dataplane` must not depend on
+  `fast-proxy-store`.
+- **All configuration writes go through `ConfigService::apply`** (mutate in a
+  transaction, compile the would-be configuration as the validation, commit with
+  a revision, swap the snapshot). Never write to the store or swap a snapshot
+  from anywhere else.
+- **`model` and `routing` are pure** (no I/O). Cross-table rules are checked by
+  `compile`; field-level rules by the `parse` constructors in `model`.
+- **A request loads the snapshot once** and uses it to the end.
+- **Configuration is split:** `config.toml` is process settings only (restart to
+  change); subsystems, hosts, upstreams and routes are in the database.
+- **Metric labels come only from config names** (subsystem name, route prefix,
+  `_unmatched`/`_none`), never raw hosts or paths.
+- **The URL rewrite lives in `fast-proxy-routing`** (`build_upstream_uri`) so the
+  proxy and the admin resolver cannot disagree.
+- **API errors never leak paths or storage detail**; the detail goes to the log.
+- **The admin plane has no authentication until M5**; keep it on loopback.
 
 ## Development Rules
 
@@ -34,7 +93,9 @@ These rules are set by the project owner and apply to every session.
   done, stop and report. The owner does a manual check first, then asks for the
   commit and push.
 - Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`). Keep them
-  current: tick tasks as they land and record decisions.
+  current: tick tasks as they land and record decisions. Start a milestone by
+  writing its `docs/Mn-PLAN.md`; record new design decisions as an ADR in
+  `docs/adr/` and in the ROADMAP decision log.
 
 ### Design and structure
 
@@ -68,6 +129,14 @@ These rules are set by the project owner and apply to every session.
   `cargo llvm-cov`, and report the number when finishing a task. Do not lower
   coverage to ship a change.
 - Run the checks listed under Testing Expectations before reporting a task done.
+- **Tests must pass on Linux, macOS and Windows** (CI runs all three). Do not
+  shell out to Unix commands (`kill`, `sh`) in tests without `#[cfg(unix)]`. In
+  tests that talk raw TCP, send each request in one write and set `TCP_NODELAY`:
+  tiny split writes stall for tens of milliseconds on Linux (Nagle plus delayed
+  ACK) and hide as slow or flaky tests. Pick free ports with retry, since a
+  parallel test can take a port between picking and binding.
+- When a test passes on the first try, check it can fail: temporarily break the
+  behavior it guards and confirm it goes red.
 
 ### Compatibility and migration
 
@@ -103,19 +172,29 @@ make build
 make run
 ```
 
+Coverage and benchmarks:
+
+```sh
+cargo llvm-cov --workspace --summary-only     # needs cargo-llvm-cov; report the number
+cargo test --test exit_criteria               # end-to-end tests against the real binary
+cargo test --test reload_under_load -- --nocapture
+# performance baseline and how to reproduce it: docs/benchmarks.md
+```
+
 Development servers:
 
-- Backend: `cargo run` on `127.0.0.1:8080`.
+- Backend: `cargo run`; admin plane on `127.0.0.1:9000`, data plane on `0.0.0.0:8000`.
 - Frontend: `cd ui && npm run dev` on `localhost:5173`, proxying `/api` and `/ws` to the backend.
 
 ## Implementation Notes
 
 - Keep API responses using the existing `AppError` / JSON error envelope pattern.
-- Add new REST handlers in `src/routes/api.rs`, register routes in `src/routes/mod.rs`, and expose typed frontend calls from `ui/src/lib/api.ts`.
-- Add new WebSocket event types in `src/services/events.rs` and handle them in `ui/src/context/LiveContext.tsx`.
+- Add new REST handlers under `crates/fast-proxy-admin/src/api/`, register routes in `crates/fast-proxy-admin/src/router.rs`, and expose typed frontend calls from `ui/src/lib/api.ts`.
+- Add new WebSocket event types in `crates/fast-proxy-admin/src/events.rs` and handle them in `ui/src/context/LiveContext.tsx`.
 - Add new pages under `ui/src/pages/`, then update routing and navigation in the existing frontend structure.
 - Keep UI styling aligned with the tokens in `ui/src/styles/index.css`; avoid hard-coded one-off colors when a token exists.
 - Prefer existing component patterns in `ui/src/components/` before adding new abstractions.
+- UI forms: validate in `lib/validation.ts`, show server `fields` inline via `useServerErrors`, and use toasts for success. Page tests use `test/renderPage.tsx` and `test/mockApi.ts`.
 - Do not commit generated artifacts such as `target/`, `ui/dist/`, or `ui/node_modules/` unless explicitly requested.
 
 ## Testing Expectations
@@ -128,6 +207,7 @@ Development servers:
 ## Configuration
 
 - Runtime config defaults to `config.toml`.
-- CLI flags can override config values such as host, port, log level, access log, and config path.
+- CLI flags can override config values: `--admin-listen`, `--database`, `--state-dir`, `--log-level`, `--access-log`, `--no-access-log`, and `--config`.
+- The config file holds process-level settings only; subsystems, routes, and upstreams live in the database.
 - UI boot configuration is served from `GET /api/config` based on the `[ui]` section of `config.toml`.
 

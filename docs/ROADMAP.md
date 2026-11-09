@@ -1,7 +1,7 @@
 # fast-proxy: Plan and Roadmap
 
-Status: draft v0.2 (2026-11-09). This is a living document; update it as
-decisions are made and milestones land.
+Status: v0.3 (2026-11-09). **M0 and M1 are complete**; M2 is next. This is a
+living document; update it as decisions are made and milestones land.
 
 ## 1. Vision
 
@@ -59,20 +59,20 @@ The config file never contains subsystems or routes. The DB never contains
 listener, TLS, or ACME settings. This keeps "how the proxy is hosted" separate
 from "what the proxy serves".
 
-## 2. Starting point
+## 2. Where the project started
 
-The repo is a single-binary fullstack scaffold:
+The repo began as a single-binary fullstack scaffold. What became of each piece:
 
-| Piece | Reuse plan |
+| Piece | What happened |
 |---|---|
-| Axum + Tokio + Clap + Serde + Tracing | Keep. Axum serves the **admin plane only**. |
-| `AppError` JSON envelope | Keep for the admin API. |
-| TOML config + CLI overrides (`config.rs`) | Extend into the proxy config model. |
-| Access log middleware (`access_log.rs`) | Move to the data plane, extend with route/upstream fields. |
-| Embedded React UI + WebSocket push | Becomes the admin UI (routes, upstreams, certs, live traffic). |
-| Metrics / events services | Replace sample data with real proxy metrics. |
-| Tasks service, component gallery, `/api/error-demo` | Remove (M0). |
-| CI + two-step release workflow | Keep. |
+| Axum + Tokio + Clap + Serde + Tracing | Kept. Axum serves the **admin plane only** (`fast-proxy-admin`). |
+| `AppError` JSON envelope | Kept for the admin API; gained `Conflict` and `Validation` (with a `fields` array). |
+| TOML config + CLI overrides (`config.rs`) | Extended into the process config model (`src/config/`, `src/cli.rs`). |
+| Access log middleware (`access_log.rs`) | Became `AccessLog` in `fast-proxy-telemetry`, used by both planes, with data plane fields. |
+| Embedded React UI + WebSocket push | Became the admin UI (subsystems, revisions, resolver, live dashboard). |
+| Metrics / events services | The fake CPU/memory sampler was replaced by real Prometheus metrics and traffic stats. |
+| Tasks service, component gallery, `/api/error-demo` | Removed (M0). |
+| CI + two-step release workflow | Kept; CI now also runs the end-to-end tests on three platforms. |
 
 ## 3. Architecture
 
@@ -119,17 +119,17 @@ accept -> (TLS handshake, SNI cert pick) -> parse HTTP
   -> record metrics + access log + sampling decision
 ```
 
-### 3.4 Key technology choices (proposed)
+### 3.4 Key technology choices
 
 | Concern | Choice | Notes |
 |---|---|---|
-| HTTP | `hyper` 1.x + `hyper-util` | HTTP/1.1 and HTTP/2, upgrade (WebSocket) passthrough |
+| HTTP | `hyper` 1.x + `hyper-util` | HTTP/1.1 and upgrade (WebSocket) passthrough done in M1; HTTP/2 arrives with TLS (M3) |
 | TLS | `rustls` + `tokio-rustls` | Custom `ResolvesServerCert` for SNI + hot reload |
 | ACME | `instant-acme` (evaluate vs `rustls-acme`) | HTTP-01 first, TLS-ALPN-01 later |
-| Config swap | `arc-swap` | Lock-free reads on the hot path |
-| Host/prefix match | `HashMap` + wildcard suffix map; radix tree for prefixes | Benchmark before adopting a crate |
-| Metrics | `prometheus` or `metrics` + exporter | Decide in M1 |
-| Upstream client | hyper-util legacy client or custom pool | Decide in M1 based on pool control needs |
+| Config swap | `arc-swap` | Lock-free reads on the hot path (done in M1) |
+| Host/prefix match | `HashMap` + wildcard suffix map; segment-aware longest-prefix lookup | **Decided (M1):** own implementation, property-tested against a brute-force reference ([ADR 0004](adr/0004-own-host-and-route-matchers.md)). Revisit if the benchmark shows routing as a bottleneck |
+| Metrics | `prometheus` crate | **Decided (M1):** behind our own `Metrics` type so it can be swapped ([ADR 0003](adr/0003-prometheus-crate-for-metrics.md)) |
+| Upstream client | hyper-util legacy client | **Decided (M1):** a spike confirmed pooling, per-request timeouts, streaming and cancellation; one pool per distinct connect timeout ([ADR 0002](adr/0002-hyper-for-the-data-plane.md)) |
 
 ### 3.5 Data plane config file (illustrative, not final)
 
@@ -169,6 +169,11 @@ level = "info"
 access_log = "access.log"
 ```
 
+*As built in M1:* `state_dir`, `database`, `trusted_proxies`, `shutdown_grace`,
+`[[data_plane.listener]]` (`name`, `listen`), `[admin].listen` and `[logging]`
+exist, and unknown keys (including `tls`) are rejected. The TLS and ACME
+sections above are still illustrative and arrive in M3 and M4.
+
 ### 3.6 Subsystem model stored in the DB (illustrative, not final)
 
 ```
@@ -187,7 +192,14 @@ route prefixes are unique within a subsystem, and a route's upstream group must
 belong to the same subsystem (no cross-subsystem references, so subsystems stay
 isolated).
 
-Storage: **SQLite** via `rusqlite` (or `sqlx`) in WAL mode, a single local
+*As built in M1:* the tables are `subsystem` (with `description`),
+`subsystem_host`, `upstream_group`, `upstream_endpoint` (one per group for now),
+`route` and `revision` (the full configuration as JSON per change, the last 100
+kept, in place of `config_history`). Maintenance, load-balancing and sampling
+columns arrive with their milestones; there are no migrations while the project
+is undeployed (the schema file is edited in place).
+
+Storage: **SQLite** via `rusqlite` in WAL mode, a single local
 file. Chosen for transactions, schema migrations, and easy inspection. Access
 goes through a repository layer so the backend can be swapped later (for
 example a remote DB for multi-node setups) without touching the proxy.
@@ -304,39 +316,47 @@ interesting cases can be selected.
 Milestones are ordered by dependency, not by calendar. Each ends with a
 working, releasable binary.
 
-### M0: Rebrand and cleanup
+### M0: Rebrand and cleanup (complete)
 
 - [x] Rename project to `fast-proxy`; update description, README, config, CI.
 - [x] Plan and roadmap document (this file).
-- [ ] Remove scaffold demos (tasks service, component gallery, error-demo).
-- [ ] Split `main.rs` wiring into admin-plane and data-plane modules.
-- [ ] Decide metrics library and upstream client approach (ADR notes in `docs/`).
+- [x] Remove scaffold demos (tasks service, component gallery, error-demo).
+- [x] Split `main.rs` wiring into admin-plane and data-plane modules (now a
+      Cargo workspace of small crates).
+- [x] Decide metrics library and upstream client approach (ADR notes in `docs/adr/`).
 
-### M1: Core proxy and realtime config
+### M1: Core proxy and realtime config (complete)
 
 Detailed task plan: [M1-PLAN.md](M1-PLAN.md).
 
-- [ ] Data plane config file model: listeners, DB path, state dir, admin
+- [x] Data plane config file model: listeners, DB path, state dir, admin
       listener, logging (TLS and ACME sections added in M3/M4).
-- [ ] SQLite storage layer: schema, migrations, repository API for
+- [x] SQLite storage layer: schema, migrations, repository API for
       subsystems, hosts, routes, upstreams, and config history.
-- [ ] Hyper-based data plane with plain HTTP listener; streaming bodies.
-- [ ] Subsystem selection by host (exact, wildcard) and prefix routing inside
+- [x] Hyper-based data plane with plain HTTP listener; streaming bodies.
+- [x] Subsystem selection by host (exact, wildcard) and prefix routing inside
       the subsystem with strip; unknown host and no-route responses.
-- [ ] Forwarded headers, hop-by-hop handling, request IDs, timeouts.
-- [ ] Immutable snapshot + `arc-swap`; admin write -> validate -> DB commit ->
+- [x] Forwarded headers, hop-by-hop handling, request IDs, timeouts.
+- [x] Immutable snapshot + `arc-swap`; admin write -> validate -> DB commit ->
       recompile -> swap; config version history and rollback.
-- [ ] Admin API (CRUD for subsystems, hosts, routes, single-endpoint
+- [x] Admin API (CRUD for subsystems, hosts, routes, single-endpoint
       upstreams) and a first admin UI to manage them. Start the proxy from the
       config file with an empty DB, then configure everything from the UI.
-- [ ] Upstream connection pooling; WebSocket/upgrade passthrough.
-- [ ] Graceful shutdown and connection draining.
-- [ ] Baseline Prometheus metrics and enriched access log.
+- [x] Upstream connection pooling; WebSocket/upgrade passthrough.
+- [x] Graceful shutdown and connection draining.
+- [x] Baseline Prometheus metrics and enriched access log.
 
 **Exit criteria:** starting from an empty DB, an operator creates two
 subsystems (two host names) in the admin UI, adds prefix routes to different
 backends, and traffic flows immediately. Edits apply live with correct metrics
 and no dropped in-flight requests, and survive a restart.
+
+*Demonstrated by* `tests/exit_criteria.rs` (empty database, two subsystems routed
+immediately, live edits, rollback, restart, graceful shutdown) and
+`tests/reload_under_load.rs` (zero failed requests and no stale routing during
+400 live writes). The one thing not exercised is a person clicking through the
+UI in a real browser; the UI is covered by jsdom tests. What M1 left for later is
+listed in [M1-PLAN.md](M1-PLAN.md) section 10.
 
 ### M2: Upstream groups, load balancing, health
 
@@ -416,6 +436,13 @@ traffic, multi-node config sync.
 - Existing gates stay: `cargo fmt`, `cargo clippy -D warnings`, `cargo test`,
   frontend tests and build, on Linux/macOS/Windows.
 
+*After M1:* unit tests per crate, property tests for the matchers, end-to-end
+tests that run the binary against in-process backends (including reload under
+load and WebSocket passthrough), UI tests, and an `oha` baseline
+([benchmarks.md](benchmarks.md)) exist. Not yet: TLS/ACME tests (M3/M4), fuzzing
+(M7), and a Windows end-to-end test of the console Ctrl-C path (the signal tests
+are Unix-only).
+
 ### Initial performance targets (to be validated in M1/M7)
 
 - Proxy overhead per request small relative to upstream latency (target: well
@@ -425,20 +452,25 @@ traffic, multi-node config sync.
 - Config reload with thousands of routes completes in milliseconds and does not
   affect in-flight request latency.
 
+*M1 baseline* ([benchmarks.md](benchmarks.md)): about 25 us added per request at
+p50 (and p99) on one connection over loopback, so the "well under 1 ms" target
+holds; under saturation on a shared CPU the proxy sustains a bit under half of
+direct throughput. Reload with thousands of routes is not measured yet.
+
 ## 7. Risks and open questions
 
 | Risk / question | Mitigation or next step |
 |---|---|
-| hyper client pool may not give enough control (per-endpoint limits, health-aware reuse) | Prototype in M1; fall back to a custom pool |
+| hyper client pool may not give enough control (per-endpoint limits, health-aware reuse) | **Resolved for M1:** the spike passed ([ADR 0002](adr/0002-hyper-for-the-data-plane.md)). Re-check in M2 when per-endpoint limits and health-aware reuse matter |
 | ACME rate limits and failure modes can lock out a domain | Staging by default, persisted state, backoff, clear status in UI |
 | Admin plane exposure is a high-impact security risk | Loopback default, auth in M5, audit log, never routable by default |
 | Sampling can leak secrets or hurt latency | Redaction on by default, bodies opt-in, off the request path, bounded buffers |
-| Windows support in CI vs. Unix-only features (signals for reload) | Provide admin API/CLI reload as the portable path |
+| Windows support in CI vs. Unix-only features (signals for reload) | **Seen in M1:** the SIGINT end-to-end tests could not run on Windows and are Unix-only. Draining is also tested without signals. Reload is via the admin API, which is portable |
 | ACME needs host names that live in the DB, but ACME config lives in the file | Derive domains from DB hosts, constrained by a file allowlist; wildcards wait for DNS-01 |
-| SQLite from async code (blocking I/O) | Dedicated DB thread or `spawn_blocking`; the hot path only reads the in-memory snapshot, never the DB |
+| SQLite from async code (blocking I/O) | **Done in M1:** one dedicated store thread; the hot path only reads the in-memory snapshot, never the DB |
 | Admin UI is the only way to configure subsystems; no config-as-code | Add import/export (JSON/TOML) of subsystem config in M5 so setups are reproducible and reviewable |
 | Backup and portability of the DB file | Document file location; add export and a consistent online backup command |
-| Metrics crate choice and label cardinality | Decide in M0 ADR |
+| Metrics crate choice and label cardinality | **Done in M1:** `prometheus` crate; labels come only from config names, enforced by tests. Per-request label-lookup cost is not measured separately yet |
 
 ## 8. Decision log
 
@@ -447,5 +479,12 @@ traffic, multi-node config sync.
 | 2026-11-09 | Project renamed `fast-proxy`; goal set to ingress/reverse proxy. |
 | 2026-11-09 | Each host name is a **subsystem**: independent, separately configurable, selected by host first, then routed by URI prefix within it. |
 | 2026-11-09 | Config split: data plane (listeners, TLS, ACME, admin address, DB path) from the config file; subsystems, routes and upstreams from a local DB file, edited through the admin UI/API. Supersedes the earlier open question about file vs API as source of truth. |
-| 2026-11-09 | Proposed: SQLite for the local DB. |
-| 2026-11-09 | Proposed: hyper data plane, Axum admin plane, `arc-swap` snapshots, rustls, tail-based sampling. Pending confirmation in M0/M1. |
+| 2026-11-09 | **SQLite** via `rusqlite` (bundled, WAL) for the local DB, owner-confirmed ([ADR 0001](adr/0001-sqlite-via-rusqlite.md)). No migrations while undeployed; one dedicated store thread; the data plane never reads the DB. |
+| 2026-11-09 | **hyper** data plane (ADR 0002, spike passed), Axum admin plane, `arc-swap` snapshots. rustls and tail-based sampling remain proposals for M3 and M6. |
+| 2026-11-09 | M1 design decisions D1-D12 (see [M1-PLAN.md](M1-PLAN.md) section 3): D1 SQLite via rusqlite; D2 no migrations (one embedded schema, `user_version` check); D3 a dedicated DB thread; D4 exactly one endpoint per upstream group until M2; D5 hyper + hyper-util; D6 the `prometheus` crate (owner-confirmed); D7 our own host and route matchers; D8 integer ids with unique names used as metric labels; D9 last write wins; D10 do not trust incoming `X-Forwarded-*` unless the peer is in `trusted_proxies`; D11 the Host header is preserved unless a route rewrites it; D12 each change stores the full configuration, last 100 kept, rollback re-applies a revision as a new one. |
+| 2026-11-09 | Writes go through one `ConfigService` in its own crate: mutate in a transaction, compile the would-be configuration as the validation, commit with a revision, swap the snapshot. Keeps `routing` free of the store and `dataplane` free of both. |
+| 2026-11-09 | The upstream URL rewrite (`build_upstream_uri`) lives in `fast-proxy-routing`, shared by the data plane and the admin resolver so they cannot disagree. |
+| 2026-11-09 | Metric labels come only from config names (subsystem name, route prefix; `_unmatched`/`_none` otherwise), never raw hosts or paths. Requests are recorded when the response body finishes, including when the client leaves mid-response. |
+| 2026-11-09 | `route.upstream_group_id` uses NO ACTION rather than RESTRICT in the schema, so deleting a subsystem cascades while deleting a used upstream is still refused. |
+| 2026-11-09 | The SIGINT end-to-end tests are Unix-only (they deliver a real signal); graceful draining is covered on every platform by signal-free tests. |
+| 2026-11-09 | Performance is measured with `oha` against a small fixed-response backend example; the baseline is informational, not a gate ([benchmarks.md](benchmarks.md)). |

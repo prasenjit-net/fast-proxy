@@ -2,12 +2,30 @@
 # fast-proxy configuration
 #
 # Every value here can be overridden on the command line, e.g.:
-#   fast-proxy --config other.toml --port 9000 --log-level debug
+#   fast-proxy --config other.toml --admin-listen 127.0.0.1:9100 --log-level debug
 # ------------------------------------------------------------------
 
-[server]
-host = "127.0.0.1"
-port = 8080
+# Process-level settings only. Subsystems, hosts, routes, and upstreams are
+# managed live in the admin UI and stored in the database below.
+[data_plane]
+# Directory for the database and other persistent state (created if missing).
+state_dir = "./state"
+# Database file. Default: <state_dir>/fast-proxy.db
+# database = "./state/fast-proxy.db"
+# CIDRs whose X-Forwarded-* headers are trusted. Empty: always overwrite them.
+trusted_proxies = []
+# How long in-flight requests may finish after a shutdown signal.
+shutdown_grace = "30s"
+
+# One entry per plain-HTTP listener. TLS arrives in a later milestone.
+[[data_plane.listener]]
+name = "http"
+listen = "0.0.0.0:8000"
+
+[admin]
+# The admin plane (UI, REST API, /metrics) has no authentication yet.
+# Keep it on loopback.
+listen = "127.0.0.1:9000"
 
 [logging]
 # tracing filter: trace | debug | info | warn | error

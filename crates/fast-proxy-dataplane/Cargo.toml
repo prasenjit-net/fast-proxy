@@ -1,0 +1,28 @@
+[package]
+name = "fast-proxy-dataplane"
+version = "0.0.0"
+edition = "2021"
+description = "The hyper-based proxy data plane"
+publish = false
+
+[dependencies]
+fast-proxy-routing = { path = "../fast-proxy-routing" }
+fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
+bytes = "1"
+http = "1"
+http-body = "1"
+http-body-util = { workspace = true }
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1", features = ["server-auto", "client-legacy", "tokio", "http1"] }
+rand = "0.8"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = "0.7"
+tracing = { workspace = true }
+
+[dev-dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+http-body-util = { workspace = true, features = ["channel"] }
+futures-util = "0.3"
+tempfile = { workspace = true }
+tokio-tungstenite = "0.29"

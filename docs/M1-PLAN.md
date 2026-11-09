@@ -1,6 +1,7 @@
 # M1 Plan: Core proxy and realtime config
 
-Status: draft v0.1 (2026-11-09). Parent document: [ROADMAP.md](ROADMAP.md).
+Status: **complete except the release** (2026-11-09); see section 10 for the
+outcome and what carries over. Parent document: [ROADMAP.md](ROADMAP.md).
 Task sizes are relative effort (S under half a day, M about 1-2 days, L about
 3-5 days), not commitments. Tick the checkboxes as tasks land.
 
@@ -57,12 +58,12 @@ the dependent tasks start.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | DB engine and crate | SQLite in WAL mode via `rusqlite` with the `bundled` feature (no system dependency, simple sync API). **(confirm)** |
+| D1 | DB engine and crate | SQLite in WAL mode via `rusqlite` with the `bundled` feature (no system dependency, simple sync API). Confirmed. |
 | D2 | Schema management | No migrations (project is not deployed). A single embedded `schema.sql` creates the tables on first open; schema changes edit that file directly. `PRAGMA user_version` is set only to detect an incompatible DB file. |
 | D3 | DB access from async | One `Store` handle owning a single connection on a dedicated thread, driven by a channel. The data plane hot path **never** touches the DB. |
 | D4 | Upstream shape in M1 | Schema already has `upstream_group` and `upstream_endpoint`, but validation allows **exactly one endpoint** per group. M2 lifts this with no migration. |
 | D5 | HTTP stack | `hyper` 1.x + `hyper-util` (server auto builder, legacy client with pooling). Axum stays admin-only. |
-| D6 | Metrics library | `prometheus` crate (simple, text exposition built in) unless the T0.1 spike shows a problem. **(confirm)** |
+| D6 | Metrics library | `prometheus` crate (simple, text exposition built in) unless the T0.1 spike shows a problem. Confirmed. |
 | D7 | Matcher implementation | Own small implementation: `HashMap` for exact hosts, suffix `HashMap` for wildcards, segment-aware longest-prefix for routes. Benchmark before considering a crate. |
 | D8 | IDs | Integer primary keys internally; names are unique and used in URLs of the UI and as metric labels. Renaming a subsystem changes its label (documented). |
 | D9 | Concurrent admin edits | Last write wins in M1. Every resource returns `updatedAt` so optimistic concurrency can be added later. |
@@ -195,26 +196,35 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream P: Groundwork
 
-- [ ] **P1 (S) Short decision notes.** Write `docs/adr/` notes for D1, D5, D6,
+- [x] **P1 (S) Short decision notes.** Write `docs/adr/` notes for D1, D5, D6,
   D7 (a page each). Spike D6 (metrics crate) and the hyper client pool in a
   scratch branch to confirm they fit: pool reuse works, per-request timeouts
   are controllable, body streaming does not buffer.
   *Done when:* notes are merged and the open **(confirm)** items are resolved.
-- [ ] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
+  *Status:* ADRs 0001-0004 are written in `docs/adr/`. D1 (rusqlite) and D6
+  (prometheus crate) were confirmed by the owner on 2026-11-09. The hyper
+  client spike is done (results in ADR 0002). The metrics crate had no separate
+  spike: T1 exercised it directly, and the per-request cost of its label lookups
+  is only visible in the baseline benchmark.
+- [x] **P2 (M) Remove scaffold demos.** Delete the tasks service and routes,
   `/api/error-demo`, the Components page, `TasksCard`, their tests, and the
   related README sections. Keep access log, events, and the WebSocket plumbing.
   *Done when:* `cargo test`, `npm test`, `npm run build` pass with the demos
   gone and the sidebar shows only Dashboard and Settings.
-- [ ] **P3 (M) Convert to a Cargo workspace** with the crate layout in section
+- [x] **P3 (M) Convert to a Cargo workspace** with the crate layout in section
   4. Move existing code without behavior changes (`routes/` and
   `static_assets` -> `fast-proxy-admin`, `access_log` -> `fast-proxy-telemetry`).
   Create the other crates as documented, empty skeletons. Set up coverage
   measurement (`cargo llvm-cov`) and record the starting number.
   *Done when:* the app behaves identically and tests pass.
+  *Result:* `access_log` was split into a telemetry `AccessLog` and an admin
+  middleware so telemetry does not depend on axum. The admin crate takes
+  `UiConfig` and the version through `AdminState`. Starting coverage
+  (`cargo llvm-cov --workspace`): 63% lines.
 
 ### Workstream C: Configuration
 
-- [ ] **C1 (M) New config model** in `config.rs`:
+- [x] **C1 (M) New config model** in `config.rs`:
 
   ```toml
   [data_plane]
@@ -236,10 +246,10 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   address differs from every listener, `state_dir` creatable, duration parsing.
   *Done when:* unit tests cover defaults, missing sections, unknown fields, and
   each validation failure with a clear message.
-- [ ] **C2 (S) CLI overrides.** Replace `--host/--port` with `--admin-listen`,
+- [x] **C2 (S) CLI overrides.** Replace `--host/--port` with `--admin-listen`,
   `--database`, `--state-dir`; keep `--config`, `--log-level`, `--access-log`,
   `--no-access-log`. Update `Cli::apply`.
-- [ ] **C3 (S) Update `config.toml`, README config table and CLI section,
+- [x] **C3 (S) Update `config.toml`, README config table and CLI section,
   and AGENTS.md** for the new keys. Default ports: data plane `8000`, admin
   `9000` (was `8080`); update the Vite dev proxy in `ui/vite.config.ts` to the
   admin port.
@@ -247,16 +257,16 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream S: Storage
 
-- [ ] **S1 (M) SQLite store skeleton.** Add `rusqlite` (bundled). `Store`
+- [x] **S1 (M) SQLite store skeleton.** Add `rusqlite` (bundled). `Store`
   handle running a dedicated thread with a command channel (D3). On open:
   create parent dir, enable WAL, `foreign_keys=ON`, `busy_timeout`, apply
   the embedded `schema.sql` on an empty DB (D2). Refuse to start if the DB
   `user_version` does not match the binary.
   *Done when:* tests open a temp DB, create the schema from empty, reopen
   idempotently, and reject a mismatched `user_version`.
-- [ ] **S2 (S) Schema** (section 5) as `schema.sql` in the store crate.
-- [ ] **S3 (M) Domain models and validation** (`store/models.rs`,
-  `validate.rs`), pure and heavily unit tested:
+- [x] **S2 (S) Schema** (section 5) as `schema.sql` in the store crate.
+- [x] **S3 (M) Domain models and validation** (built in the `model` crate, one
+  file per type, not `store/models.rs`), pure and heavily unit tested:
   - subsystem name: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
   - host pattern: lowercased; exact DNS name or `*.` + DNS name (a single
     leading wildcard label only); no port, no trailing dot; IP literals
@@ -268,7 +278,7 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   - timeouts: bounded (for example 100 ms to 10 min)
   *Done when:* table-driven tests list accepted and rejected inputs, each
   rejection producing a field-specific message.
-- [ ] **S4 (L) Repository operations** with transactions, each write also
+- [x] **S4 (L) Repository operations** with transactions, each write also
   appending a `revision` row (D12) and returning the new version:
   - subsystems: create, get, list, update, delete
   - hosts: add, remove (uniqueness enforced across subsystems)
@@ -279,7 +289,17 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   mapped to `AppError` (404, 409, 400, 500).
   *Done when:* each operation has success and failure tests, including
   uniqueness conflicts, FK/RESTRICT behavior, cascade delete, and revision rows.
-- [ ] **S5 (M) Revisions and rollback.** `list_revisions`, `get_revision`,
+  *Result and notes:*
+  - Operations are plain functions over `&Connection` in `repository/`; all
+    writes go through `Database::write(mutate, check)`, which runs the mutation
+    in a transaction, passes the would-be `Config` to `check`, and only then
+    records the revision and commits. `check` is where R5 plugs in `compile`.
+  - `route.upstream_group_id` uses NO ACTION instead of RESTRICT: same effect
+    for deleting a group, but deleting a whole subsystem (cascade) still works.
+  - `StoreError` to `AppError` mapping (404/409/400/500) is done with the admin
+    API in A1; `created_at`/`updated_at` are stored but not yet exposed (A1).
+  - Host ids are not part of `Config`; `hosts::list` returns `(HostId, pattern)`.
+- [x] **S5 (M) Revisions and rollback.** `list_revisions`, `get_revision`,
   `rollback(version)`: replace live tables with the stored config in one
   transaction and append a new revision "rollback to vN". Prune to the last 100.
   *Done when:* a test creates, edits, deletes, rolls back to each prior
@@ -287,28 +307,28 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream R: Snapshot and routing
 
-- [ ] **R1 (M) Compiled snapshot types** (`snapshot/`): `Snapshot { version,
+- [x] **R1 (M) Compiled snapshot types** (`snapshot/`): `Snapshot { version,
   hosts: HostTable, subsystems: HashMap<SubsystemId, CompiledSubsystem> }`;
   `CompiledSubsystem { name, enabled, routes: RouteTable, upstreams }` where
   routes hold resolved endpoint addresses and timeouts.
   `compile(&Config) -> Result<Snapshot, CompileError>`; deterministic and pure.
-- [ ] **R2 (M) Host matcher.** Exact match first, then the longest matching
+- [x] **R2 (M) Host matcher.** Exact match first, then the longest matching
   wildcard suffix. Normalization: lowercase, strip port, strip one trailing dot,
   handle bracketed IPv6 `Host` values (no match, no panic). Missing or invalid
   Host returns "no subsystem".
   *Done when:* unit tests plus a property test (a generated exact host always
   beats a wildcard that also matches; the longest wildcard wins; matching is
   case-insensitive).
-- [ ] **R3 (M) Route matcher.** Longest prefix wins on **segment boundaries**
+- [x] **R3 (M) Route matcher.** Longest prefix wins on **segment boundaries**
   (`/api` matches `/api` and `/api/x`, not `/apix`); `/` is the catch-all;
   disabled routes are skipped at compile time. Returns the route plus the
   remaining path after the prefix.
   *Done when:* unit and property tests (result is always the longest matching
   prefix, equals a brute-force reference implementation).
-- [ ] **R4 (S) Snapshot holder.** `SnapshotHolder` wrapping
+- [x] **R4 (S) Snapshot holder.** `SnapshotHolder` wrapping
   `arc-swap::ArcSwap<Snapshot>` with `load()` and `swap()`; the initial value
   is an empty snapshot version 0.
-- [ ] **R5 (M) Apply pipeline.** One `ConfigService` owning a writer mutex so DB
+- [x] **R5 (M) Apply pipeline.** One `ConfigService` owning a writer mutex so DB
   commit order equals swap order:
   1. take the writer lock
   2. run the store mutation in a transaction **without committing**
@@ -321,17 +341,25 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   On startup: open the store, `load_all`, `compile`, set the initial snapshot.
   *Done when:* tests show an invalid change leaves both the DB and the live
   snapshot untouched, and a concurrent reader never observes a partial state.
+  *Result:* lives in the new `fast-proxy-config-service` crate (decided here:
+  it keeps `routing` free of the store and `dataplane` free of both). The
+  pipeline uses `Database::write`'s `check` hook, so steps 2-4 are one store
+  transaction. It broadcasts a `ConfigChanged` on its own channel; bridging that
+  to the admin WebSocket `config_changed` event is part of T3.
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (M) Listeners and accept loop.** Bind each configured listener with
+- [x] **D1 (M) Listeners and accept loop.** Bind each configured listener with
   `hyper-util` `server::conn::auto::Builder` (HTTP/1 only in M1). Track open
   connections with a counter and a shutdown signal (`tokio_util`
   `CancellationToken` or a watch channel). Set sane defaults: header read
   timeout, max header size, keep-alive.
   *Done when:* a bound port serves a hello response, and a bind failure aborts
   startup with a clear error.
-- [ ] **D2 (M) Request pipeline** (`dataplane/handler.rs`): load snapshot once
+  *Result:* `bind` is all-or-nothing and names the failing listener. The
+  connection counter and the shutdown token (stop accepting) are in; draining
+  open connections is D6. HTTP/1 only, with upgrades enabled for D5.
+- [x] **D2 (M) Request pipeline** (`dataplane/handler.rs`): load snapshot once
   -> host match -> subsystem checks -> route match -> forward. Fixed responses
   (`responses.rs`, plain text or JSON by `Accept`):
   - no subsystem for host: 404 `unknown host`
@@ -340,14 +368,20 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   - upstream connect failure: 502; upstream timeout: 504
   - Each includes an `x-request-id`.
   *Done when:* integration tests assert status and body for each case.
-- [ ] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
+  *Result:* the pipeline calls a `Forward` trait (implemented by the upstream
+  client in D4; tests use a fake). `FixedResponse` renders all five fixed
+  responses, including 502/504, which D4 will return on upstream failures.
+  The 404/503/404 cases are tested end to end over TCP.
+- [x] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
   named in `Connection` (RFC 9110), both directions, while preserving
   `Upgrade` for upgrades (D6 task); set `X-Forwarded-For/Proto/Host` per D10;
   honor `preserve_host` (D11); generate `x-request-id` if absent and propagate
   it upstream and in the response.
   *Done when:* unit tests on header maps and an integration test with an echo
   upstream confirm what the backend actually receives.
-- [ ] **D4 (L) Upstream client and forwarding** (`client.rs`): pooled hyper-util
+  *Status:* done; `Upgrade` is kept for upgrade requests (D5). `trusted_proxies` entries are parsed by `TrustedProxies::parse`;
+  the binary must call it at startup (D7) so a bad CIDR aborts with a clear error.
+- [x] **D4 (L) Upstream client and forwarding** (`client.rs`): pooled hyper-util
   client, per-route connect and response-header timeouts, request and response
   bodies streamed (no buffering), `100-continue` and chunked bodies handled,
   client disconnect cancels the upstream request. Build the upstream URI from
@@ -356,24 +390,44 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   *Done when:* tests cover GET, POST with large streamed body, chunked
   response, slow upstream (504), refused connection (502), and path/query
   rewriting cases.
-- [ ] **D5 (M) Upgrade/WebSocket passthrough** (`upgrade.rs`): forward the
+  *Result:* all covered end to end (64 MiB body, not hundreds of MB). A connect
+  timeout also maps to 504; that mapping is unit tested but not exercised
+  against an unroutable address.
+- [x] **D5 (M) Upgrade/WebSocket passthrough** (`upgrade.rs`): forward the
   upgrade request, relay the `101` response, then copy bytes in both
   directions until either side closes.
   *Done when:* an integration test completes a WebSocket echo through the proxy.
-- [ ] **D6 (M) Graceful shutdown and draining.** On signal: stop accepting,
+  *Result:* tested with a real WebSocket server and client (`tokio-tungstenite`,
+  test-only). The proxy takes the client's side of the socket before sending the
+  request, and on a `101` relays bytes with `copy_bidirectional`. If the upstream
+  declines, the response is proxied normally. An `Upgrade` header without
+  `Connection: upgrade` is stripped like any hop-by-hop header. Tunnels hold the
+  connection counter, so draining waits for them.
+- [x] **D6 (M) Graceful shutdown and draining.** On signal: stop accepting,
   let in-flight requests finish up to `shutdown_grace`, then close remaining
   connections. Admin plane shuts down after the data plane.
   *Done when:* a test holds a slow request open during shutdown and sees it
   complete, and another test sees forced close after the grace period.
-- [ ] **D7 (S) Startup wiring in `main.rs`:** parse config, open store, build
+  *Result:* `DataPlane::stopped(grace)` stops accepting, closes idle keep-alive
+  connections at once (hyper `graceful_shutdown`), waits for in-flight requests
+  and tunnels up to `grace`, then force-closes the rest and reports how many
+  (`DrainReport`). `startup.rs` stops the admin plane only after the data plane
+  has drained. Also tested on the real binary with a real SIGINT. Note: an open
+  admin `/ws` does not hold up shutdown (hyper hands upgraded sockets off), which
+  `tests/exit_criteria.rs` pins down.
+- [x] **D7 (S) Startup wiring in `main.rs`:** parse config, open store, build
   initial snapshot, start the admin listener, then the data plane listeners;
   log a clear summary (listeners, admin URL, DB path, snapshot version).
   *Done when:* running with an empty state dir creates the DB and starts both
   planes.
+  *Result:* `src/startup.rs` binds every listener (and the admin address)
+  before serving, validates `trusted_proxies`, and logs listeners, admin URL,
+  DB path and config version. Fatal startup errors now go to stderr. The
+  binary-level tests in `tests/exit_criteria.rs` cover exit criteria 1-5.
 
 ### Workstream T: Telemetry
 
-- [ ] **T1 (M) Metrics** (`telemetry/metrics.rs`), exposed at `GET /metrics` on
+- [x] **T1 (M) Metrics** (`telemetry/metrics.rs`), exposed at `GET /metrics` on
   the admin listener only:
   - `fastproxy_requests_total{subsystem,route,status_class}`
   - `fastproxy_request_duration_seconds{subsystem,route}` (histogram)
@@ -384,20 +438,45 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   `subsystem="_unmatched"`, `route="_none"`. Never use raw paths or hosts.
   *Done when:* an integration test scrapes `/metrics` after known traffic and
   asserts the counters.
-- [ ] **T2 (M) Access log for the data plane.** Generalize the existing
+  *Result:* `Metrics` in the telemetry crate wraps the `prometheus` crate (ADR
+  0003), so the library can be swapped without touching the data plane. Counters
+  are recorded when the response body finishes (a wrapper body counts bytes and
+  reports exactly once, including when the client leaves mid-response). The
+  route label is the route's prefix (config-derived); tests assert that raw
+  hosts and paths never become labels. Labelled families only appear in the
+  exposition once they have a sample. A request cancelled before its response
+  head exists is not counted. The hot-path cost of label lookups is not
+  measured yet; Q3 will show it.
+- [x] **T2 (M) Access log for the data plane.** Generalize the existing
   middleware into a function usable by both planes. Data plane lines add
   `subsystem`, `route`, `upstream`, `request_id`, `upstream_ms`, `total_ms`,
   `bytes_out`. Keep file plus console (tracing target `access`). Admin API
   requests keep a simpler line or are logged to the same sink with
   `plane=admin`.
   *Done when:* a test reads the log file after requests and parses the fields.
-- [ ] **T3 (M) Live traffic stats.** Replace the fake CPU/memory sampler in
+  *Result:* one sink for both planes, written by a background task so recording
+  never waits on the disk (`flush()` is called at shutdown). Lines are a
+  Common-Log-style request part followed by `key=value` fields: admin lines
+  have `plane=admin total_ms=`; data plane lines add `subsystem`, `route`,
+  `upstream`, `request_id`, `upstream_ms`, `bytes_out` (`-` where not
+  applicable). Client-supplied values are escaped so they cannot forge fields
+  or lines. The `elapsed` tail of the old format became `total_ms`.
+- [x] **T3 (M) Live traffic stats.** Replace the fake CPU/memory sampler in
   `services/metrics.rs` with real counters: per subsystem requests per second,
   error rate, active connections, plus global totals. A background task samples
   counters every 2 s and broadcasts a `traffic` WebSocket event. Add the
   `config_changed` event type.
   *Done when:* the WebSocket test client receives `traffic` events whose
   numbers match generated traffic.
+  *Result:* the fake CPU/memory sampler is gone. Every 2 s the sampler reads the
+  cumulative request counters from the metrics registry (no extra hot-path
+  state), computes per-subsystem and total requests/s and 5xx error rate, stores
+  the latest sample (`GET /api/traffic`, replacing `/api/metrics`) and pushes a
+  `traffic` event. A `configChanged` event plus a `config` activity entry is
+  sent for every applied change (the bridge from `ConfigService`). The first
+  sample is taken after a full window; an e2e test caught the sampler
+  reporting a ~1 ms window at startup. The dashboard was updated to the new
+  contract (U6 will add the per-subsystem table).
 
 ### Workstream A: Admin API
 
@@ -406,26 +485,35 @@ envelope gains an optional `fields: [{ field, message }]` array for validation
 failures (backward compatible). Every write returns the resource and the new
 config `version`.
 
-- [ ] **A1 (M) Subsystems and hosts** (`admin/api/subsystems.rs`):
+- [x] **A1 (M) Subsystems and hosts** (`admin/api/subsystems.rs`):
   `GET/POST /api/subsystems`, `GET/PUT/DELETE /api/subsystems/{id}`,
   `POST /api/subsystems/{id}/hosts`,
   `DELETE /api/subsystems/{id}/hosts/{host_id}`. List responses include host
   patterns and route counts.
-- [ ] **A2 (M) Upstreams and routes** (`admin/api/{upstreams,routes}.rs`):
+- [x] **A2 (M) Upstreams and routes** (`admin/api/{upstreams,routes}.rs`):
   `GET/POST /api/subsystems/{id}/upstreams`, `PUT/DELETE .../upstreams/{uid}`;
   `GET/POST /api/subsystems/{id}/routes`, `PUT/DELETE .../routes/{rid}`.
   Routes in a list are returned in match order (longest prefix first).
-- [ ] **A3 (M) Revisions:** `GET /api/revisions` (paged),
+- [x] **A3 (M) Revisions:** `GET /api/revisions` (paged),
   `GET /api/revisions/{version}`, `POST /api/revisions/{version}/rollback`.
-- [ ] **A4 (S) Resolver and status:** `POST /api/resolve {host, path}` returns
+- [x] **A4 (S) Resolver and status:** `POST /api/resolve {host, path}` returns
   the matched subsystem, route, and the exact upstream URL it would forward to
   (or the reason there is no match), using the live snapshot.
   `GET /api/status` returns data plane listeners, snapshot version, uptime,
   DB path, and totals. The existing `/api/health` and `/api/config` (UI boot
   config) stay unchanged.
-- [ ] **A5 (S) Admin safety:** if `admin.listen` is not a loopback address, log
+- [x] **A5 (S) Admin safety:** if `admin.listen` is not a loopback address, log
   a prominent warning that the admin plane has no authentication until M5.
   Loopback by default is the only protection in M1.
+
+*Status for A1-A2:* done, with the response shape `{ data, version }` (deletes
+return `{ version }`), camelCase JSON, and a `fields` array on 400s.
+Subsystem resources carry `createdAtMs`/`updatedAtMs`. Unknown JSON keys are
+rejected. A3 (revisions, rollback) and A4 (resolver, status) are done: the
+revision list pages with `limit`/`before` and returns `nextBefore`; the
+resolver reuses `build_upstream_uri`, which moved from the data plane into
+`fast-proxy-routing` so both compute the identical URL; `GET /api/status`
+reports the actually bound listeners. Request totals will join status with T1.
 
 *Done for A1-A4:* every endpoint has HTTP-level tests in the style of
 `src/routes/tests.rs` (success, validation error with `fields`, 404, 409), and
@@ -434,16 +522,30 @@ restart.
 
 ### Workstream U: Admin UI
 
+*Status: done.* How it is built: `lib/http.ts` (request core, `ApiError` with
+per-field messages), `lib/types.ts`, `lib/api.ts` (one function per endpoint),
+`lib/validation.ts` (pure client-side checks using the server's camelCase field
+names, so client and server errors land on the same inputs),
+`components/forms/` (one form per resource) and `components/subsystem/` (the
+detail page's sections). Every form validates cheaply on the client and shows
+the server's `fields` inline; errors that name no field (a 409, a 404) appear
+once above the form; success and failure are toasts. Any write refreshes every
+query except the boot config, and a `configChanged` push does the same for
+changes made elsewhere. Test helpers: `test/mockApi.ts` (a recording fetch mock)
+and `test/renderPage.tsx` (router, query client and real toasts). The UI could
+not be looked at in a real browser in the session that built it; it is covered
+by jsdom tests only, so a manual click-through is still worthwhile.
+
 Follow existing component patterns and the tokens in
 `ui/src/styles/index.css`; no hard-coded one-off colors.
 
-- [ ] **U1 (S) API client and types** in `ui/src/lib/api.ts` for all A1-A4
+- [x] **U1 (S) API client and types** in `ui/src/lib/api.ts` for all A1-A4
   endpoints; `ApiError` exposes `fields` for form display. Update
   `vite.config.ts` proxy target to the admin port.
-- [ ] **U2 (M) Navigation and shell:** sidebar items Dashboard, Subsystems,
+- [x] **U2 (M) Navigation and shell:** sidebar items Dashboard, Subsystems,
   Revisions, Resolver, Settings; update `router.tsx`, `Sidebar.tsx`,
   `Topbar.tsx` titles.
-- [ ] **U3 (L) Subsystems list and detail.**
+- [x] **U3 (L) Subsystems list and detail.**
   - List: name, host chips, enabled toggle, route count, "New subsystem"
     button, empty state that explains the first steps.
   - Detail with sections: Hosts (add/remove), Upstreams (name + `host:port`),
@@ -452,21 +554,21 @@ Follow existing component patterns and the tokens in
   - Forms validate on the client where cheap and always show server `fields`
     errors inline; success and failure toasts.
   - Delete confirmations that state what will be removed.
-- [ ] **U4 (M) Revisions page:** table of versions with summary and time,
+- [x] **U4 (M) Revisions page:** table of versions with summary and time,
   view-config modal, rollback button with confirmation.
-- [ ] **U5 (S) Resolver page:** host and path inputs, shows matched subsystem,
+- [x] **U5 (S) Resolver page:** host and path inputs, shows matched subsystem,
   route, and final upstream URL, or why nothing matched.
-- [ ] **U6 (M) Dashboard rewrite:** replace sample tiles with real data from the
+- [x] **U6 (M) Dashboard rewrite:** replace sample tiles with real data from the
   `traffic` event: global requests/s, error rate, active connections, a live
   chart, a per-subsystem table, and the activity feed showing config changes.
   Handle new event types in `LiveContext.tsx`.
-- [ ] **U7 (S) Tests and build:** Vitest tests for the forms (validation errors
+- [x] **U7 (S) Tests and build:** Vitest tests for the forms (validation errors
   rendered, submit calls the right API), subsystem list empty state, and the
   rollback confirmation. `npm test` and `npm run build` pass.
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (L) Integration test harness** (`tests/` directory): helper that
+- [x] **Q1 (L) Integration test harness** (`tests/` directory): helper that
   starts fake upstreams (in-process hyper servers on ephemeral ports with
   configurable behavior: echo headers, delay, close, WebSocket echo), a proxy
   instance with a temp state dir and ephemeral ports, and a small admin API
@@ -483,31 +585,68 @@ Follow existing component patterns and the tokens in
   10. header handling (hop-by-hop, forwarded, request id)
   11. WebSocket passthrough
   12. graceful shutdown with an in-flight request
-- [ ] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
+
+  *Status:* `tests/exit_criteria.rs` runs the real binary against in-process
+  backends and covers scenarios 1, 5 (unknown host, disabled subsystem), 7 and
+  8 (and 9, rollback); scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
+  forwarding tests. Scenarios 9 (rollback), 11 (WebSocket) and 12 (graceful shutdown) are covered too, at crate level and on the binary (12). Closed: scenarios 2-4, 6, 10 and 11 are tested at crate level (with real sockets and in-process backends) rather than through the binary, which tests the same code faster.
+- [x] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
   continuously while a task performs many admin writes (add/remove routes
   unrelated to the traffic and flip one route between two backends).
   Assert zero failed requests and that every response came from a backend
   that was valid at some point during the run.
-- [ ] **Q3 (S) Baseline benchmark:** run `oha` or `wrk` against a local
+  *Result:* `tests/reload_under_load.rs` runs the real binary: 8 keep-alive
+  clients while an admin task makes 400 writes (80 flips of one route between
+  two backends, routes added and removed, subsystems created and deleted). It
+  asserts zero failures, that the unedited route never changes backend, that
+  every `/flip` answer is from a backend that route pointed at while the
+  request was in flight, that requests running entirely between two writes see
+  exactly the value just written (this catches stale snapshots), no 5xx and no
+  rejected change in `/metrics`, and one config version per write. A typical run
+  is ~2,800 requests with ~1,000 in stable windows. Mutation-checked: never
+  publishing the snapshot, or skipping every 7th publish, both fail it.
+- [x] **Q3 (S) Baseline benchmark:** run `oha` or `wrk` against a local
   backend, direct versus through the proxy; record the numbers, hardware, and
   command in `docs/benchmarks.md` as the M1 baseline (informational, not a
   gate).
-- [ ] **Q4 (S) Gates:** `cargo fmt --all -- --check`,
+  *Result:* recorded in `docs/benchmarks.md`, measured with `oha` 1.16.0 against a
+  small fixed-response backend (`bench_backend`, an example in the data plane
+  crate). About 25 us added at p50 for one connection; under half of direct
+  throughput under saturation on a shared CPU; the default console access line
+  costs about a quarter of throughput while the file log is nearly free. A first
+  pass with an in-house load generator, since removed, agreed within about 10%.
+- [x] **Q4 (S) Gates:** `cargo fmt --all -- --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `npm test`,
   `npm run build` all green in CI on Linux, macOS, and Windows. Fix any
   platform-specific issues (paths, signals) that appear.
+  *Result:* the CI workflow already runs all of these (lint on Linux; tests and
+  a release build on all three platforms; the UI tests and build). It found one
+  platform issue: three end-to-end tests deliver Ctrl-C with `kill -INT` and so
+  run on Unix only. Draining is covered on every platform by signal-free
+  tests; what Windows lacks is an end-to-end console Ctrl-C test through the
+  binary. After that fix, PRs 11 to 13 are green on all three platforms.
 
 ### Workstream W: Documentation
 
-- [ ] **W1 (M) README:** new quick start (start the proxy, open the admin UI,
+- [x] **W1 (M) README:** new quick start (start the proxy, open the admin UI,
   create a subsystem, curl through it), updated config table and CLI, API
   table, project structure, and removal of scaffold-only sections.
-- [ ] **W2 (S) AGENTS.md:** new layout, where to add endpoints, snapshot and
+  *Result:* rewritten, with a "how it works" section, a capabilities table with
+  status, an observability section, security notes, and the crate dependency
+  direction (checked against `cargo metadata`).
+- [x] **W2 (S) AGENTS.md:** new layout, where to add endpoints, snapshot and
   store rules (data plane never queries the DB; all writes go through
   `ConfigService`), test expectations.
-- [ ] **W3 (S) ROADMAP.md:** tick M0 and M1 items, record decisions D1-D12 in
+  *Result:* a new "Architecture rules" section states the invariants once, and
+  the testing rules include the cross-platform lessons (Unix-only signal tests,
+  one write per raw request plus `TCP_NODELAY`, free-port retry, mutation-check
+  tests that pass first time).
+- [x] **W3 (S) ROADMAP.md:** tick M0 and M1 items, record decisions D1-D12 in
   the decision log, link this plan.
-- [ ] **W4 (S) Walkthrough:** `docs/getting-started.md` with a copy-paste curl
+  *Result:* M0 and M1 ticked with evidence; the "proposed" technology choices
+  now say what was decided and link their ADRs; the risks table is current; the
+  decision log has D1-D12 and the other M1 decisions.
+- [x] **W4 (S) Walkthrough:** `docs/getting-started.md` with a copy-paste curl
   example that sets up two subsystems through the admin API.
 
 ## 7. Dependencies and suggested order
@@ -572,12 +711,72 @@ PRs 3 and 4 can proceed in parallel after PR2; PR5 needs both. Admin UI work
 
 ## 9. Definition of done for M1
 
-- [ ] Every task above is checked, or explicitly moved with a note.
+- [x] Every task above is checked, or explicitly moved with a note.
 - [ ] Exit criteria (section 1) demonstrated by integration test 1, 7, 8 and a
-  manual run through the admin UI.
-- [ ] CI green on all three platforms; no new clippy warnings.
-- [ ] Overall test coverage above 60%, number recorded (AGENTS.md rule).
-- [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md, and getting-started updated.
-- [ ] Baseline benchmark recorded.
+  manual run through the admin UI. *Tests: done. The manual click-through in a
+  real browser is still to do; the UI has only been exercised under jsdom.*
+- [ ] CI green on all three platforms; no new clippy warnings. *PRs 1-13 are
+  green on Linux, macOS and Windows. PR 14's Ubuntu run failed in the new load
+  test (a client-side Nagle stall, fixed in the test); it needs a green run.*
+- [x] Overall test coverage above 60%, number recorded (AGENTS.md rule).
+  *97.05% of lines (`cargo llvm-cov --workspace`); no frontend coverage tool is
+  configured.*
+- [x] Nothing committed without the owner's go-ahead after manual review.
+- [x] README, AGENTS.md, ROADMAP.md, and getting-started updated.
+- [x] Baseline benchmark recorded.
 - [ ] Release `v0.2.0` prepared through the existing release workflow.
+
+## 10. Outcome
+
+M1 is built: the binary starts from an empty database and a data plane config
+file, an operator creates subsystems, hosts, upstreams and routes in the admin UI
+(or API), traffic flows immediately, edits apply live without dropping requests,
+everything survives a restart, and metrics, the access log and the dashboard
+show real traffic per subsystem. It was delivered as a stack of pull requests
+(groundwork and config, the model/routing/store/config-service crates, the data
+plane, the admin API, telemetry, the UI, and the load test and benchmark).
+
+### Where the result differs from the plan
+
+- `route.upstream_group_id` uses NO ACTION instead of RESTRICT, so deleting a
+  subsystem cascades; deleting a used upstream is still refused.
+- The apply pipeline (R5) is its own crate, `fast-proxy-config-service`, so
+  `routing` stays free of the store and `dataplane` free of both.
+- `build_upstream_uri` moved into `fast-proxy-routing` so the proxy and the
+  admin resolver compute the same URL.
+- Subsystems gained a `description`; host ids are not part of the `Config` tree
+  (the API reads them separately, and a rollback regenerates them).
+- The access log format changed: `key=value` fields and `total_ms` replaced the
+  old trailing latency. `GET /api/traffic` replaced `GET /api/metrics`, and the
+  `metrics` push event became `traffic`.
+- The fake CPU/memory sampler is gone; the dashboard shows real traffic.
+- The benchmark uses `oha` with a small `bench_backend` example (no in-repo load
+  generator).
+- Q1's scenarios are covered across crate-level and binary-level tests rather
+  than all through `tests/`.
+
+### Known limitations carried forward
+
+- **Admin plane has no authentication** (M5); it binds to loopback and warns
+  otherwise.
+- **The UI has not been checked in a real browser**: layout, spacing and dark
+  mode are unverified beyond jsdom tests.
+- **No end-to-end Ctrl-C test on Windows**; the signal tests are Unix-only.
+  Draining itself is tested on every platform without signals.
+- A request cancelled before its response head exists (the client left first) is
+  not counted in metrics or the access log.
+- Not measured: the per-request cost of metric label lookups on its own;
+  reload time with thousands of routes; a connect timeout against an unroutable
+  address (only the error classification is tested); request bodies of hundreds
+  of MB (64 MiB was streamed, and a test shows the body reaches the upstream while
+  the client is still sending).
+- Only one endpoint per upstream, and no health checks or load balancing (M2);
+  HTTP/1.1 only (HTTP/2 arrives with TLS in M3).
+- `docs/benchmarks.md` is a single-machine, shared-CPU baseline; capacity
+  numbers need a separate load generator machine.
+
+### Next
+
+Cut `v0.2.0` through the existing release workflow once the stack is merged into
+`main` and CI is green, then write `docs/M2-PLAN.md` (upstream groups, load
+balancing, health).

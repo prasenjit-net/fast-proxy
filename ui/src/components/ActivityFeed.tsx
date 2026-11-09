@@ -4,12 +4,12 @@ import { IconActivity, IconBolt, IconCheckCircle } from "../icons";
 import { timeAgo } from "../lib/format";
 
 const KIND_ICON: Record<string, ReactElement> = {
-  task: <IconCheckCircle size={16} />,
+  config: <IconCheckCircle size={16} />,
   socket: <IconBolt size={16} />,
 };
 
 const KIND_TONE: Record<string, string> = {
-  task: "text-ok",
+  config: "text-ok",
   socket: "text-info",
 };
 
@@ -17,7 +17,7 @@ export default function ActivityFeed({ activities }: { activities: Activity[] })
   if (activities.length === 0) {
     return (
       <p className="py-2 text-[0.86rem] text-ink-faint">
-        Server events will appear here — try adding a task.
+        Server events will appear here.
       </p>
     );
   }

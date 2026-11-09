@@ -1,17 +1,12 @@
 import { useLocation } from "@tanstack/react-router";
 import { IconMenu } from "../icons";
+import { pageTitle } from "../lib/navigation";
 import ConnectionBadge from "./ConnectionBadge";
 import ThemeToggle from "./ThemeToggle";
 
-const TITLES: Record<string, string> = {
-  "/": "Dashboard",
-  "/components": "Components",
-  "/settings": "Settings",
-};
-
 export default function Topbar({ onMenu }: { onMenu: () => void }) {
   const { pathname } = useLocation();
-  const title = TITLES[pathname] ?? "Not found";
+  const title = pageTitle(pathname);
   return (
     <header className="sticky top-0 z-30 flex h-[60px] items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md md:px-6">
       <button className="icon-btn" onClick={onMenu} aria-label="Toggle sidebar">

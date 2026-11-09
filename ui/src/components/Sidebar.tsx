@@ -2,23 +2,28 @@ import { Link, useLocation } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useConfig } from "../context/ConfigContext";
 import {
+  IconClock,
   IconDashboard,
   IconExternal,
   IconLayers,
+  IconSearch,
   IconSliders,
   IconX,
 } from "../icons";
+import { isNavActive } from "../lib/navigation";
 import Logo from "./Logo";
 
 interface NavItem {
-  to: "/" | "/components" | "/settings";
+  to: "/" | "/subsystems" | "/revisions" | "/resolver" | "/settings";
   label: string;
   icon: ReactElement;
 }
 
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <IconDashboard size={20} /> },
-  { to: "/components", label: "Components", icon: <IconLayers size={20} /> },
+  { to: "/subsystems", label: "Subsystems", icon: <IconLayers size={20} /> },
+  { to: "/revisions", label: "Revisions", icon: <IconClock size={20} /> },
+  { to: "/resolver", label: "Resolver", icon: <IconSearch size={20} /> },
   { to: "/settings", label: "Settings", icon: <IconSliders size={20} /> },
 ];
 
@@ -78,7 +83,7 @@ export default function Sidebar({ collapsed, open, onClose }: SidebarProps) {
             key={item.to}
             to={item.to}
             title={collapsed ? item.label : undefined}
-            className={itemCls(pathname === item.to)}
+            className={itemCls(isNavActive(pathname, item.to))}
           >
             <span className="inline-flex shrink-0">{item.icon}</span>
             <span className={labelCls}>{item.label}</span>

@@ -13,7 +13,7 @@ ui:
 dev-server:
 	cargo run
 
-## Run the Vite dev server with hot reload (proxies /api and /ws to :8080).
+## Run the Vite dev server with hot reload (proxies /api and /ws to :9000).
 dev-ui:
 	cd ui && npm run dev
 

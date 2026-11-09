@@ -1,0 +1,15 @@
+[package]
+name = "fast-proxy-routing"
+version = "0.0.0"
+edition = "2021"
+description = "Compiled routing snapshot and host/route matchers (pure, no I/O)"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+arc-swap = "1"
+http = "1"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"

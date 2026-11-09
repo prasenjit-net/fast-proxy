@@ -1,7 +1,6 @@
 // Catches render errors below it and shows a recoverable fallback
-// instead of a white screen. Used app-wide in App.tsx and again around
-// the crash demo on the Components page (nested boundaries recover the
-// smallest possible subtree).
+// instead of a white screen. Used app-wide in App.tsx; boundaries can be
+// nested so that a failure is contained to the smallest possible subtree.
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { IconAlertTriangle } from "../icons";
 
