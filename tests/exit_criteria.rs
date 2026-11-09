@@ -239,6 +239,32 @@ fn edits_apply_live_without_a_restart() {
 }
 
 #[test]
+fn rolling_back_restores_the_earlier_behavior() {
+    let dir = tempfile::tempdir().unwrap();
+    let proxy = start_proxy(dir.path());
+    let backend = start_backend("restored");
+    let (id, _) = create_site(&proxy, "shop", "shop.example.com", backend);
+    assert_eq!(
+        through_proxy(&proxy, "shop.example.com", "/").1,
+        "restored /"
+    );
+
+    admin(&proxy, "DELETE", &format!("/api/subsystems/{id}"), None);
+    assert_eq!(through_proxy(&proxy, "shop.example.com", "/").0, 404);
+
+    let (status, body) = admin(&proxy, "POST", "/api/revisions/4/rollback", Some(json!({})));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        through_proxy(&proxy, "shop.example.com", "/").1,
+        "restored /"
+    );
+
+    let (_, status_body) = admin(&proxy, "GET", "/api/status", None);
+    assert_eq!(status_body["version"], 6);
+    assert_eq!(status_body["data"]["subsystems"]["total"], 1);
+}
+
+#[test]
 fn the_configuration_survives_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start_backend("persistent");

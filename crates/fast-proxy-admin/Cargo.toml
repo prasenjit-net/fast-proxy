@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 fast-proxy-config-service = { path = "../fast-proxy-config-service" }
 fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
 axum = { workspace = true }
@@ -22,6 +23,5 @@ mime_guess = "2"
 rand = "0.8"
 
 [dev-dependencies]
-fast-proxy-routing = { path = "../fast-proxy-routing" }
 tower = { workspace = true }
 http-body-util = { workspace = true }

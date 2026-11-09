@@ -44,6 +44,14 @@ pub fn router(state: SharedState) -> Router {
             "/api/subsystems/{id}/routes/{route_id}",
             put(api::update_route).delete(api::delete_route),
         )
+        .route("/api/revisions", get(api::list_revisions))
+        .route("/api/revisions/{version}", get(api::get_revision))
+        .route(
+            "/api/revisions/{version}/rollback",
+            post(api::rollback_revision),
+        )
+        .route("/api/resolve", post(api::resolve))
+        .route("/api/status", get(api::status))
         .route("/ws", get(ws::handler))
         .fallback(static_assets::handler)
         .layer(from_fn_with_state(state.clone(), access_middleware::record))

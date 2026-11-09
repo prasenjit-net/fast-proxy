@@ -455,9 +455,9 @@ config `version`.
   `GET/POST /api/subsystems/{id}/upstreams`, `PUT/DELETE .../upstreams/{uid}`;
   `GET/POST /api/subsystems/{id}/routes`, `PUT/DELETE .../routes/{rid}`.
   Routes in a list are returned in match order (longest prefix first).
-- [ ] **A3 (M) Revisions:** `GET /api/revisions` (paged),
+- [x] **A3 (M) Revisions:** `GET /api/revisions` (paged),
   `GET /api/revisions/{version}`, `POST /api/revisions/{version}/rollback`.
-- [ ] **A4 (S) Resolver and status:** `POST /api/resolve {host, path}` returns
+- [x] **A4 (S) Resolver and status:** `POST /api/resolve {host, path}` returns
   the matched subsystem, route, and the exact upstream URL it would forward to
   (or the reason there is no match), using the live snapshot.
   `GET /api/status` returns data plane listeners, snapshot version, uptime,
@@ -470,7 +470,11 @@ config `version`.
 *Status for A1-A2:* done, with the response shape `{ data, version }` (deletes
 return `{ version }`), camelCase JSON, and a `fields` array on 400s.
 Subsystem resources carry `createdAtMs`/`updatedAtMs`. Unknown JSON keys are
-rejected. A3 (revisions) and A4 (resolver, status) are still open.
+rejected. A3 (revisions, rollback) and A4 (resolver, status) are done: the
+revision list pages with `limit`/`before` and returns `nextBefore`; the
+resolver reuses `build_upstream_uri`, which moved from the data plane into
+`fast-proxy-routing` so both compute the identical URL; `GET /api/status`
+reports the actually bound listeners. Request totals will join status with T1.
 
 *Done for A1-A4:* every endpoint has HTTP-level tests in the style of
 `src/routes/tests.rs` (success, validation error with `fields`, 404, 409), and
@@ -531,8 +535,8 @@ Follow existing component patterns and the tokens in
 
   *Status:* `tests/exit_criteria.rs` runs the real binary against in-process
   backends and covers scenarios 1, 5 (unknown host, disabled subsystem), 7 and
-  8; scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
-  forwarding tests. Still open: 9 (needs A3), 11 (D5), 12 (D6).
+  8 (and 9, rollback); scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
+  forwarding tests. Scenario 9 (rollback) is now covered too. Still open: 11 (D5), 12 (D6).
 - [ ] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
   continuously while a task performs many admin writes (add/remove routes
   unrelated to the traffic and flip one route between two backends).

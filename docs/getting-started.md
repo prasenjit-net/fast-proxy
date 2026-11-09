@@ -104,7 +104,47 @@ curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/ | head -1      # 503
 curl -s -X PUT -H "$J" -d '{"name":"shop","enabled":true}' $A/subsystems/1
 ```
 
-## 7. Validation errors name every bad field
+## 7. Dry-run a request with the resolver
+
+`POST /api/resolve` performs the same lookup the proxy does and tells you what
+would happen, including the exact upstream URL, without sending anything:
+
+```sh
+curl -s -H "$J" -d '{"host":"shop.example.com","path":"/old/index.html?x=1"}' $A/resolve
+# matched: true, route.prefix "/old", upstreamUrl "http://127.0.0.1:3001/index.html?x=1"
+curl -s -H "$J" -d '{"host":"nope.example.com","path":"/"}' $A/resolve
+# matched: false, reason: "unknown_host"   (or "subsystem_disabled" / "no_route")
+```
+
+## 8. History and rollback
+
+Every successful change is a numbered revision holding the full configuration
+at that moment:
+
+```sh
+curl -s "$A/revisions?limit=5"       # newest first; pass before=<nextBefore> for older ones
+curl -s $A/revisions/4               # the whole configuration as of revision 4
+```
+
+Undo a mistake by rolling back, which re-applies an earlier revision as a **new**
+revision (nothing is rewritten). Ids are kept:
+
+```sh
+curl -s -X DELETE $A/subsystems/1                        # oops
+curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # 404
+curl -s -X POST $A/revisions/4/rollback                  # restoredFrom: 4
+curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # works again
+```
+
+The last 100 revisions are kept.
+
+## 9. What is running
+
+```sh
+curl -s $A/status      # listeners, database path, subsystem counts, uptime, live config version
+```
+
+## 10. Validation errors name every bad field
 
 ```sh
 curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":5}' \
@@ -116,13 +156,12 @@ curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":
 Other errors: `404` for something that does not exist, `409` for a duplicate
 (subsystem name, host pattern, route prefix) or an upstream a route still uses.
 
-## 8. The configuration survives a restart
+## 11. The configuration survives a restart
 
 Stop the proxy (Ctrl-C) and start it again with `cargo run`. The same requests
 route the same way: the configuration is in `./state/fast-proxy.db`.
 
 ## Not available yet
 
-Revision history and rollback, the resolver endpoint, metrics, the admin UI
-pages for all of this, WebSocket passthrough, and graceful draining are still
-to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).
+Metrics, the admin UI pages for all of this, WebSocket passthrough, and
+graceful draining are still to come in M1 (see [M1-PLAN.md](M1-PLAN.md)).

@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 fast-proxy-model = { path = "../fast-proxy-model" }
 arc-swap = "1"
+http = "1"
 thiserror = { workspace = true }
 
 [dev-dependencies]

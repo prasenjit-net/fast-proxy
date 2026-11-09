@@ -25,7 +25,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-model/` holds validated domain types (`HostPattern`,
   `RoutePrefix`, `EndpointAddr`, ...) and the `Config` tree; no I/O.
 - `crates/fast-proxy-routing/` compiles a `Config` into an immutable `Snapshot`
-  (host and route matchers) shared through `SnapshotHolder`; no I/O.
+  (host and route matchers) shared through `SnapshotHolder`; also owns
+  `build_upstream_uri` (path rewriting), used by both the data plane and the
+  admin resolver so they can never disagree. No I/O.
 - `crates/fast-proxy-store/` is SQLite persistence: `Database` (sync core, all
   writes via `Database::write`), `Store` (async handle on a dedicated thread),
   `repository/` (one file per resource), `revision/`. The data plane must never
@@ -36,7 +38,7 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
   `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
   (fixed 404/503/502/504), `upstream_client` (pooled forwarding), `headers`
-  (hop-by-hop, `X-Forwarded-*`), `upstream_uri` (path rewriting). It reads
+  (hop-by-hop, `X-Forwarded-*`). It reads
   snapshots only and never depends on the store.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).

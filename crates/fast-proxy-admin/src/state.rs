@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::events::Event;
 use crate::live_metrics::MetricsSnapshot;
+use crate::runtime_info::RuntimeInfo;
 use crate::ui_config::UiConfig;
 
 /// Everything the admin plane's handlers share.
@@ -17,6 +18,7 @@ pub struct AdminState {
     pub ui: UiConfig,
     /// The only writer of configuration; handlers never touch storage directly.
     pub config: Arc<ConfigService>,
+    pub runtime: RuntimeInfo,
     /// The binary's version; the admin crate cannot read it from its own manifest.
     pub version: &'static str,
     /// Fan-out channel feeding every connected WebSocket client.
@@ -37,11 +39,13 @@ impl AdminState {
         version: &'static str,
         access_log: AccessLog,
         config: Arc<ConfigService>,
+        runtime: RuntimeInfo,
     ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
             ui,
             config,
+            runtime,
             version,
             events,
             latest_metrics: RwLock::new(None),

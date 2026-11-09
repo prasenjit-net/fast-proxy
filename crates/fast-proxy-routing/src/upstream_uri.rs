@@ -1,7 +1,7 @@
 use http::uri::{Authority, PathAndQuery, Scheme};
 use http::Uri;
 
-use fast_proxy_routing::CompiledRoute;
+use crate::CompiledRoute;
 
 /// Builds the URI to request from the upstream: the route's endpoint, the
 /// rewritten path, and the original query string byte for byte.

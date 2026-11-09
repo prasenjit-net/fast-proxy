@@ -11,6 +11,7 @@ mod host_table;
 mod lookup;
 mod route_table;
 mod snapshot;
+mod upstream_uri;
 
 pub use compile::compile;
 pub use compile_error::CompileError;
@@ -19,3 +20,4 @@ pub use host_table::HostTable;
 pub use lookup::Lookup;
 pub use route_table::{RouteMatch, RouteTable};
 pub use snapshot::{CompiledRoute, CompiledSubsystem, Snapshot};
+pub use upstream_uri::build_upstream_uri;

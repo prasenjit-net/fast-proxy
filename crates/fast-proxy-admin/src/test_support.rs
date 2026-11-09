@@ -14,7 +14,7 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use crate::{AdminState, UiConfig};
+use crate::{AdminState, ListenerInfo, RuntimeInfo, UiConfig};
 
 pub struct TestApp {
     router: Router,
@@ -35,6 +35,13 @@ impl TestApp {
             "0.0.0-test",
             access_log,
             config.clone(),
+            RuntimeInfo {
+                listeners: vec![ListenerInfo {
+                    name: "http".into(),
+                    addr: SocketAddr::from(([127, 0, 0, 1], 8000)),
+                }],
+                database_path: "/tmp/test.db".into(),
+            },
         ));
         Self {
             router: crate::router(state),

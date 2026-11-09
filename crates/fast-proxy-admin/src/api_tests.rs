@@ -528,3 +528,278 @@ async fn a_rejected_write_changes_neither_the_version_nor_the_data_plane() {
         Some("127.0.0.1:3000")
     );
 }
+
+// ---- revisions ----------------------------------------------------------
+
+#[tokio::test]
+async fn revisions_list_newest_first_with_their_summaries() {
+    let app = TestApp::new().await;
+    create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    let (status, body) = app.get("/api/revisions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["version"], 4);
+    let summaries: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["summary"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        summaries,
+        [
+            "route created: / in shop",
+            "upstream created: backend in shop",
+            "host added: shop.example.com in shop",
+            "subsystem created: shop",
+        ]
+    );
+    assert_eq!(body["data"][0]["version"], 4);
+    assert!(body["data"][0]["createdAtMs"].as_i64().unwrap() > 0);
+    assert!(body["nextBefore"].is_null());
+}
+
+#[tokio::test]
+async fn revisions_are_paged_with_limit_and_before() {
+    let app = TestApp::new().await;
+    create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+
+    let (_, first) = app.get("/api/revisions?limit=3").await;
+    let versions: Vec<i64> = first["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["version"].as_i64().unwrap())
+        .collect();
+    assert_eq!(versions, [4, 3, 2]);
+    assert_eq!(first["nextBefore"], 2);
+
+    let (_, second) = app.get("/api/revisions?limit=3&before=2").await;
+    assert_eq!(second["data"].as_array().unwrap().len(), 1);
+    assert_eq!(second["data"][0]["version"], 1);
+    assert!(second["nextBefore"].is_null());
+}
+
+#[tokio::test]
+async fn bad_paging_parameters_are_reported_by_name() {
+    let app = TestApp::new().await;
+    let (status, body) = app.get("/api/revisions?limit=0&before=abc").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_fields(&body), ["limit", "before"]);
+}
+
+#[tokio::test]
+async fn a_revision_shows_the_whole_configuration_as_of_then() {
+    let app = TestApp::new().await;
+    let (id, _) = create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    app.delete(&format!("/api/subsystems/{id}")).await;
+
+    let (status, body) = app.get("/api/revisions/4").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["summary"], "route created: / in shop");
+    let shop = &body["data"]["config"]["subsystems"][0];
+    assert_eq!(shop["name"], "shop");
+    assert_eq!(shop["hosts"], json!(["shop.example.com"]));
+    assert_eq!(shop["upstreams"][0]["addr"], "127.0.0.1:3000");
+    assert_eq!(shop["routes"][0]["prefix"], "/");
+    assert_eq!(body["version"], 5);
+
+    let (_, after_delete) = app.get("/api/revisions/5").await;
+    assert_eq!(after_delete["data"]["config"]["subsystems"], json!([]));
+
+    let (status, body) = app.get("/api/revisions/99").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "NOT_FOUND");
+}
+
+#[tokio::test]
+async fn rolling_back_restores_the_earlier_behavior_as_a_new_revision() {
+    let app = TestApp::new().await;
+    let (id, _) = create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    app.delete(&format!("/api/subsystems/{id}")).await;
+    assert_eq!(backend_for(&app, "shop.example.com", "/"), None);
+
+    let (status, body) = app.post("/api/revisions/4/rollback", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["restoredFrom"], 4);
+    assert_eq!(body["version"], 6);
+    assert_eq!(
+        backend_for(&app, "shop.example.com", "/").as_deref(),
+        Some("127.0.0.1:3000")
+    );
+
+    // The restored subsystem is the same one, with the same ids.
+    let (status, restored) = app.get(&format!("/api/subsystems/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(restored["data"]["name"], "shop");
+
+    let (_, revisions) = app.get("/api/revisions?limit=1").await;
+    assert_eq!(revisions["data"][0]["summary"], "rollback to v4");
+    assert_eq!(revisions["data"][0]["version"], 6);
+}
+
+#[tokio::test]
+async fn rolling_back_to_a_missing_revision_is_a_404_and_changes_nothing() {
+    let app = TestApp::new().await;
+    create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    let (status, _) = app.post("/api/revisions/99/rollback", json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(app.config.snapshot_holder().load().version, 4);
+}
+
+// ---- resolver -----------------------------------------------------------
+
+async fn resolve(app: &TestApp, host: &str, path: &str) -> Value {
+    let (status, body) = app
+        .post("/api/resolve", json!({ "host": host, "path": path }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
+}
+
+/// A shop with a catch-all route and a rewriting `/api` route.
+async fn shop_with_rewrite(app: &TestApp) -> i64 {
+    let (id, _) = create_site(app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    let (_, upstreams) = app.get(&format!("/api/subsystems/{id}/upstreams")).await;
+    let upstream = upstreams["data"][0]["id"].as_i64().unwrap();
+    let (status, _) = app
+        .post(
+            &format!("/api/subsystems/{id}/routes"),
+            json!({
+                "prefix": "/api", "upstreamGroupId": upstream, "stripPrefix": true,
+                "upstreamPrefix": "/v2", "preserveHost": false
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    id
+}
+
+#[tokio::test]
+async fn the_resolver_reports_the_exact_upstream_url() {
+    let app = TestApp::new().await;
+    shop_with_rewrite(&app).await;
+
+    let body = resolve(&app, "shop.example.com", "/api/users?page=2&q=a%20b").await;
+    let result = &body["data"];
+    assert_eq!(result["matched"], true);
+    assert!(result["reason"].is_null());
+    assert_eq!(result["subsystem"]["name"], "shop");
+    assert_eq!(result["route"]["prefix"], "/api");
+    assert_eq!(result["route"]["stripPrefix"], true);
+    assert_eq!(result["route"]["upstreamPrefix"], "/v2");
+    assert_eq!(result["route"]["preserveHost"], false);
+    assert_eq!(result["route"]["endpoint"], "127.0.0.1:3000");
+    assert_eq!(
+        result["upstreamUrl"],
+        "http://127.0.0.1:3000/v2/users?page=2&q=a%20b"
+    );
+    assert_eq!(body["version"], app.config.snapshot_holder().load().version);
+
+    let root = resolve(&app, "shop.example.com", "/other").await;
+    assert_eq!(root["data"]["route"]["prefix"], "/");
+    assert_eq!(root["data"]["upstreamUrl"], "http://127.0.0.1:3000/other");
+}
+
+#[tokio::test]
+async fn the_resolver_normalizes_the_host_like_the_data_plane() {
+    let app = TestApp::new().await;
+    shop_with_rewrite(&app).await;
+    let body = resolve(&app, "SHOP.Example.com:8000", "/").await;
+    assert_eq!(body["data"]["matched"], true);
+}
+
+#[tokio::test]
+async fn the_resolver_explains_why_nothing_matched() {
+    let app = TestApp::new().await;
+    let id = shop_with_rewrite(&app).await;
+
+    let unknown = resolve(&app, "nope.example.com", "/").await;
+    assert_eq!(unknown["data"]["matched"], false);
+    assert_eq!(unknown["data"]["reason"], "unknown_host");
+    assert!(unknown["data"]["subsystem"].is_null());
+    assert!(unknown["data"]["upstreamUrl"].is_null());
+
+    // Remove the catch-all so only /api remains.
+    let (_, routes) = app.get(&format!("/api/subsystems/{id}/routes")).await;
+    let root = routes["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["prefix"] == "/")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    app.delete(&format!("/api/subsystems/{id}/routes/{root}"))
+        .await;
+    let no_route = resolve(&app, "shop.example.com", "/other").await;
+    assert_eq!(no_route["data"]["reason"], "no_route");
+    assert_eq!(no_route["data"]["subsystem"]["name"], "shop");
+
+    app.put(
+        &format!("/api/subsystems/{id}"),
+        json!({ "name": "shop", "enabled": false }),
+    )
+    .await;
+    let disabled = resolve(&app, "shop.example.com", "/api/x").await;
+    assert_eq!(disabled["data"]["reason"], "subsystem_disabled");
+    assert_eq!(disabled["data"]["subsystem"]["name"], "shop");
+}
+
+#[tokio::test]
+async fn the_resolver_follows_live_edits() {
+    let app = TestApp::new().await;
+    let (id, upstream) = create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    app.put(
+        &format!("/api/subsystems/{id}/upstreams/{upstream}"),
+        json!({ "name": "backend", "addr": "127.0.0.1:4000" }),
+    )
+    .await;
+    let body = resolve(&app, "shop.example.com", "/x").await;
+    assert_eq!(body["data"]["upstreamUrl"], "http://127.0.0.1:4000/x");
+}
+
+#[tokio::test]
+async fn the_resolver_validates_its_input() {
+    let app = TestApp::new().await;
+    let (status, body) = app
+        .post("/api/resolve", json!({ "host": " ", "path": "no-slash" }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_fields(&body), ["host", "path"]);
+
+    let (status, body) = app
+        .post("/api/resolve", json!({ "host": "a.com", "path": "/a b" }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_fields(&body), ["path"]);
+
+    let (status, _) = app.post("/api/resolve", json!({ "host": "a.com" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ---- status -------------------------------------------------------------
+
+#[tokio::test]
+async fn status_reports_what_is_running() {
+    let app = TestApp::new().await;
+    let (id, _) = create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    create_site(&app, "blog", "blog.example.com", "127.0.0.1:3001").await;
+    app.put(
+        &format!("/api/subsystems/{id}"),
+        json!({ "name": "shop", "enabled": false }),
+    )
+    .await;
+
+    let (status, body) = app.get("/api/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let data = &body["data"];
+    assert_eq!(body["version"], 9);
+    assert_eq!(
+        data["listeners"],
+        json!([{ "name": "http", "addr": "127.0.0.1:8000" }])
+    );
+    assert_eq!(data["database"], "/tmp/test.db");
+    assert_eq!(data["subsystems"], json!({ "total": 2, "enabled": 1 }));
+    assert!(data["startedAtMs"].as_i64().unwrap() > 0);
+    assert!(data["uptimeSecs"].is_u64());
+}

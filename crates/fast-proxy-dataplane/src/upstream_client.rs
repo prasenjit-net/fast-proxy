@@ -4,6 +4,7 @@ use std::io;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use fast_proxy_routing::build_upstream_uri;
 use http::{Request, Response};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
@@ -13,7 +14,6 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 
 use crate::headers::{self, ClientInfo};
 use crate::trusted_proxies::TrustedProxies;
-use crate::upstream_uri::build_upstream_uri;
 use crate::{FixedResponse, Forward, ResponseBody, Target};
 
 type HttpClient = Client<HttpConnector, Incoming>;

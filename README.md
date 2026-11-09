@@ -8,8 +8,8 @@ Rust, shipped as a single binary with an embedded admin UI.
 > **Status: early development (milestone 1 in progress).** The proxy works end to
 > end: configure subsystems, hosts, upstreams and routes through the admin REST
 > API, and traffic is routed live, with the configuration persisted in SQLite.
-> Still to come in M1: the admin UI pages, revision history and rollback,
-> metrics, WebSocket passthrough and graceful draining. Try it with the
+> Revision history with rollback and a request resolver are in. Still to come in
+> M1: the admin UI pages, metrics, WebSocket passthrough and graceful draining. Try it with the
 > [getting-started walkthrough](docs/getting-started.md); see the
 > [roadmap](docs/ROADMAP.md) for the plan.
 
@@ -129,6 +129,11 @@ with the proxy itself (M1 task D1).
 | PUT, DELETE | `/api/subsystems/{id}/upstreams/{upstream_id}` | Replace / delete (409 while a route uses it) |
 | GET, POST | `/api/subsystems/{id}/routes` | List in match order / create |
 | PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete |
+| GET | `/api/revisions?limit=&before=` | Revision history, newest first (paged) |
+| GET | `/api/revisions/{version}` | The full configuration as of that revision |
+| POST | `/api/revisions/{version}/rollback` | Re-apply a revision as a new one |
+| POST | `/api/resolve` | Dry-run `{host, path}` against the live config: subsystem, route, exact upstream URL, or why nothing matched |
+| GET | `/api/status` | Listeners, database path, subsystem counts, uptime, live config version |
 | GET | `/ws` | WebSocket: server-push events |
 
 Config responses are `{ "data": …, "version": N }`, where `version` is the config

@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use fast_proxy_admin::AdminState;
+use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo};
 use fast_proxy_config_service::{ConfigService, StartError};
 use fast_proxy_dataplane::{
     bind, BindError, DataPlane, ListenerSpec, RequestPipeline, TrustedProxies, TrustedProxyError,
@@ -67,11 +67,22 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             })?;
 
     let access_log = AccessLog::open(config.logging.access_log.as_deref()).await;
+    let runtime = RuntimeInfo {
+        listeners: bound
+            .iter()
+            .map(|listener| ListenerInfo {
+                name: listener.name.clone(),
+                addr: listener.local_addr(),
+            })
+            .collect(),
+        database_path: database.display().to_string(),
+    };
     let admin_state = Arc::new(AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
         access_log,
         config_service.clone(),
+        runtime,
     ));
     fast_proxy_admin::spawn_sampler(admin_state.clone());
 

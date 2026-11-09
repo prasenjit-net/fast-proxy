@@ -15,7 +15,6 @@ mod responses;
 mod server;
 mod trusted_proxies;
 mod upstream_client;
-mod upstream_uri;
 
 #[cfg(test)]
 mod forwarding_tests;
