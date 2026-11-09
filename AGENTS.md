@@ -32,8 +32,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-config-service/` is the only writer: `ConfigService::apply`
   validates (compiles) a change, persists it, swaps the live `Snapshot`, and
   broadcasts `ConfigChanged`. All admin writes must go through it.
-- `crates/fast-proxy-dataplane/` is a skeleton filled in by the M1 plan
-  (`docs/M1-PLAN.md`).
+- `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
+  `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
+  (fixed 404/503/502/504). It reads snapshots only and never depends on the store.
 - `docs/adr/` records design decisions.
 - `ui/src/lib/api.ts` is the typed frontend API client.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.

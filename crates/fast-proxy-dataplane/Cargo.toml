@@ -6,3 +6,17 @@ description = "The hyper-based proxy data plane"
 publish = false
 
 [dependencies]
+fast-proxy-routing = { path = "../fast-proxy-routing" }
+bytes = "1"
+http = "1"
+http-body-util = { workspace = true }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1"] }
+rand = "0.8"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = "0.7"
+tracing = { workspace = true }
+
+[dev-dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }

@@ -346,14 +346,17 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (M) Listeners and accept loop.** Bind each configured listener with
+- [x] **D1 (M) Listeners and accept loop.** Bind each configured listener with
   `hyper-util` `server::conn::auto::Builder` (HTTP/1 only in M1). Track open
   connections with a counter and a shutdown signal (`tokio_util`
   `CancellationToken` or a watch channel). Set sane defaults: header read
   timeout, max header size, keep-alive.
   *Done when:* a bound port serves a hello response, and a bind failure aborts
   startup with a clear error.
-- [ ] **D2 (M) Request pipeline** (`dataplane/handler.rs`): load snapshot once
+  *Result:* `bind` is all-or-nothing and names the failing listener. The
+  connection counter and the shutdown token (stop accepting) are in; draining
+  open connections is D6. HTTP/1 only, with upgrades enabled for D5.
+- [x] **D2 (M) Request pipeline** (`dataplane/handler.rs`): load snapshot once
   -> host match -> subsystem checks -> route match -> forward. Fixed responses
   (`responses.rs`, plain text or JSON by `Accept`):
   - no subsystem for host: 404 `unknown host`
@@ -362,6 +365,10 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   - upstream connect failure: 502; upstream timeout: 504
   - Each includes an `x-request-id`.
   *Done when:* integration tests assert status and body for each case.
+  *Result:* the pipeline calls a `Forward` trait (implemented by the upstream
+  client in D4; tests use a fake). `FixedResponse` renders all five fixed
+  responses, including 502/504, which D4 will return on upstream failures.
+  The 404/503/404 cases are tested end to end over TCP.
 - [ ] **D3 (M) Header handling** (`headers.rs`): strip hop-by-hop headers and any
   named in `Connection` (RFC 9110), both directions, while preserving
   `Upgrade` for upgrades (D6 task); set `X-Forwarded-For/Proto/Host` per D10;

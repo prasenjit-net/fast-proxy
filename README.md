@@ -149,7 +149,7 @@ WebSocket events are JSON discriminated by `type`:
 │   ├── fast-proxy-routing/   Config -> Snapshot compiler, host and route matchers
 │   ├── fast-proxy-config-service/  apply pipeline: validate, persist, swap snapshot
 │   ├── fast-proxy-store/     SQLite storage, transactional writes, revisions, rollback
-│   └── fast-proxy-dataplane/ skeleton for M1
+│   └── fast-proxy-dataplane/ hyper listeners and request pipeline (forwarding to come)
 └── ui/
     ├── public/favicon.svg    the gear-and-bolt mark
     └── src/
