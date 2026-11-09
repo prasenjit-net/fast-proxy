@@ -336,38 +336,38 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream B: Balancing (new pure crate)
 
-- [ ] **B1 (M) Crate and runtime state.** `EndpointRuntime` (atomics: in-flight,
+- [x] **B1 (M) Crate and runtime state.** `EndpointRuntime` (atomics: in-flight,
   health flag, passive counters, ejected-until, EWMA latency), `RuntimeRegistry`
   (the carry-over map by endpoint id and address), `Candidate`, request context
   (client IP, header/cookie lookup), and a `Selection` result.
   *Done when:* unit tests cover state updates and registry reuse/reset rules (E2).
-- [ ] **B2 (S) Round robin and weighted round robin.**
+- [x] **B2 (S) Round robin and weighted round robin.** (weighted rotation is in blocks per cycle, exact over a full cycle, not interleaved)
   *Done when:* a test shows the pick counts match the weights over many picks
   (exact for a full cycle), and skipping ineligible endpoints keeps the rotation
   fair among the rest.
-- [ ] **B3 (S) Least connections.**
+- [x] **B3 (S) Least connections.**
   *Done when:* with fixed in-flight counts it picks the minimum weighted load and
   breaks ties randomly (seeded in tests).
-- [ ] **B4 (M) Power of two choices with EWMA.** Peak-EWMA scoring with a decay
+- [x] **B4 (M) Power of two choices with EWMA.** Peak-EWMA scoring with a decay
   time constant; sensible cold start (no samples yet).
   *Done when:* tests show a consistently slower endpoint receives a smaller
   share, and a fresh endpoint is not starved.
-- [ ] **B5 (M) Consistent hash.** Ring of virtual nodes proportional to weight,
+- [x] **B5 (M) Consistent hash.** Ring of virtual nodes proportional to weight,
   key from client IP, header or cookie; walks to the next eligible node; falls
   back to round robin without a key.
   *Done when:* property tests show the same key maps to the same endpoint, and
   removing one of N endpoints remaps only about 1/N of keys.
-- [ ] **B6 (M) Eligibility and the failure policy.** `eligible = admin enabled
+- [x] **B6 (M) Eligibility and the failure policy.** `eligible = admin enabled
   && healthy && not ejected`; none eligible: fail open picks among admin-enabled
   endpoints ignoring health, fail closed returns none; draining and disabled are
   never picked.
   *Done when:* a property test shows an ineligible endpoint is never chosen while
   an eligible one exists, for every algorithm.
-- [ ] **B7 (M) Passive health state machine.** Consecutive failures, ejection
+- [x] **B7 (M) Passive health state machine.** Consecutive failures, ejection
   with exponential backoff, half-open single trial, reset on success, and the
   `max_ejection_percent` guard. Takes `now` explicitly (E15).
   *Done when:* deterministic tests walk every transition, including the guard.
-- [ ] **B8 (S) Selection overhead check.** A timing test or microbenchmark for
+- [x] **B8 (S) Selection overhead check.** A timing test or microbenchmark for
   every algorithm at 3 and 64 endpoints.
   *Done when:* results are recorded in `docs/benchmarks.md` and meet the budget
   in 4.3 (or the budget is revisited with the numbers).

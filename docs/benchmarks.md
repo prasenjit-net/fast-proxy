@@ -128,3 +128,25 @@ oha -z 8s -c 64 --no-tui -H "Host: bench.example.com" http://127.0.0.1:8000/
 To compare logging, add `access_log = "access.log"` under a `[logging]` section
 (file), or drop the `access=off` filter (default console line). Vary `-c` for
 the connection counts above.
+
+## Endpoint selection cost (M2, task B8)
+
+Cost of `Balancer::select` alone (no I/O), all endpoints eligible, release
+build, Apple silicon laptop. Budget from the M2 plan: under 200 ns at three
+endpoints, a few microseconds at 64, no allocation.
+
+```sh
+cargo test -p fast-proxy-balancing --release --test selection_cost -- --ignored --nocapture
+```
+
+| Algorithm | 3 endpoints | 64 endpoints |
+|---|---|---|
+| round_robin | 11.8 ns | 63.3 ns |
+| weighted_round_robin | 4.3 ns | 61.2 ns |
+| least_connections | 4.4 ns | 106.0 ns |
+| p2c_ewma | 16.6 ns | 85.3 ns |
+| consistent_hash | 6.5 ns | 12.0 ns |
+
+All are well inside the budget. Round robin and p2c count and index the
+eligible endpoints in a second pass, which is why they grow with group size;
+that is fine at the 64-endpoint cap.

@@ -480,6 +480,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-balancing"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+]
+
+[[package]]
 name = "fast-proxy-config-service"
 version = "0.0.0"
 dependencies = [
