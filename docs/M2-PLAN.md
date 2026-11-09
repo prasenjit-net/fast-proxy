@@ -1,7 +1,7 @@
 # M2 Plan: Upstream groups, load balancing, health
 
-Status: **draft v0.1 (2026-11-09), proposed.** Items marked **(confirm)** need
-the owner's sign-off before the tasks that depend on them start. Parent
+Status: **v0.2 (2026-11-09), in progress.** The **(confirm)** items were accepted as recommended
+(ADRs 0005-0008; E12 stays provisional until spike G2). Parent
 document: [ROADMAP.md](ROADMAP.md). Predecessor: [M1-PLAN.md](M1-PLAN.md)
 (complete; section 10 there lists what carries over). Task sizes are relative
 effort (S under half a day, M about 1-2 days, L about 3-5 days), not
@@ -283,7 +283,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream G: Groundwork
 
-- [ ] **G1 (S) Decisions and ADRs.** Get the **(confirm)** items in section 3
+- [x] **G1 (S) Decisions and ADRs.** Get the **(confirm)** items in section 3
   resolved. Write `docs/adr/` notes: 0005 runtime state and stable endpoint
   identity (E1-E3), 0006 selection algorithms and eligibility (E4, E5, E8, E9),
   0007 health and ejection (E6, E7, E15), 0008 retries, budget and body replay
@@ -298,7 +298,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   connect failure, no reclaim after the first poll).
   *Done when:* findings are in ADR 0008 and E12 is confirmed or reduced to
   "bodyless requests only".
-- [ ] **G3 (S) Decide the defaults table.** Turn E4-E11 into the documented
+- [x] **G3 (S) Decide the defaults table.** Turn E4-E11 into the documented
   defaults (section 5 and the admin docs) once confirmed; this is the single
   source the model validation and UI forms use.
 
