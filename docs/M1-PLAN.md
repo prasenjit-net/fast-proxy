@@ -261,8 +261,8 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
   *Done when:* tests open a temp DB, create the schema from empty, reopen
   idempotently, and reject a mismatched `user_version`.
 - [ ] **S2 (S) Schema** (section 5) as `schema.sql` in the store crate.
-- [ ] **S3 (M) Domain models and validation** (`store/models.rs`,
-  `validate.rs`), pure and heavily unit tested:
+- [x] **S3 (M) Domain models and validation** (built in the `model` crate, one
+  file per type, not `store/models.rs`), pure and heavily unit tested:
   - subsystem name: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
   - host pattern: lowercased; exact DNS name or `*.` + DNS name (a single
     leading wildcard label only); no port, no trailing dot; IP literals
@@ -293,25 +293,25 @@ routing, **D** data plane, **T** telemetry, **A** admin API, **U** admin UI,
 
 ### Workstream R: Snapshot and routing
 
-- [ ] **R1 (M) Compiled snapshot types** (`snapshot/`): `Snapshot { version,
+- [x] **R1 (M) Compiled snapshot types** (`snapshot/`): `Snapshot { version,
   hosts: HostTable, subsystems: HashMap<SubsystemId, CompiledSubsystem> }`;
   `CompiledSubsystem { name, enabled, routes: RouteTable, upstreams }` where
   routes hold resolved endpoint addresses and timeouts.
   `compile(&Config) -> Result<Snapshot, CompileError>`; deterministic and pure.
-- [ ] **R2 (M) Host matcher.** Exact match first, then the longest matching
+- [x] **R2 (M) Host matcher.** Exact match first, then the longest matching
   wildcard suffix. Normalization: lowercase, strip port, strip one trailing dot,
   handle bracketed IPv6 `Host` values (no match, no panic). Missing or invalid
   Host returns "no subsystem".
   *Done when:* unit tests plus a property test (a generated exact host always
   beats a wildcard that also matches; the longest wildcard wins; matching is
   case-insensitive).
-- [ ] **R3 (M) Route matcher.** Longest prefix wins on **segment boundaries**
+- [x] **R3 (M) Route matcher.** Longest prefix wins on **segment boundaries**
   (`/api` matches `/api` and `/api/x`, not `/apix`); `/` is the catch-all;
   disabled routes are skipped at compile time. Returns the route plus the
   remaining path after the prefix.
   *Done when:* unit and property tests (result is always the longest matching
   prefix, equals a brute-force reference implementation).
-- [ ] **R4 (S) Snapshot holder.** `SnapshotHolder` wrapping
+- [x] **R4 (S) Snapshot holder.** `SnapshotHolder` wrapping
   `arc-swap::ArcSwap<Snapshot>` with `load()` and `swap()`; the initial value
   is an empty snapshot version 0.
 - [ ] **R5 (M) Apply pipeline.** One `ConfigService` owning a writer mutex so DB

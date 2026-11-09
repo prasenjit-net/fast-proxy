@@ -1,0 +1,31 @@
+use thiserror::Error;
+
+/// Why a configuration cannot be compiled into a snapshot. Each variant
+/// is a cross-table rule that storage constraints cannot express.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CompileError {
+    #[error("subsystem \"{0}\" is defined more than once (same name or id)")]
+    DuplicateSubsystem(String),
+    #[error("host pattern \"{pattern}\" is used by both \"{first}\" and \"{second}\"")]
+    DuplicateHost {
+        pattern: String,
+        first: String,
+        second: String,
+    },
+    #[error("subsystem \"{subsystem}\" has more than one upstream named \"{name}\"")]
+    DuplicateUpstreamName { subsystem: String, name: String },
+    #[error("subsystem \"{subsystem}\" has more than one route with prefix \"{prefix}\"")]
+    DuplicateRoutePrefix { subsystem: String, prefix: String },
+    #[error(
+        "route \"{prefix}\" in \"{subsystem}\" points at an upstream that does not exist in that subsystem"
+    )]
+    UnknownUpstream { subsystem: String, prefix: String },
+    #[error(
+        "upstream \"{upstream}\" in \"{subsystem}\" must have exactly one endpoint, found {count}"
+    )]
+    EndpointCount {
+        subsystem: String,
+        upstream: String,
+        count: usize,
+    },
+}

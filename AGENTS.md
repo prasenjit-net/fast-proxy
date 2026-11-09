@@ -21,8 +21,12 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-telemetry/` holds the access log (metrics and traffic
   stats land here in M1).
-- `crates/fast-proxy-model/`, `-store/`, `-routing/`, `-dataplane/` are
-  skeletons filled in by the M1 plan (`docs/M1-PLAN.md`).
+- `crates/fast-proxy-model/` holds validated domain types (`HostPattern`,
+  `RoutePrefix`, `EndpointAddr`, ...) and the `Config` tree; no I/O.
+- `crates/fast-proxy-routing/` compiles a `Config` into an immutable `Snapshot`
+  (host and route matchers) shared through `SnapshotHolder`; no I/O.
+- `crates/fast-proxy-store/` and `-dataplane/` are skeletons filled in by the M1
+  plan (`docs/M1-PLAN.md`).
 - `docs/adr/` records design decisions.
 - `ui/src/lib/api.ts` is the typed frontend API client.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.

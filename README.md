@@ -145,7 +145,9 @@ WebSocket events are JSON discriminated by `type`:
 ├── crates/
 │   ├── fast-proxy-admin/     Axum admin plane: api/ · ws · events · error · embedded SPA
 │   ├── fast-proxy-telemetry/ access log (metrics and traffic stats to come)
-│   └── fast-proxy-{model,store,routing,dataplane}/  skeletons for M1
+│   ├── fast-proxy-model/     validated domain types and the Config tree
+│   ├── fast-proxy-routing/   Config -> Snapshot compiler, host and route matchers
+│   └── fast-proxy-{store,dataplane}/  skeletons for M1
 └── ui/
     ├── public/favicon.svg    the gear-and-bolt mark
     └── src/

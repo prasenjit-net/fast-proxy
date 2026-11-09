@@ -6,3 +6,9 @@ description = "Compiled routing snapshot and host/route matchers (pure, no I/O)"
 publish = false
 
 [dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+arc-swap = "1"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"

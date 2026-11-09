@@ -1,1 +1,21 @@
 //! Compiled routing snapshot plus the host and route matchers. Pure: no I/O.
+//!
+//! The admin side turns a [`fast_proxy_model::Config`] into an immutable
+//! [`Snapshot`] with [`compile`]; the data plane only ever reads snapshots
+//! through a [`SnapshotHolder`] and never touches storage.
+
+mod compile;
+mod compile_error;
+mod holder;
+mod host_table;
+mod lookup;
+mod route_table;
+mod snapshot;
+
+pub use compile::compile;
+pub use compile_error::CompileError;
+pub use holder::SnapshotHolder;
+pub use host_table::HostTable;
+pub use lookup::Lookup;
+pub use route_table::{RouteMatch, RouteTable};
+pub use snapshot::{CompiledRoute, CompiledSubsystem, Snapshot};
