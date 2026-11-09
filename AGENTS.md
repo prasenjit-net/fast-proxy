@@ -45,7 +45,11 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   snapshots only and never depends on the store.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
-- `tests/` holds end-to-end tests that run the real binary.
+- `tests/` holds end-to-end tests that run the real binary; shared helpers (spawning
+  a configured proxy, backends, a tiny HTTP client) are in `tests/common/mod.rs`.
+  Tests that deliver real signals are `#[cfg(unix)]`.
+- `docs/benchmarks.md` records the performance baseline and how to reproduce it
+  (measured with `oha` against the `bench_backend` example in the data plane crate).
 - `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,
   `types.ts`, `api.ts` one function per endpoint), `validation.ts` (client-side
   checks that use the server's camelCase field names), and `navigation.ts`.

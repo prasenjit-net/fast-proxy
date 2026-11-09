@@ -173,13 +173,13 @@ WebSocket events are JSON discriminated by `type`:
 ## Project structure
 
 ```
-├── docs/                     ROADMAP.md · M1-PLAN.md · adr/
+├── docs/                     ROADMAP.md · M1-PLAN.md · getting-started.md · benchmarks.md · adr/
 ├── config.toml               server + UI configuration
 ├── src/
 │   ├── main.rs               CLI (clap) + logging
 │   ├── startup.rs            assembles store, config service, data plane, admin plane
 │   └── config.rs             TOML config model
-├── tests/                    end-to-end tests that run the real binary
+├── tests/                    end-to-end tests that run the real binary (exit criteria, reload under load)
 ├── crates/
 │   ├── fast-proxy-admin/     Axum admin plane: api/ · ws · events · error · embedded SPA
 │   ├── fast-proxy-telemetry/ access log (metrics and traffic stats to come)

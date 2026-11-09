@@ -588,19 +588,41 @@ Follow existing component patterns and the tokens in
   backends and covers scenarios 1, 5 (unknown host, disabled subsystem), 7 and
   8 (and 9, rollback); scenarios 2-4, 6 and 10 are covered at crate level in the data plane's
   forwarding tests. Scenarios 9 (rollback), 11 (WebSocket) and 12 (graceful shutdown) are covered too, at crate level and on the binary (12).
-- [ ] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
+- [x] **Q2 (M) Reload-under-load test:** N concurrent clients issue requests
   continuously while a task performs many admin writes (add/remove routes
   unrelated to the traffic and flip one route between two backends).
   Assert zero failed requests and that every response came from a backend
   that was valid at some point during the run.
-- [ ] **Q3 (S) Baseline benchmark:** run `oha` or `wrk` against a local
+  *Result:* `tests/reload_under_load.rs` runs the real binary: 8 keep-alive
+  clients while an admin task makes 400 writes (80 flips of one route between
+  two backends, routes added and removed, subsystems created and deleted). It
+  asserts zero failures, that the unedited route never changes backend, that
+  every `/flip` answer is from a backend that route pointed at while the
+  request was in flight, that requests running entirely between two writes see
+  exactly the value just written (this catches stale snapshots), no 5xx and no
+  rejected change in `/metrics`, and one config version per write. A typical run
+  is ~2,800 requests with ~1,000 in stable windows. Mutation-checked: never
+  publishing the snapshot, or skipping every 7th publish, both fail it.
+- [x] **Q3 (S) Baseline benchmark:** run `oha` or `wrk` against a local
   backend, direct versus through the proxy; record the numbers, hardware, and
   command in `docs/benchmarks.md` as the M1 baseline (informational, not a
   gate).
-- [ ] **Q4 (S) Gates:** `cargo fmt --all -- --check`,
+  *Result:* recorded in `docs/benchmarks.md`, measured with `oha` 1.16.0 against a
+  small fixed-response backend (`bench_backend`, an example in the data plane
+  crate). About 25 us added at p50 for one connection; under half of direct
+  throughput under saturation on a shared CPU; the default console access line
+  costs about a quarter of throughput while the file log is nearly free. A first
+  pass with an in-house load generator, since removed, agreed within about 10%.
+- [x] **Q4 (S) Gates:** `cargo fmt --all -- --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `npm test`,
   `npm run build` all green in CI on Linux, macOS, and Windows. Fix any
   platform-specific issues (paths, signals) that appear.
+  *Result:* the CI workflow already runs all of these (lint on Linux; tests and
+  a release build on all three platforms; the UI tests and build). It found one
+  platform issue: three end-to-end tests deliver Ctrl-C with `kill -INT` and so
+  run on Unix only. Draining is covered on every platform by signal-free
+  tests; what Windows lacks is an end-to-end console Ctrl-C test through the
+  binary. After that fix, PRs 11 to 13 are green on all three platforms.
 
 ### Workstream W: Documentation
 
