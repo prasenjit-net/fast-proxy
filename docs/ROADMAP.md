@@ -1,6 +1,6 @@
 # fast-proxy: Plan and Roadmap
 
-Status: draft v0.1 (2026-11-09). This is a living document; update it as
+Status: draft v0.2 (2026-11-09). This is a living document; update it as
 decisions are made and milestones land.
 
 ## 1. Vision
@@ -31,6 +31,34 @@ health-check scripts + dashboards" stack for small and mid-size deployments.
   can be pushed to many nodes by external tooling.
 - Layer-4 (raw TCP/UDP) proxying. Revisit after 1.0.
 
+## 1.1 Core concepts
+
+- **Data plane**: the public-facing proxy process. Its own configuration is
+  small, static, and comes from the **config file**: listeners, TLS, ACME,
+  admin listener address, DB path, logging. Changing it requires a restart.
+- **Subsystem**: one per host name (or small set of host names). Each subsystem
+  behaves like a separate, independently configurable proxy: its own routes,
+  upstream groups, health checks, maintenance flag, sampling rules, and
+  limits. A request is first matched to a subsystem by host name, and only
+  then routed inside it.
+- **Route**: belongs to exactly one subsystem. Matches by URI prefix within
+  that subsystem and points to an upstream group.
+- **Admin plane**: a separate listener with the admin UI and API. After the
+  data plane is started from its config file, operators create and edit
+  subsystems and routes here. They are stored in a **local database file**
+  and applied live.
+
+### Configuration ownership
+
+| Layer | Source | Changes apply | Examples |
+|---|---|---|---|
+| Data plane | Config file (`config.toml`) | On restart | Listeners and ports, TLS/static certs, ACME account and directory, admin listener, DB path, state dir, logging |
+| Subsystems and below | Local DB, edited via admin UI/API | Live, no restart | Subsystems, host names, routes, upstream groups, health checks, maintenance mode, sampling rules |
+
+The config file never contains subsystems or routes. The DB never contains
+listener, TLS, or ACME settings. This keeps "how the proxy is hosted" separate
+from "what the proxy serves".
+
 ## 2. Starting point
 
 The repo is a single-binary fullstack scaffold:
@@ -60,14 +88,19 @@ Separate listeners keep admin failures, auth, and load from affecting traffic.
 
 ### 3.2 Config as an immutable snapshot
 
-- Config is parsed and **validated into a compiled snapshot** (routing tables,
-  upstream groups, TLS cert resolver) and published through `arc-swap`.
+- At startup the data plane reads the config file, opens the DB, and
+  **compiles the DB contents into a snapshot** (host -> subsystem table, per
+  subsystem route table and upstream groups) published through `arc-swap`.
 - Each request loads the current snapshot once and uses it for its entire
   lifetime. In-flight requests finish on the old snapshot.
-- Updates (file watch, admin API, SIGHUP) follow **validate -> compile -> swap**.
-  An invalid config is rejected and the old snapshot stays live.
-- Every snapshot has a monotonically increasing version and is persisted, so
-  rollback is "re-apply version N".
+- Admin writes follow **validate -> commit to DB (transaction) -> recompile
+  -> swap**. An invalid change is rejected before commit and the old snapshot
+  stays live. Recompiling can be per subsystem so edits to one subsystem do not
+  rebuild the others.
+- The DB is the source of truth for subsystems and below. Every committed
+  change bumps a version and writes a history row, so rollback is "re-apply
+  version N". There is no file-watch reload for subsystem config; only the
+  data plane file is read, and only at startup.
 - Runtime state that must survive swaps (health status, connection counts,
   maintenance flags, EWMA latency) lives in separate shared structures keyed by
   stable IDs, not inside the snapshot.
@@ -98,55 +131,83 @@ accept -> (TLS handshake, SNI cert pick) -> parse HTTP
 | Metrics | `prometheus` or `metrics` + exporter | Decide in M1 |
 | Upstream client | hyper-util legacy client or custom pool | Decide in M1 based on pool control needs |
 
-### 3.5 Proposed config shape (illustrative, not final)
+### 3.5 Data plane config file (illustrative, not final)
 
 ```toml
-[admin]
-listen = "127.0.0.1:9000"
+[data_plane]
+state_dir = "./state"           # ACME account/certs, runtime files
+database  = "./state/fast-proxy.db"
 
-[[listener]]
+[[data_plane.listener]]
 name = "http"
 listen = "0.0.0.0:80"
 
-[[listener]]
+[[data_plane.listener]]
 name = "https"
 listen = "0.0.0.0:443"
 tls = true
 
-[[upstream]]
-name = "api"
-lb = "p2c"                      # round_robin | weighted | least_conn | p2c | hash
-[[upstream.endpoint]]
-addr = "10.0.0.11:8080"
-weight = 1
-[upstream.health]
-path = "/healthz"
-interval = "5s"
-unhealthy_threshold = 3
-healthy_threshold = 2
+# Static certificates, selected by SNI pattern.
+[[data_plane.tls.cert]]
+names = ["internal.example.com"]
+cert_file = "/etc/fast-proxy/internal.pem"
+key_file  = "/etc/fast-proxy/internal.key"
 
-[[host]]
-names = ["example.com", "*.example.com"]
-tls = { acme = true }
-[[host.route]]
-prefix = "/api"
-upstream = "api"
-strip_prefix = true
-[[host.route]]
-prefix = "/"
-upstream = "web"
+# ACME: account and directory only. Which host names get certs is derived
+# from the subsystems in the DB (see 4.4).
+[data_plane.acme]
+enabled = true
+email = "ops@example.com"
+directory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+allowed_domains = ["*.example.com", "example.org"]   # safety allowlist
+
+[admin]
+listen = "127.0.0.1:9000"
+
+[logging]
+level = "info"
+access_log = "access.log"
 ```
+
+### 3.6 Subsystem model stored in the DB (illustrative, not final)
+
+```
+subsystem        id, name, enabled, maintenance (state, ttl, message), created/updated
+subsystem_host   subsystem_id, host_pattern (exact | *.wildcard), unique across all subsystems
+upstream_group   id, subsystem_id, name, lb_algorithm, health settings
+upstream_endpoint id, group_id, addr, weight, state (enabled/disabled/draining)
+route            id, subsystem_id, prefix, upstream_group_id, strip_prefix, rewrite,
+                 timeouts, retries, priority, enabled
+sampling_rule    id, subsystem_id, triggers, limits
+config_history   version, timestamp, actor, change summary, snapshot/diff
+```
+
+Rules enforced on write: a host pattern belongs to at most one subsystem,
+route prefixes are unique within a subsystem, and a route's upstream group must
+belong to the same subsystem (no cross-subsystem references, so subsystems stay
+isolated).
+
+Storage: **SQLite** via `rusqlite` (or `sqlx`) in WAL mode, a single local
+file. Chosen for transactions, schema migrations, and easy inspection. Access
+goes through a repository layer so the backend can be swapped later (for
+example a remote DB for multi-node setups) without touching the proxy.
 
 ## 4. Feature design notes
 
-### 4.1 Host and prefix routing (M1)
+### 4.1 Subsystems, host and prefix routing (M1)
 
-- Match order: exact host, longest wildcard suffix (`*.example.com`), default
-  host. Port is ignored unless configured. Host is lowercased and trailing dot
-  stripped. TLS connections cross-check SNI against `Host`.
-- Within a host: longest-prefix wins, matched on path-segment boundaries
-  (`/api` matches `/api/x`, not `/apix`). Optional strip/rewrite of prefix.
-- Unknown host returns a configurable 404 (or 421 for SNI/Host mismatch).
+- **Step 1, subsystem selection**: match the request host against all
+  subsystem host patterns: exact host first, then longest wildcard suffix
+  (`*.example.com`). Port is ignored unless configured. Host is lowercased and
+  trailing dot stripped. TLS connections cross-check SNI against `Host`.
+- **Step 2, route selection inside the subsystem**: longest-prefix wins,
+  matched on path-segment boundaries (`/api` matches `/api/x`, not `/apix`).
+  Optional strip/rewrite of prefix.
+- Subsystem state (enabled, maintenance, health, limits, metrics) is
+  independent: disabling or breaking one subsystem never affects another.
+- Unknown host (no subsystem) returns a data-plane-level 404 (or 421 for
+  SNI/Host mismatch). A subsystem with no matching route returns that
+  subsystem's own 404. Both responses are configurable.
 - Forwarded headers: `X-Forwarded-For/Proto/Host` and `Forwarded`, with a
   trusted-proxy list so client-supplied values are not blindly trusted.
 - Hop-by-hop header stripping per RFC 9110.
@@ -168,15 +229,23 @@ upstream = "web"
 
 ### 4.3 TLS termination (M3)
 
-- SNI-based certificate selection via a custom resolver backed by the config
-  snapshot, so cert changes apply without restart.
+- TLS is **data plane config**: listeners, static certs, and TLS policy come
+  from the config file.
+- SNI-based certificate selection via a custom resolver. It consults static
+  certs from the config file and ACME-managed certs, so renewed certs apply
+  without restart.
 - Static certs from files with file-watch reload; minimum TLS 1.2, sane cipher
   defaults, ALPN for `h2` and `http/1.1`.
-- HTTP -> HTTPS redirect option per host. HSTS as an opt-in header.
+- HTTP -> HTTPS redirect and HSTS are per-subsystem settings (DB, live).
 - Optional upstream TLS (re-encrypt) with CA bundle and SNI override.
 
 ### 4.4 ACME (M4)
 
+- ACME is **data plane config** (account email, directory, state dir,
+  allowlist) in the config file. The set of host names to certify is derived
+  from the subsystem host patterns in the DB: adding a subsystem host in the
+  admin UI triggers issuance, if it matches `allowed_domains`. Wildcard host
+  patterns need DNS-01 and are not auto-issued until that lands.
 - Account key and issued certs stored in a configurable state directory with
   restrictive permissions.
 - HTTP-01 challenge served on the plain HTTP listener ahead of routing.
@@ -189,7 +258,8 @@ upstream = "web"
 
 ### 4.5 Maintenance mode (M5)
 
-- Scope: global, per host, or per route. Toggle via admin API, UI, or CLI.
+- Scope: global, per subsystem, or per route. Toggle via admin API, UI, or
+  CLI. Stored in the DB and applied live.
 - Behavior: respond 503 with `Retry-After`, a configurable HTML or JSON body,
   and no upstream traffic.
 - **Temporary by design**: a toggle takes an optional TTL and auto-expires.
@@ -244,19 +314,29 @@ working, releasable binary.
 
 ### M1: Core proxy and realtime config
 
-- [ ] Config model: listeners, hosts, routes, upstreams (single endpoint).
+Detailed task plan: [M1-PLAN.md](M1-PLAN.md).
+
+- [ ] Data plane config file model: listeners, DB path, state dir, admin
+      listener, logging (TLS and ACME sections added in M3/M4).
+- [ ] SQLite storage layer: schema, migrations, repository API for
+      subsystems, hosts, routes, upstreams, and config history.
 - [ ] Hyper-based data plane with plain HTTP listener; streaming bodies.
-- [ ] Host routing (exact, wildcard, default) and prefix routing with strip.
+- [ ] Subsystem selection by host (exact, wildcard) and prefix routing inside
+      the subsystem with strip; unknown host and no-route responses.
 - [ ] Forwarded headers, hop-by-hop handling, request IDs, timeouts.
-- [ ] Immutable snapshot + `arc-swap`; validate-then-swap reload via SIGHUP,
-      file watch, and admin API; config version history and rollback.
+- [ ] Immutable snapshot + `arc-swap`; admin write -> validate -> DB commit ->
+      recompile -> swap; config version history and rollback.
+- [ ] Admin API (CRUD for subsystems, hosts, routes, single-endpoint
+      upstreams) and a first admin UI to manage them. Start the proxy from the
+      config file with an empty DB, then configure everything from the UI.
 - [ ] Upstream connection pooling; WebSocket/upgrade passthrough.
 - [ ] Graceful shutdown and connection draining.
 - [ ] Baseline Prometheus metrics and enriched access log.
 
-**Exit criteria:** an operator can route two hostnames with prefix rules to
-different backends, edit the config live, and see correct metrics, with no
-dropped in-flight requests across reloads.
+**Exit criteria:** starting from an empty DB, an operator creates two
+subsystems (two host names) in the admin UI, adds prefix routes to different
+backends, and traffic flows immediately. Edits apply live with correct metrics
+and no dropped in-flight requests, and survive a restart.
 
 ### M2: Upstream groups, load balancing, health
 
@@ -272,15 +352,20 @@ and the endpoint returns to rotation automatically after recovery.
 
 ### M3: TLS termination
 
-- [ ] HTTPS listener with rustls, SNI cert resolver, HTTP/2 via ALPN.
+- [ ] `[data_plane.tls]` config section; HTTPS listener with rustls, SNI cert
+      resolver, HTTP/2 via ALPN.
 - [ ] Static cert loading with hot reload; self-signed dev fallback.
-- [ ] HTTP -> HTTPS redirect, opt-in HSTS, TLS version policy.
+- [ ] TLS version policy (config file); per-subsystem HTTP -> HTTPS redirect
+      and opt-in HSTS (DB).
 - [ ] Optional TLS to upstreams.
 - [ ] Cert expiry metrics.
 
 ### M4: ACME automatic certificates
 
-- [ ] ACME client, account and cert persistence in the state directory.
+- [ ] `[data_plane.acme]` config section; ACME client, account and cert
+      persistence in the state directory.
+- [ ] Derive domains to certify from subsystem hosts in the DB, filtered by
+      the config allowlist; react to host add/remove at runtime.
 - [ ] HTTP-01 challenge handling ahead of routing.
 - [ ] Renewal scheduler with jitter, backoff, and status reporting.
 - [ ] Staging/production directory switch; rate-limit safeguards.
@@ -349,7 +434,10 @@ traffic, multi-node config sync.
 | Admin plane exposure is a high-impact security risk | Loopback default, auth in M5, audit log, never routable by default |
 | Sampling can leak secrets or hurt latency | Redaction on by default, bodies opt-in, off the request path, bounded buffers |
 | Windows support in CI vs. Unix-only features (signals for reload) | Provide admin API/CLI reload as the portable path |
-| Where does config live: file only, or file + admin API writes? | Proposal: file is the source of truth; API edits write back to it (or a managed overlay). Decide in M1 |
+| ACME needs host names that live in the DB, but ACME config lives in the file | Derive domains from DB hosts, constrained by a file allowlist; wildcards wait for DNS-01 |
+| SQLite from async code (blocking I/O) | Dedicated DB thread or `spawn_blocking`; the hot path only reads the in-memory snapshot, never the DB |
+| Admin UI is the only way to configure subsystems; no config-as-code | Add import/export (JSON/TOML) of subsystem config in M5 so setups are reproducible and reviewable |
+| Backup and portability of the DB file | Document file location; add export and a consistent online backup command |
 | Metrics crate choice and label cardinality | Decide in M0 ADR |
 
 ## 8. Decision log
@@ -357,4 +445,7 @@ traffic, multi-node config sync.
 | Date | Decision |
 |---|---|
 | 2026-11-09 | Project renamed `fast-proxy`; goal set to ingress/reverse proxy. |
+| 2026-11-09 | Each host name is a **subsystem**: independent, separately configurable, selected by host first, then routed by URI prefix within it. |
+| 2026-11-09 | Config split: data plane (listeners, TLS, ACME, admin address, DB path) from the config file; subsystems, routes and upstreams from a local DB file, edited through the admin UI/API. Supersedes the earlier open question about file vs API as source of truth. |
+| 2026-11-09 | Proposed: SQLite for the local DB. |
 | 2026-11-09 | Proposed: hyper data plane, Axum admin plane, `arc-swap` snapshots, rustls, tail-based sampling. Pending confirmation in M0/M1. |

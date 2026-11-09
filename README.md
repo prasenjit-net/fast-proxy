@@ -14,9 +14,9 @@ Rust, shipped as a single binary with an embedded admin UI.
 
 | Capability | Summary | Milestone |
 |---|---|---|
-| Host-based routing | Virtual hosts by `Host` / SNI, exact and wildcard match | M1 |
-| URI prefix routing | Longest-prefix match per host, optional prefix strip/rewrite | M1 |
-| Realtime configuration | Validate-then-swap config reloads with no dropped connections | M1 |
+| Subsystems by host name | Each host name is an independent, separately configurable subsystem, selected by `Host` (exact and wildcard) | M1 |
+| URI prefix routing | Multiple routes per subsystem, longest-prefix match, optional strip/rewrite | M1 |
+| Realtime configuration | Data plane (listeners, TLS, ACME) from the config file; subsystems and routes from a local DB, edited live in the admin UI | M1 |
 | Upstream groups + load balancing | Round robin, weighted, least-connections, power-of-two-choices, consistent hash | M2 |
 | Upstream health monitoring | Active probes plus passive outlier ejection | M2 |
 | TLS termination | rustls, SNI cert selection, hot cert reload, HTTP/2 | M3 |
