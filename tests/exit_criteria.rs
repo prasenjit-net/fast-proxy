@@ -42,6 +42,7 @@ fn answer(mut stream: TcpStream, name: &str) {
 }
 
 /// A backend that waits `delay` before answering.
+#[cfg(unix)]
 fn start_slow_backend(name: &'static str, delay: Duration) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -391,8 +392,14 @@ fn an_invalid_trusted_proxy_aborts_startup() {
 }
 
 // ---- shutdown -----------------------------------------------------------
+//
+// These deliver a real SIGINT, so they run on Unix only. Graceful draining is
+// also covered on every platform by the data plane's own drain tests, which
+// need no signals; what Windows lacks is an end-to-end test of the console
+// Ctrl-C path through the binary.
 
 /// Sends SIGINT, the same as Ctrl-C.
+#[cfg(unix)]
 fn interrupt(proxy: &Proxy) {
     let status = Command::new("kill")
         .args(["-INT", &proxy.child.id().to_string()])
@@ -403,6 +410,7 @@ fn interrupt(proxy: &Proxy) {
 
 /// Waits for the process to exit on its own, returning whether it did so
 /// successfully, or `None` if it was still running at the deadline.
+#[cfg(unix)]
 fn wait_for_exit(proxy: &mut Proxy, within: Duration) -> Option<bool> {
     let deadline = Instant::now() + within;
     while Instant::now() < deadline {
@@ -415,6 +423,7 @@ fn wait_for_exit(proxy: &mut Proxy, within: Duration) -> Option<bool> {
 }
 
 /// Sends a request on a thread and returns what the client ended up with.
+#[cfg(unix)]
 fn request_in_background(proxy: &Proxy) -> thread::JoinHandle<Option<(u16, String)>> {
     let addr = proxy.data;
     thread::spawn(move || {
@@ -438,6 +447,7 @@ fn request_in_background(proxy: &Proxy) -> thread::JoinHandle<Option<(u16, Strin
 }
 
 #[test]
+#[cfg(unix)]
 fn ctrl_c_lets_an_in_flight_request_finish_and_then_exits() {
     let dir = tempfile::tempdir().unwrap();
     let mut proxy = start_proxy(dir.path());
@@ -459,6 +469,7 @@ fn ctrl_c_lets_an_in_flight_request_finish_and_then_exits() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_request_that_outlives_the_grace_period_is_cut_off() {
     let dir = tempfile::tempdir().unwrap();
     let mut proxy = start_on_free_ports(dir.path(), "shutdown_grace = \"300ms\"", "");
@@ -483,6 +494,7 @@ fn a_request_that_outlives_the_grace_period_is_cut_off() {
 }
 
 #[test]
+#[cfg(unix)]
 /// Guards against an open UI connection keeping the process alive. (Upgraded
 /// sockets are handed off by hyper, so graceful shutdown does not wait for
 /// them; this pins that behavior down.)
