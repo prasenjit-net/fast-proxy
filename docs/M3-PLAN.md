@@ -1,6 +1,8 @@
 # M3 Plan: TLS termination
 
-Status: **draft v0.3 (2026-11-10), proposed.** v0.3 follows three decisions by the
+Status: **v0.4 (2026-11-10), in progress.** The **(confirm)** items were accepted as
+recommended when the owner asked to start implementing (recorded in ADRs 0009-0014).
+v0.3 followed three decisions by the
 owner: (1) **all certificates live in SQLite** (uploaded, auto-generated
 development certificates, and later ACME-issued ones); (2) **TLS is switched on
 for the whole process** by configuration or a command-line flag, which enables
@@ -401,6 +403,35 @@ GET    /api/tls                      process state: enabled, listen, http2, minV
 
 The WebSocket gains a `certState` event (changed, expiring, unreadable).
 
+### 5.4 Defaults (G3)
+
+The single source for validation and the UI.
+
+| Setting | Default | Bounds / values |
+|---|---|---|
+| `data_plane.tls.enabled` | `false` | bool; `--tls` / `--no-tls` override |
+| `data_plane.tls.listen` | `0.0.0.0:8443` | not equal to a plain listener or the admin address |
+| `data_plane.tls.public_port` | HTTPS listen port | 1-65535; omitted from redirects at 443 |
+| `data_plane.tls.min_version` | `"1.2"` | `"1.2"`, `"1.3"` |
+| `data_plane.tls.http2` | `true` | bool |
+| `data_plane.tls.reject_unknown_sni` | `false` | bool |
+| `data_plane.tls.handshake_timeout` | `10s` | above zero |
+| `data_plane.tls.max_concurrent_handshakes` | `256` | at least 1 |
+| `data_plane.master_key_file` | `<state_dir>/master.key` | readable, or creatable |
+| `data_plane.config_poll_interval` | `5s` | `0s` disables |
+| `https.enabled` | `false` | bool |
+| `https.redirect` | `off` | `off`, `301`, `308` (`308` when switched on without a value); needs `https.enabled` |
+| `https.hsts.enabled` | `false` | needs `https.enabled` |
+| `https.hsts.maxAgeSecs` | `31536000` | 0-63,072,000 |
+| `https.hsts.includeSubdomains` | `false` | bool |
+| `tls.enabled` (upstream) | `false` | bool |
+| `tls.verify` | `true` | bool |
+| `tls.serverName` | empty (endpoint host) | empty or a valid DNS name |
+| `tls.ca` | empty (OS trust store) | empty or an uploaded bundle name |
+| Certificates | at most 256 | name 1-63 chars, unique; chain at most 10 certificates; 256 KiB of PEM |
+| CA bundles | at most 16 | name 1-63 chars, unique; 256 KiB of PEM |
+| Expiry warning / dev regeneration | 14 days / 30 days | fixed |
+
 ## 6. Tasks
 
 Task IDs are referenced by the dependency table in section 7. Workstream letters:
@@ -411,7 +442,7 @@ from M2.
 
 ### Workstream G: Groundwork
 
-- [ ] **G1 (S) Decisions and ADRs.** Get the **(confirm)** items in section 3
+- [x] **G1 (S) Decisions and ADRs.** Get the **(confirm)** items in section 3
   resolved. Write `docs/adr/`: 0009 TLS stack and the enablement model (F1, F4,
   F12, F19, F20), 0010 certificates: first-class, referenced, stored sealed in
   SQLite, history, API safety, limits (F2, F5, F6, F11, F24-F28), 0011 certificates
@@ -419,6 +450,8 @@ from M2.
   redirect, HSTS and the 421 rules (F13, F14), 0013 upstream TLS (F3, F15-F17), and a
   short note recording the ACME constraints of F29 for M4.
   *Done when:* the ADRs are merged and no **(confirm)** item is open.
+  *Landed (PR1):* ADRs 0009-0014. The spike findings section of ADR 0009 is filled
+  in by G2, which has not been run yet.
 - [ ] **G2 (M) Spike: rustls + ring + hyper h2 + AES-GCM + snapshot-carried
   certificates on all three platforms.** A throwaway test that (a) builds and links
   `rustls` with `ring` on Linux, macOS and Windows CI, (b) serves a request over TLS
@@ -432,7 +465,7 @@ from M2.
   connections to one SQLite file see each other's committed revision version.
   Record findings (build time and size cost, any Windows problem) in ADR 0009.
   *Done when:* the findings are in ADR 0009 and F1 is confirmed or changed.
-- [ ] **G3 (S) Defaults table.** Turn F4-F14 and F28 into the documented defaults
+- [x] **G3 (S) Defaults table** (section 5.4). Turn F4-F14 and F28 into the documented defaults
   (section 5 and the config docs): the single source for validation and the UI.
 
 ### Workstream MD: Model
