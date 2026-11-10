@@ -1,6 +1,6 @@
 # M5 Plan: Operations control (maintenance mode, admin authentication, audit log, CLI)
 
-Status: **draft v0.1 (2026-11-10), proposed.** M4 (ACME) is deliberately skipped for now
+Status: **draft v0.1 (2026-11-10), proposed; PR1 (ADRs 0015 to 0019, as proposed) written, awaiting your confirmation of the (confirm) items.** M4 (ACME) is deliberately skipped for now
 and will be planned later; section 11 lists what M5 must leave room for so M4 can land
 afterwards without rework.
 
@@ -343,8 +343,9 @@ carry-over.
   and (c) shows a `Host` check and a constant-time hash comparison working under the
   same middleware stack. Record findings in ADR 0016.
   *Done when:* the findings are in ADR 0016 and H4 and H5 are confirmed or changed.
-- [ ] **G3 (S) Defaults table.** Turn H1-H14 into the documented defaults (section 5
+- [x] **G3 (S) Defaults table.** Turn H1-H14 into the documented defaults (section 5
   and the config docs): the single source for validation and the UI.
+  *Landed in PR1:* the `Defaults` tables of ADRs 0015, 0016 and 0018 plus section 5.1.
 
 ### Workstream MD: Model
 
