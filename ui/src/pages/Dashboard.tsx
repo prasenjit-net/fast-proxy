@@ -1,6 +1,7 @@
 import ActivityFeed from "../components/ActivityFeed";
 import LiveChart from "../components/LiveChart";
 import StatCard from "../components/StatCard";
+import UpstreamHealthCard from "../components/UpstreamHealthCard";
 import { Link } from "@tanstack/react-router";
 import { useLive } from "../context/LiveContext";
 import { IconActivity, IconAlertTriangle, IconServer, IconUsers } from "../icons";
@@ -55,6 +56,8 @@ export default function DashboardPage() {
         </div>
         <LiveChart history={history} />
       </section>
+
+      <UpstreamHealthCard />
 
       <section className="card">
         <div className="card-head">

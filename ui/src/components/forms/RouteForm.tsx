@@ -26,6 +26,9 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
   const [preserveHost, setPreserveHost] = useState(initial?.preserveHost ?? true);
   const [connectTimeoutMs, setConnectTimeoutMs] = useState(String(initial?.connectTimeoutMs ?? 5000));
   const [responseTimeoutMs, setResponseTimeoutMs] = useState(String(initial?.responseTimeoutMs ?? 30000));
+  const [retryMaxAttempts, setRetryMaxAttempts] = useState(String(initial?.retry.maxAttempts ?? 2));
+  const [retryIdempotentOn5xx, setRetryIdempotentOn5xx] = useState(initial?.retry.idempotentOn5xx ?? true);
+  const [retryOnTimeout, setRetryOnTimeout] = useState(initial?.retry.onTimeout ?? false);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
@@ -43,6 +46,9 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
       preserveHost,
       connectTimeoutMs,
       responseTimeoutMs,
+      retryMaxAttempts,
+      retryIdempotentOn5xx,
+      retryOnTimeout,
       enabled,
     });
     setClientErrors(result.errors);
@@ -94,7 +100,7 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
           >
             {upstreams.map((upstream) => (
               <option key={upstream.id} value={upstream.id}>
-                {upstream.name} ({upstream.addr})
+                {upstream.name} ({upstream.endpoints.length} endpoint{upstream.endpoints.length === 1 ? "" : "s"})
               </option>
             ))}
           </select>
@@ -155,6 +161,31 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
           />
         </FormField>
       </div>
+
+      <fieldset className="flex flex-col gap-3 rounded-md border border-line p-3">
+        <legend className="px-1 text-[0.82rem] font-medium">Retries on another endpoint</legend>
+        <FormField
+          label="Attempts"
+          htmlFor="route-retry-attempts"
+          error={error("retry.maxAttempts")}
+          hint="Including the first. 1 means never retry. A failed connection is retried for any method; other failures only for idempotent ones."
+        >
+          <input
+            id="route-retry-attempts"
+            className="input"
+            inputMode="numeric"
+            value={retryMaxAttempts}
+            onChange={(event) => setRetryMaxAttempts(event.target.value)}
+            {...errorProps("route-retry-attempts", error("retry.maxAttempts"))}
+          />
+        </FormField>
+        <Toggle
+          checked={retryIdempotentOn5xx}
+          onChange={setRetryIdempotentOn5xx}
+          label="Retry idempotent requests on 502, 503 and 504"
+        />
+        <Toggle checked={retryOnTimeout} onChange={setRetryOnTimeout} label="Also retry response timeouts" />
+      </fieldset>
 
       <Toggle checked={enabled} onChange={setEnabled} label="Enabled" />
       <div className="flex justify-end gap-2">

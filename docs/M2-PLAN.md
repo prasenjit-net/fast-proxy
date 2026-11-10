@@ -481,21 +481,21 @@ restart.
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (S) API client, types and validation** for the new resources and
+- [x] **U1 (S) API client, types and validation** for the new resources and
   fields (`lib/types.ts`, `lib/api.ts`, `lib/validation.ts`).
-- [ ] **U2 (L) Upstream section.** Each group shows its algorithm and a health
+- [x] **U2 (L) Upstream section.** Each group shows its algorithm and a health
   summary and an endpoint table (address, weight, state badge, in-flight, last
   check); add, edit and remove endpoint dialogs; enable / drain / disable actions
   whose confirmations say what will happen (and, for drain, when it is drained).
-- [ ] **U3 (M) Group settings form.** Algorithm (and hash key), failure policy,
+- [x] **U3 (M) Group settings form.** Algorithm (and hash key), failure policy,
   active health check, passive ejection and retry budget, with the defaults from
   G3 and an "advanced" fold so the common case stays simple.
-- [ ] **U4 (S) Route form: retries** (attempts, retry on timeout).
-- [ ] **U5 (M) Live status.** Refresh endpoint status from `endpointState`
+- [x] **U4 (S) Route form: retries** (attempts, retry on timeout).
+- [x] **U5 (M) Live status.** Refresh endpoint status from `endpointState`
   events; a dashboard card for upstream health (healthy of total, which are
   unhealthy and why).
-- [ ] **U6 (S) Revisions viewer and resolver** show endpoints and policies.
-- [ ] **U7 (S) Tests and build.** Vitest tests for the forms (validation shown,
+- [~] **U6 (S) Revisions viewer and resolver** show endpoints and policies. (the resolver shows the algorithm and each endpoint's eligibility; the revision viewer lists every endpoint but not the policy settings yet)
+- [x] **U7 (S) Tests and build.** Vitest tests for the forms (validation shown,
   submit sends the right body), state-change confirmations, and live updates
   from events; `npm test` and `npm run build` pass.
 

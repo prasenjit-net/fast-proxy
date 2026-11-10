@@ -123,9 +123,27 @@ describe("endpoint calls", () => {
     preserveHost: false,
     connectTimeoutMs: 1000,
     responseTimeoutMs: 2000,
+    retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
     enabled: true,
   };
-  const upstream = { name: "backend", addr: "127.0.0.1:3000", weight: 1 };
+  const settings = {
+    name: "backend",
+    lb: { algorithm: "round_robin" as const, hashKey: "client_ip" },
+    failurePolicy: "fail_open" as const,
+    health: {
+      check: "none" as const,
+      path: "/",
+      expectedStatus: [200, 399] as [number, number],
+      intervalMs: 5000,
+      timeoutMs: 2000,
+      rise: 2,
+      fall: 3,
+    },
+    passive: { consecutiveFailures: 3, baseEjectionMs: 10000, maxEjectionMs: 300000, maxEjectionPercent: 50 },
+    retryBudget: { percent: 20, minPerSec: 10 },
+  };
+  const created = { ...settings, endpoints: [{ addr: "127.0.0.1:3000", weight: 1 }] };
+  const endpoint = { addr: "127.0.0.1:3001", weight: 2 };
   const subsystem = { name: "shop", enabled: true, description: "" };
 
   const calls: [string, () => Promise<unknown>, string, string, unknown][] = [
@@ -136,9 +154,20 @@ describe("endpoint calls", () => {
     ["deleteSubsystem", () => api.deleteSubsystem(4), "DELETE", "/api/subsystems/4", undefined],
     ["addHost", () => api.addHost(4, "a.example.com"), "POST", "/api/subsystems/4/hosts", { pattern: "a.example.com" }],
     ["removeHost", () => api.removeHost(4, 9), "DELETE", "/api/subsystems/4/hosts/9", undefined],
-    ["createUpstream", () => api.createUpstream(4, upstream), "POST", "/api/subsystems/4/upstreams", upstream],
-    ["updateUpstream", () => api.updateUpstream(4, 7, upstream), "PUT", "/api/subsystems/4/upstreams/7", upstream],
+    ["createUpstream", () => api.createUpstream(4, created), "POST", "/api/subsystems/4/upstreams", created],
+    ["updateUpstream", () => api.updateUpstream(4, 7, settings), "PUT", "/api/subsystems/4/upstreams/7", settings],
     ["deleteUpstream", () => api.deleteUpstream(4, 7), "DELETE", "/api/subsystems/4/upstreams/7", undefined],
+    ["upstreamStatus", () => api.upstreamStatus(4, 7), "GET", "/api/subsystems/4/upstreams/7/status", undefined],
+    ["addEndpoint", () => api.addEndpoint(4, 7, endpoint), "POST", "/api/subsystems/4/upstreams/7/endpoints", endpoint],
+    ["updateEndpoint", () => api.updateEndpoint(4, 7, 3, endpoint), "PUT", "/api/subsystems/4/upstreams/7/endpoints/3", endpoint],
+    [
+      "setEndpointState",
+      () => api.setEndpointState(4, 7, 3, "draining"),
+      "PUT",
+      "/api/subsystems/4/upstreams/7/endpoints/3/state",
+      { state: "draining" },
+    ],
+    ["removeEndpoint", () => api.removeEndpoint(4, 7, 3), "DELETE", "/api/subsystems/4/upstreams/7/endpoints/3", undefined],
     ["createRoute", () => api.createRoute(4, route), "POST", "/api/subsystems/4/routes", route],
     ["updateRoute", () => api.updateRoute(4, 5, route), "PUT", "/api/subsystems/4/routes/5", route],
     ["deleteRoute", () => api.deleteRoute(4, 5), "DELETE", "/api/subsystems/4/routes/5", undefined],
