@@ -1,0 +1,13 @@
+[package]
+name = "fast-proxy-test-pki"
+version = "0.0.0"
+edition = "2021"
+description = "Test-only helpers: an in-memory CA and leaf certificates as PEM strings, and TLS clients"
+publish = false
+
+[dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+time = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

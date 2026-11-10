@@ -35,9 +35,27 @@ handshakes and HTTP/2 traffic.
 
 ## Spike G2 findings
 
-Recorded here when the spike (rustls + ring + hyper h2 + AES-GCM + snapshot
-carried certificates, on all three CI platforms) is done. Until then F1 stands
-as a recommendation backed by the toolchain argument above.
+Verified so far (PR3, macOS; Linux and Windows are confirmed by CI on the PR):
+
+- `rustls` 0.23 with `ring` (no `aws-lc-rs`, no C toolchain needed) builds and
+  links together with `tokio-rustls`, `rcgen` (ring backend, PEM) and
+  `x509-parser`; the workspace tests and clippy pass.
+- (d) The client side works against a real TLS server: trusted, untrusted, wrong
+  name, IP endpoints with and without a name override, and verification off.
+- (e) `rcgen` generates certificates with exact and wildcard SANs and a chosen
+  validity; `x509-parser` reads names, subject, issuer, validity back, and the
+  SHA-256 fingerprint is computed from the DER.
+- (f) `ring`'s AES-256-GCM seals and opens with associated data; a moved or
+  tampered ciphertext is rejected.
+- ALPN `h2` / `http/1.1` and TLS 1.2 versus 1.3 negotiation work through
+  `tokio-rustls` with a test client.
+- Keys parse as PKCS#8, PKCS#1 (RSA) and SEC1 (EC) through rustls's PEM
+  support; encrypted keys are detected from their headers and rejected.
+
+Still to verify, in the PRs that need them: (b) hyper's auto builder serving h2
+and HTTP/1.1 behind the acceptor and (c) a resolver reading an `arc-swap`
+snapshot while it is swapped (PR4), and (g) two SQLite connections seeing each
+other's committed revision version (PR6). F1 stands.
 
 ## Consequences
 

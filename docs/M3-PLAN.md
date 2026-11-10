@@ -536,14 +536,14 @@ from M2.
 
 ### Workstream T: The TLS crate (new)
 
-- [ ] **T1 (M) PEM loading and validation.** Parse a chain and a key from memory
+- [x] **T1 (M) PEM loading and validation.** Parse a chain and a key from memory
   (PKCS#8, PKCS#1, SEC1), reject an encrypted key, check the key matches the leaf,
   extract SAN names, subject, issuer, validity and the fingerprint, and classify
   expired and expiring certificates.
   *Done when:* tests (using rcgen-made certificates) cover good, expired,
   not-yet-valid, mismatched key, garbage, empty input, an encrypted key, a chain
   in the wrong order, and no usable DNS name; no error message contains PEM text.
-- [ ] **T2 (M) Key vault.** Load the master key (environment, else file, creating
+- [x] **T2 (M) Key vault.** Load the master key (environment, else file, creating
   the file with random bytes and the right permissions when a key must be sealed),
   seal and open with AES-256-GCM binding `(id, name)`, the vault check value,
   zeroing of key buffers.
@@ -551,12 +551,12 @@ from M2.
   to another row, a wrong master key (detected by the check), the file created
   once and reused, nothing created when nothing needs sealing, and the permission
   warning on Unix.
-- [ ] **T3 (M) Self-signed generator.** `rcgen` certificate for a list of host
+- [x] **T3 (M) Self-signed generator.** `rcgen` certificate for a list of host
   names and wildcard patterns (a subsystem's hosts), returning material for the
   service to store; and the in-memory ephemeral "unknown host" certificate.
   *Done when:* tests cover the SANs (exact and wildcard), the validity, that the
   result passes T1, and that the ephemeral certificate is never persisted.
-- [ ] **T4 (L) `CertHandle` and `CertCache`.** The handle (id, name, version, parsed
+- [x] **T4 (L) `CertHandle` and `CertCache`.** The handle (id, name, version, parsed
   rustls certified key, metadata); the cache keyed by id and version that, given
   the stored rows, **reuses unchanged entries, parses new or changed ones, drops
   removed ones and marks unreadable ones**; hit, miss and unreadable counters.
@@ -570,13 +570,13 @@ from M2.
   *Done when:* a handshake test per case: TLS 1.2 and 1.3 accepted, a client
   limited to 1.2 refused when the minimum is 1.3, h2 and http/1.1 negotiated,
   h2 not offered when disabled.
-- [ ] **T6 (M) Client configurations.** `ClientConfig` per `(verify, ca)`: the OS
+- [x] **T6 (M) Client configurations.** `ClientConfig` per `(verify, ca)`: the OS
   trust store, an uploaded CA bundle, or no verification (with the warning);
   built once and cached, and rebuilt when a bundle is replaced; the server name
   chosen from the override or the endpoint host.
   *Done when:* tests cover trusted, untrusted, named CA, wrong name, an IP
   endpoint with and without an override, verification off, and a replaced bundle.
-- [ ] **T7 (S) Metrics and status.** `fastproxy_tls_handshakes_total{listener,
+- [x] **T7 (S) Metrics and status.** `fastproxy_tls_handshakes_total{listener,
   result,version}`, `fastproxy_tls_cert_expiry_seconds{cert,source}`,
   `fastproxy_tls_cert_unreadable{cert}`, `fastproxy_cert_cache_total{result}`,
   `fastproxy_config_sync_total{result}`, a status snapshot for the admin plane;
@@ -761,7 +761,7 @@ rule), and a test proves each write is visible to the data plane without a resta
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (M) Test PKI and TLS clients.** A test helper (rcgen, dev-dependency
+- [x] **Q1 (M) Test PKI and TLS clients.** A test helper (rcgen, dev-dependency
   only) that makes a CA, leaf certificates with chosen names and validity, as PEM
   strings (uploaded through the API in end-to-end tests, so no files are involved);
   TLS clients for tests (HTTP/1.1 and HTTP/2, a chosen SNI, a chosen maximum
