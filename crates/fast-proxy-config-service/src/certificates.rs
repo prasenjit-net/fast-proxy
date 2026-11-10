@@ -42,6 +42,16 @@ pub struct CertificateSummary {
     pub updated_at_ms: i64,
 }
 
+/// An edit of a subsystem's own fields.
+#[derive(Debug, Clone)]
+pub struct SubsystemEdit {
+    pub name: fast_proxy_model::SubsystemName,
+    pub enabled: bool,
+    pub description: String,
+    /// The new HTTPS settings; `None` keeps the stored ones.
+    pub https: Option<HttpsPolicy>,
+}
+
 /// The parts of a certificate an admin may change; `None` keeps the stored one.
 #[derive(Debug, Clone, Default)]
 pub struct CertificateChange {
@@ -63,29 +73,61 @@ impl ConfigService {
         let cert_pem = cert_pem.to_string();
         let tls = self.tls.clone();
         self.apply(move |conn| {
-            let vault = tls.vault_for_sealing(conn)?;
-            let id = certificates::next_id(conn)?;
-            let sealed = vault
-                .seal_key(id, name.as_str(), &validated.key.to_sealed_bytes())
-                .map_err(|err| StoreError::Internal(err.to_string()))?;
-            certificates::insert(
+            let outcome = insert_uploaded(conn, &tls, &name, cert_pem, validated)?;
+            Ok(Mutation {
+                value: outcome,
+                summary: format!("certificate uploaded: {}", name.as_str()),
+            })
+        })
+        .await
+    }
+
+    /// Uploads a certificate and attaches it to `subsystem` in one write. It must
+    /// cover at least one of the subsystem's hosts (`certPem` is named
+    /// otherwise); nothing is stored when it does not. The result lists the
+    /// hosts it does not cover.
+    pub async fn upload_certificate_for_subsystem(
+        &self,
+        subsystem: SubsystemId,
+        name: &str,
+        cert_pem: &str,
+        key_pem: &str,
+    ) -> Result<Applied<(UploadOutcome, Vec<String>)>, StoreError> {
+        let name = CertificateName::parse(name)?;
+        let validated = fast_proxy_tls::validate_upload(cert_pem, key_pem, now_ms())?;
+        let cert_pem = cert_pem.to_string();
+        let tls = self.tls.clone();
+        self.apply(move |conn| {
+            let current = subsystems::get(conn, subsystem)?;
+            let uncovered = uncovered_hosts(&current.hosts, &validated.metadata);
+            if !current.hosts.is_empty() && uncovered.len() == current.hosts.len() {
+                return Err(FieldError::new(
+                    "certPem",
+                    "the certificate covers none of this subsystem's hosts",
+                )
+                .into());
+            }
+            let outcome = insert_uploaded(conn, &tls, &name, cert_pem, validated)?;
+            subsystems::update(
                 conn,
-                id,
-                &NewCertificate {
-                    name: name.clone(),
-                    source: CertificateSource::Uploaded,
-                    chain_pem: cert_pem,
-                    key_enc: sealed.ciphertext,
-                    key_nonce: sealed.nonce,
-                    metadata: validated.metadata,
+                subsystem,
+                &SubsystemFields {
+                    name: current.name.clone(),
+                    enabled: current.enabled,
+                    description: current.description.clone(),
+                    https: HttpsPolicy {
+                        certificate_id: Some(outcome.id),
+                        ..current.https
+                    },
                 },
             )?;
             Ok(Mutation {
-                value: UploadOutcome {
-                    id,
-                    warnings: validated.warnings,
-                },
-                summary: format!("certificate uploaded: {}", name.as_str()),
+                value: (outcome, uncovered),
+                summary: format!(
+                    "certificate uploaded: {} (attached to {})",
+                    name.as_str(),
+                    current.name.as_str()
+                ),
             })
         })
         .await
@@ -214,10 +256,33 @@ impl ConfigService {
         .await
     }
 
-    /// Replaces a subsystem's HTTPS settings. Attaching a certificate needs it to
-    /// cover at least one of the subsystem's hosts; the result lists the hosts it
-    /// does not cover. Enabling HTTPS with no certificate (or detaching one) while
-    /// TLS is on generates a development certificate in the same write.
+    /// Applies an edit of a subsystem's fields, and of its HTTPS settings when
+    /// the edit carries them (`None` keeps the stored ones). Attaching a
+    /// certificate needs it to cover at least one of the subsystem's hosts; the
+    /// result lists the hosts it does not cover. Enabling HTTPS with no
+    /// certificate (or detaching one) while TLS is on generates a development
+    /// certificate in the same write.
+    pub async fn update_subsystem(
+        &self,
+        id: SubsystemId,
+        edit: SubsystemEdit,
+    ) -> Result<Applied<Vec<String>>, StoreError> {
+        if let Some(https) = &edit.https {
+            https.validate()?;
+        }
+        self.apply(move |conn| {
+            let current = subsystems::get(conn, id)?;
+            let summary = format!("subsystem updated: {}", edit.name.as_str());
+            let uncovered = write_subsystem(conn, id, &current, edit)?;
+            Ok(Mutation {
+                value: uncovered,
+                summary,
+            })
+        })
+        .await
+    }
+
+    /// Replaces only a subsystem's HTTPS settings (see [`Self::update_subsystem`]).
     pub async fn set_subsystem_https(
         &self,
         id: SubsystemId,
@@ -226,35 +291,17 @@ impl ConfigService {
         https.validate()?;
         self.apply(move |conn| {
             let current = subsystems::get(conn, id)?;
-            let mut uncovered = Vec::new();
-            if let Some(certificate_id) = https.certificate_id {
-                let metadata = certificates::get(conn, certificate_id)
-                    .map_err(|_| {
-                        StoreError::invalid_field("https.certificateId", "does not exist")
-                    })?
-                    .certificate
-                    .metadata;
-                uncovered = uncovered_hosts(&current.hosts, &metadata);
-                if !current.hosts.is_empty() && uncovered.len() == current.hosts.len() {
-                    return Err(StoreError::invalid_field(
-                        "https.certificateId",
-                        "the certificate covers none of this subsystem's hosts",
-                    ));
-                }
-            }
-            subsystems::update(
-                conn,
-                id,
-                &SubsystemFields {
-                    name: current.name.clone(),
-                    enabled: current.enabled,
-                    description: current.description.clone(),
-                    https,
-                },
-            )?;
+            let summary = format!("https settings changed: {}", current.name.as_str());
+            let edit = SubsystemEdit {
+                name: current.name.clone(),
+                enabled: current.enabled,
+                description: current.description.clone(),
+                https: Some(https),
+            };
+            let uncovered = write_subsystem(conn, id, &current, edit)?;
             Ok(Mutation {
                 value: uncovered,
-                summary: format!("https settings changed: {}", current.name.as_str()),
+                summary,
             })
         })
         .await
@@ -286,6 +333,73 @@ impl ConfigService {
             })
             .collect())
     }
+}
+
+/// Writes a subsystem edit inside the transaction, enforcing the coverage rule
+/// for an attached certificate. Returns the hosts the certificate does not cover.
+fn write_subsystem(
+    conn: &Connection,
+    id: SubsystemId,
+    current: &fast_proxy_model::SubsystemConfig,
+    edit: SubsystemEdit,
+) -> Result<Vec<String>, StoreError> {
+    let https = edit.https.unwrap_or(current.https);
+    let mut uncovered = Vec::new();
+    if let Some(certificate_id) = https.certificate_id {
+        let metadata = certificates::get(conn, certificate_id)
+            .map_err(|_| StoreError::invalid_field("https.certificateId", "does not exist"))?
+            .certificate
+            .metadata;
+        uncovered = uncovered_hosts(&current.hosts, &metadata);
+        if !current.hosts.is_empty() && uncovered.len() == current.hosts.len() {
+            return Err(StoreError::invalid_field(
+                "https.certificateId",
+                "the certificate covers none of this subsystem's hosts",
+            ));
+        }
+    }
+    subsystems::update(
+        conn,
+        id,
+        &SubsystemFields {
+            name: edit.name,
+            enabled: edit.enabled,
+            description: edit.description,
+            https,
+        },
+    )?;
+    Ok(uncovered)
+}
+
+/// Seals the key and stores an uploaded certificate inside the write transaction.
+fn insert_uploaded(
+    conn: &Connection,
+    tls: &crate::tls_state::TlsState,
+    name: &CertificateName,
+    cert_pem: String,
+    validated: fast_proxy_tls::ValidatedCertificate,
+) -> Result<UploadOutcome, StoreError> {
+    let vault = tls.vault_for_sealing(conn)?;
+    let id = certificates::next_id(conn)?;
+    let sealed = vault
+        .seal_key(id, name.as_str(), &validated.key.to_sealed_bytes())
+        .map_err(|err| StoreError::Internal(err.to_string()))?;
+    certificates::insert(
+        conn,
+        id,
+        &NewCertificate {
+            name: name.clone(),
+            source: CertificateSource::Uploaded,
+            chain_pem: cert_pem,
+            key_enc: sealed.ciphertext,
+            key_nonce: sealed.nonce,
+            metadata: validated.metadata,
+        },
+    )?;
+    Ok(UploadOutcome {
+        id,
+        warnings: validated.warnings,
+    })
 }
 
 fn sealed_of(certificate: &NewCertificate) -> fast_proxy_tls::Sealed {

@@ -1,10 +1,11 @@
 use fast_proxy_config_service::ConfigService;
 use fast_proxy_model::{RouteConfig, SubsystemConfig, SubsystemId};
-use fast_proxy_store::repository::{hosts, subsystems};
+use fast_proxy_store::repository::{certificates, hosts, subsystems};
 use fast_proxy_store::{Connection, StoreError};
 use serde::Serialize;
 
 use super::envelope::Envelope;
+use super::https_dto::{AttachedCertificate, HttpsDto};
 use super::upstream_dto::{upstream_dto, UpstreamDto};
 use crate::AppResult;
 
@@ -49,6 +50,7 @@ pub struct SubsystemDetail {
     pub description: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    pub https: HttpsDto,
     pub hosts: Vec<HostDto>,
     pub upstreams: Vec<UpstreamDto>,
     pub routes: Vec<RouteDto>,
@@ -118,10 +120,23 @@ pub async fn load_detail(
             let subsystem = subsystems::get(conn, id)?;
             let host_rows = hosts::list(conn, id)?;
             let times = subsystems::times(conn)?.remove(&id);
-            Ok((subsystem, host_rows, times))
+            let certificate = match subsystem.https.certificate_id {
+                Some(certificate_id) => {
+                    let row = certificates::get(conn, certificate_id)?;
+                    Some(AttachedCertificate {
+                        name: row.certificate.name.as_str().to_string(),
+                        source: row.certificate.source,
+                        metadata: row.certificate.metadata,
+                    })
+                }
+                None => None,
+            };
+            Ok((subsystem, host_rows, times, certificate))
         })
         .await?;
-    let (subsystem, host_rows, times) = read.value;
+    let (subsystem, host_rows, times, certificate) = read.value;
+    let tls_enabled = config.snapshot_holder().load().tls_enabled;
+    let https = HttpsDto::new(&subsystem.https, tls_enabled, &subsystem.hosts, certificate);
     let detail = SubsystemDetail {
         id: subsystem.id.0,
         name: subsystem.name.as_str().to_string(),
@@ -129,6 +144,7 @@ pub async fn load_detail(
         description: subsystem.description.clone(),
         created_at_ms: times.map_or(0, |t| t.created_at_ms),
         updated_at_ms: times.map_or(0, |t| t.updated_at_ms),
+        https,
         hosts: host_rows
             .into_iter()
             .map(|(id, pattern)| HostDto {

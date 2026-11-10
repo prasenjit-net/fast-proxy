@@ -701,23 +701,28 @@ loopback checks come with PR5._
 
 ### Workstream A: Admin API
 
-- [ ] **A1 (M) Reads.** `GET /api/certificates` (with `usedBy`), `GET /api/ca-bundles`
+_Landed in PR5: A1-A6, with the `certState` WebSocket event and activity entries,
+and Q7 (its log-line check is by construction: no PEM or key is ever formatted
+into a log, and every secret type has a redacted `Debug`; there is no log
+capture test). A7 and A8 follow with upstream TLS and the redirect work._
+
+- [x] **A1 (M) Reads.** `GET /api/certificates` (with `usedBy`), `GET /api/ca-bundles`
   and `GET /api/tls` (5.3): metadata only; never a key, a ciphertext or a PEM of
   a private key.
-- [ ] **A2 (L) Certificate writes.** `POST`, `PUT`, `DELETE` on certificates and
+- [x] **A2 (L) Certificate writes.** `POST`, `PUT`, `DELETE` on certificates and
   `POST /api/certificates/self-signed`, through the config service; field errors
   (`certPem`, `keyPem`, `name`) that never echo PEM; the warning for a certificate
   expiring soon; 409 for a certificate in use.
-- [ ] **A3 (M) Subsystem certificate shortcuts.** `POST` and `DELETE
+- [x] **A3 (M) Subsystem certificate shortcuts.** `POST` and `DELETE
   /api/subsystems/{id}/certificate` (upload and attach in one step; detach), with
   the coverage rule (400 naming `https.certificateId` or `certPem`) and the
   uncovered-hosts warning.
-- [ ] **A4 (M) CA bundles.** `POST` and `DELETE /api/ca-bundles` (409 while an
+- [x] **A4 (M) CA bundles.** `POST` and `DELETE /api/ca-bundles` (409 while an
   upstream names the bundle).
-- [ ] **A5 (M) Key safety.** The loopback-peer rule for requests that carry a
+- [x] **A5 (M) Key safety.** The loopback-peer rule for requests that carry a
   private key (403 otherwise), PEM body size caps, and a test that no response,
   log line or event ever contains key material.
-- [ ] **A6 (M) Subsystem HTTPS settings** in the subsystem API (`https` object,
+- [x] **A6 (M) Subsystem HTTPS settings** in the subsystem API (`https` object,
   including `enabled`, `certificateId`, `redirect`, `hsts`, the read-only
   `effective` and `certificate`), validated with nested field names
   (`https.hsts.maxAgeSecs`); redirect and HSTS without `enabled` are a 400;
@@ -801,7 +806,7 @@ rule), and a test proves each write is visible to the data plane without a resta
 - [ ] **Q6 (S) Gates.** fmt, clippy, tests and UI build green on Linux, macOS and
   Windows (the M2 lessons apply: wait for events, not durations; a refused
   connection is slow on Windows; one write per raw request).
-- [ ] **Q7 (M) Key protection tests.** The database file (read as bytes, including
+- [x] **Q7 (M) Key protection tests.** The database file (read as bytes, including
   the WAL) contains no `PRIVATE KEY` text and none of the key bytes after
   uploads, replacements, deletions and dev-certificate generation; a wrong or
   missing master key is reported clearly and the proxy still starts serving plain

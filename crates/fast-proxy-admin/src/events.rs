@@ -39,6 +39,15 @@ pub enum Event {
         timestamp_ms: i64,
     },
 
+    /// A certificate was uploaded, replaced, deleted or generated. `change` is
+    /// one of `uploaded`, `replaced`, `deleted` or `generated`.
+    #[serde(rename_all = "camelCase")]
+    CertState {
+        change: &'static str,
+        certificate: String,
+        timestamp_ms: i64,
+    },
+
     #[serde(rename_all = "camelCase")]
     Activity {
         kind: String,
@@ -76,6 +85,16 @@ mod tests {
         assert_eq!(endpoint["type"], "endpointState");
         assert_eq!(endpoint["change"], "ejected");
         assert_eq!(endpoint["timestampMs"], 9);
+
+        let cert = serde_json::to_value(Event::CertState {
+            change: "uploaded",
+            certificate: "shop".into(),
+            timestamp_ms: 4,
+        })
+        .unwrap();
+        assert_eq!(cert["type"], "certState");
+        assert_eq!(cert["change"], "uploaded");
+        assert_eq!(cert["certificate"], "shop");
 
         let hello = serde_json::to_value(Event::Hello {
             message: "hi".into(),

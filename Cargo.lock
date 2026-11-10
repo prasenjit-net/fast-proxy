@@ -611,6 +611,8 @@ dependencies = [
  "fast-proxy-routing",
  "fast-proxy-store",
  "fast-proxy-telemetry",
+ "fast-proxy-test-pki",
+ "fast-proxy-tls",
  "http-body-util",
  "mime_guess",
  "rust-embed",

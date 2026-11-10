@@ -20,10 +20,12 @@ mod api_tests;
 mod test_support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tls_api_tests;
 
 pub use error::{AppError, AppResult};
 pub use router::router;
-pub use runtime_info::{ListenerInfo, RuntimeInfo};
+pub use runtime_info::{ListenerInfo, RuntimeInfo, TlsInfo};
 pub use state::{AdminState, SharedState};
 pub use ui_config::UiConfig;
 

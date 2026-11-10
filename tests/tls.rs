@@ -627,3 +627,68 @@ async fn the_tls_flag_overrides_the_file_and_no_tls_turns_it_off_again() {
     let (_proxy, port) = start_binary(dir.path(), true, &["--no-tls"]);
     assert!(handshake(https_address(port), &insecure()).await.is_err());
 }
+
+// ---- driven through the admin API of the real binary ---------------------------
+
+fn trusting(sni: &str, ca: &TestCa) -> ClientHello {
+    ClientHello {
+        sni: Some(sni.to_string()),
+        trust_pem: vec![ca.pem.clone()],
+        ..ClientHello::default()
+    }
+}
+
+#[tokio::test]
+async fn a_certificate_uploaded_through_the_api_is_served_and_survives_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (proxy, https_port) = start_binary(dir.path(), true, &[]);
+    let (data_port, admin_port) = (proxy.data.port(), proxy.admin.port());
+    let backend = common::start_backend("shop-backend");
+    let (site, _) = common::create_site(&proxy, "shop", "shop.example.com", backend);
+
+    let ca = TestCa::new("shop ca");
+    let issued = ca.issue(&LeafSpec::new(&["shop.example.com"]));
+    let (status, body) = common::admin(
+        &proxy,
+        "POST",
+        &format!("/api/subsystems/{site}/certificate"),
+        Some(
+            serde_json::json!({ "name": "shop", "certPem": issued.chain_pem, "keyPem": issued.key_pem }),
+        ),
+    );
+    assert_eq!(status, 201, "{body}");
+    assert!(!body.to_string().contains("PRIVATE"));
+    let (status, body) = common::admin(
+        &proxy,
+        "PUT",
+        &format!("/api/subsystems/{site}"),
+        Some(serde_json::json!({ "name": "shop", "https": {
+            "enabled": true, "certificateId": body["data"]["id"] } })),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["data"]["https"]["effective"], true);
+
+    let address = https_address(https_port);
+    handshake(address, &trusting("shop.example.com", &ca))
+        .await
+        .unwrap();
+    let answer = request(
+        address,
+        &trusting("shop.example.com", &ca),
+        b"GET /cart HTTP/1.1\r\nHost: shop.example.com\r\nConnection: close\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    assert!(answer.contains("shop-backend /cart"), "{answer}");
+    let (_, tls) = common::admin(&proxy, "GET", "/api/tls", None);
+    assert_eq!(tls["data"]["vault"], "ok");
+
+    drop(proxy);
+    let tail = tls_section(https_port, true);
+    let restarted = try_start_with_args(dir.path(), data_port, admin_port, ("", &tail), &[])
+        .expect("restarts on the same ports");
+    handshake(address, &trusting("shop.example.com", &ca))
+        .await
+        .unwrap();
+    drop(restarted);
+}

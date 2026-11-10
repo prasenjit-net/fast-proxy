@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo};
+use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo, TlsInfo};
 use fast_proxy_config_service::{ConfigService, StartError, TlsSettings};
 use fast_proxy_dataplane::{
     bind, BindError, BoundListener, DataPlane, ListenerSpec, Observability, RequestPipeline,
@@ -13,7 +13,7 @@ use fast_proxy_dataplane::{
 use fast_proxy_health::{run_status_gauges, HealthEngine};
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
-use fast_proxy_tls::ServerTlsPolicy;
+use fast_proxy_tls::{MinTlsVersion, ServerTlsPolicy};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -86,6 +86,17 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             })
             .collect(),
         database_path: database.display().to_string(),
+        tls: TlsInfo {
+            enabled: config.data_plane.tls.enabled,
+            listen: https.as_ref().map(|plane| plane.listener().local_addr()),
+            // HTTP/2 stays off until the data plane serves it (plan task D2).
+            http2: false,
+            min_version: match config.data_plane.tls.min_version {
+                MinTlsVersion::V1_2 => "1.2",
+                MinTlsVersion::V1_3 => "1.3",
+            }
+            .to_string(),
+        },
     };
     // Shutdown happens in two stages: the signal stops the data plane, and
     // only once it has drained does the admin plane stop (so the admin API

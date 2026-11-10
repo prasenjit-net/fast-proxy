@@ -134,6 +134,44 @@ pub fn parse_key(key_pem: &str) -> Result<KeyMaterial, FieldError> {
     Ok(KeyMaterial::new(kind, der))
 }
 
+/// One certificate of a CA bundle, as listed by the admin plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaCertInfo {
+    pub subject: String,
+    /// Validity end, milliseconds since the epoch.
+    pub not_after_ms: i64,
+}
+
+/// Parses an uploaded CA bundle (public PEM): at least one certificate, within
+/// the size and count limits. Unlike a server certificate it needs no key, no
+/// SAN and may be expired (the TLS handshake decides trust at use time).
+pub fn parse_ca_bundle(pem: &str) -> Result<Vec<CaCertInfo>, FieldError> {
+    if pem.len() > MAX_PEM_BYTES {
+        return Err(FieldError::new("pem", "must be at most 256 KiB"));
+    }
+    let certificates: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(pem.as_bytes())
+        .collect::<Result<_, _>>()
+        .map_err(|_| FieldError::new("pem", "is not valid PEM certificate data"))?;
+    if certificates.is_empty() {
+        return Err(FieldError::new(
+            "pem",
+            "contains no PEM certificate (expected BEGIN CERTIFICATE)",
+        ));
+    }
+    certificates
+        .iter()
+        .map(|der| {
+            let (_, cert) = X509Certificate::from_der(der.as_ref()).map_err(|_| {
+                FieldError::new("pem", "contains a certificate that cannot be parsed")
+            })?;
+            Ok(CaCertInfo {
+                subject: cert.subject().to_string(),
+                not_after_ms: cert.validity().not_after.timestamp().saturating_mul(1000),
+            })
+        })
+        .collect()
+}
+
 /// Only header lines are inspected, so key bytes can never trigger it.
 fn is_encrypted(key_pem: &str) -> bool {
     key_pem.lines().any(|line| {
@@ -363,6 +401,31 @@ mod tests {
             10
         );
         assert!(parse_key(&"x".repeat(MAX_PEM_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn a_ca_bundle_lists_its_certificates() {
+        let one = TestCa::new("first ca");
+        let two = TestCa::new("second ca");
+        let bundle = format!("{}{}", one.pem, two.pem);
+        let infos = parse_ca_bundle(&bundle).unwrap();
+        assert_eq!(infos.len(), 2);
+        assert!(infos[0].subject.contains("first ca"));
+        assert!(infos[1].not_after_ms > now_ms());
+    }
+
+    #[test]
+    fn a_bad_ca_bundle_is_rejected_with_the_pem_field() {
+        for bad in [
+            "",
+            "garbage SECRET",
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+        ] {
+            let err = parse_ca_bundle(bad).unwrap_err();
+            assert_eq!(err.field, "pem", "{bad}");
+            assert!(!err.to_string().contains("SECRET"));
+        }
+        assert!(parse_ca_bundle(&"x".repeat(MAX_PEM_BYTES + 1)).is_err());
     }
 
     #[test]

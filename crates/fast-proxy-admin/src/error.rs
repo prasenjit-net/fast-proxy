@@ -36,6 +36,14 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
 
+    /// The request body exceeds the limit for its endpoint.
+    #[error("{0}")]
+    TooLarge(String),
+
+    /// The request is understood but refused for who is asking.
+    #[error("{0}")]
+    Forbidden(String),
+
     /// One or more inputs are invalid; each names its field.
     #[error("validation failed")]
     Validation(Vec<FieldError>),
@@ -52,6 +60,8 @@ impl AppError {
         match self {
             AppError::BadRequest(_) | AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Io(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -62,6 +72,8 @@ impl AppError {
             AppError::BadRequest(_) => "BAD_REQUEST",
             AppError::NotFound(_) => "NOT_FOUND",
             AppError::Conflict(_) => "CONFLICT",
+            AppError::Forbidden(_) => "FORBIDDEN",
+            AppError::TooLarge(_) => "PAYLOAD_TOO_LARGE",
             AppError::Validation(_) => "VALIDATION_FAILED",
             AppError::Io(_) => "IO_ERROR",
             AppError::Internal(_) => "INTERNAL",
@@ -86,6 +98,8 @@ impl IntoResponse for AppError {
             AppError::BadRequest(_)
             | AppError::NotFound(_)
             | AppError::Conflict(_)
+            | AppError::Forbidden(_)
+            | AppError::TooLarge(_)
             | AppError::Validation(_)
             | AppError::Internal(_) => self.to_string(),
             AppError::Io(_) => "an internal error occurred".to_string(),
