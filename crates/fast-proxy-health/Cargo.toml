@@ -1,0 +1,19 @@
+[package]
+name = "fast-proxy-health"
+version = "0.0.0"
+edition = "2021"
+description = "Active health probes for upstream endpoints, reconciled with the live configuration"
+publish = false
+
+[dependencies]
+fast-proxy-balancing = { path = "../fast-proxy-balancing" }
+fast-proxy-config-service = { path = "../fast-proxy-config-service" }
+fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-routing = { path = "../fast-proxy-routing" }
+fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
+rand = "0.8"
+tokio = { workspace = true }
+tokio-util = "0.7"
+tracing = { workspace = true }
+
+[dev-dependencies]

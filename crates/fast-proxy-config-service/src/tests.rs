@@ -2,13 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_model::{
-    EndpointAddr, HostPattern, RoutePrefix, SubsystemId, SubsystemName, UpstreamGroupId,
-    UpstreamPrefix,
+    EndpointAddr, EndpointState, GroupPolicy, HostPattern, RetryPolicy, RoutePrefix, SubsystemId,
+    SubsystemName, UpstreamGroupId, UpstreamPrefix,
 };
 use fast_proxy_routing::Lookup;
 use fast_proxy_store::repository::{hosts, routes, subsystems, upstreams};
 use fast_proxy_store::{
-    Connection, Mutation, RouteFields, Store, StoreError, SubsystemFields, UpstreamFields,
+    Connection, EndpointFields, Mutation, RouteFields, Store, StoreError, SubsystemFields,
+    UpstreamFields,
 };
 
 use crate::{ConfigChanged, ConfigService, StartError};
@@ -40,9 +41,13 @@ fn create_site(
             id,
             &UpstreamFields {
                 name: "backend".into(),
+                policy: GroupPolicy::default(),
+            },
+            &[EndpointFields {
                 addr: EndpointAddr::parse(backend).unwrap(),
                 weight: 1,
-            },
+                state: EndpointState::Enabled,
+            }],
         )?;
         routes::create(conn, id, &root_route(group))?;
         Ok(Mutation {
@@ -61,13 +66,14 @@ fn root_route(group: UpstreamGroupId) -> RouteFields {
         preserve_host: true,
         connect_timeout: Duration::from_secs(5),
         response_timeout: Duration::from_secs(30),
+        retry: RetryPolicy::default(),
         enabled: true,
     }
 }
 
 fn backend_for(service: &ConfigService, host: &str) -> Option<String> {
     match service.snapshot_holder().load().lookup(host, "/") {
-        Lookup::Matched { route, .. } => Some(route.route.endpoint.to_string()),
+        Lookup::Matched { route, .. } => Some(route.route.upstream.endpoints[0].addr.to_string()),
         _ => None,
     }
 }
@@ -150,15 +156,11 @@ async fn a_change_that_fails_to_compile_leaves_the_database_and_snapshot_untouch
         .unwrap();
     let before = stored_state(&service).await;
 
-    // The store's own API cannot do this; raw SQL adds a second endpoint,
-    // which the compiler rejects (M1 allows exactly one).
+    // The store's own API cannot do this; raw SQL removes the group's only
+    // endpoint, which the compiler rejects.
     let err = service
         .apply(|conn| {
-            conn.execute(
-                "INSERT INTO upstream_endpoint (group_id, addr, weight)
-                 SELECT id, 'other:1', 1 FROM upstream_group",
-                [],
-            )?;
+            conn.execute("DELETE FROM upstream_endpoint", [])?;
             Ok(Mutation {
                 value: (),
                 summary: "sneaky".into(),
@@ -168,7 +170,7 @@ async fn a_change_that_fails_to_compile_leaves_the_database_and_snapshot_untouch
         .unwrap_err();
 
     assert!(
-        matches!(&err, StoreError::Invalid(f) if f[0].message.contains("exactly one endpoint")),
+        matches!(&err, StoreError::Invalid(f) if f[0].message.contains("1 to 64 endpoints")),
         "{err}"
     );
     assert_eq!(stored_state(&service).await, before);
@@ -324,8 +326,7 @@ async fn starting_on_a_stored_configuration_that_does_not_compile_fails() {
                         "INSERT INTO upstream_group (id, subsystem_id, name) VALUES (1, 1, 'g')",
                         [],
                     )?;
-                    // A group without an endpoint cannot be joined, so the
-                    // loader yields no group and the route dangles.
+                    // A group without an endpoint does not compile.
                     conn.execute(
                         "INSERT INTO route (subsystem_id, prefix, upstream_group_id)
                          VALUES (1, '/', 1)",
@@ -488,4 +489,167 @@ async fn starting_on_stored_config_reports_its_version() {
         .await
         .unwrap();
     assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(1.0));
+}
+
+fn live_runtime(service: &ConfigService, host: &str) -> Arc<fast_proxy_balancing::EndpointRuntime> {
+    let snapshot = service.snapshot_holder().load();
+    let Lookup::Matched { route, .. } = snapshot.lookup(host, "/") else {
+        panic!("no route for {host}");
+    };
+    route.route.upstream.candidates[0].runtime.clone()
+}
+
+#[tokio::test]
+async fn endpoint_state_survives_unrelated_changes_and_resets_when_the_address_changes() {
+    let service = service().await;
+    let site = service
+        .apply(create_site(
+            "shop",
+            "shop.example.com".into(),
+            "127.0.0.1:3000",
+        ))
+        .await
+        .unwrap()
+        .value;
+    let runtime = live_runtime(&service, "shop.example.com");
+    runtime.record_probe(false, 1, 1);
+    assert!(!runtime.is_active_healthy());
+
+    service
+        .apply(move |conn| {
+            let mut fields = subsystem_fields_for("shop");
+            fields.description = "unrelated edit".into();
+            subsystems::update(conn, site, &fields)?;
+            Ok(Mutation {
+                value: (),
+                summary: "edit".into(),
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        Arc::ptr_eq(&runtime, &live_runtime(&service, "shop.example.com")),
+        "an unrelated edit keeps the runtime"
+    );
+    assert!(!live_runtime(&service, "shop.example.com").is_active_healthy());
+
+    service
+        .apply(move |conn| {
+            let group = subsystems::get(conn, site)?.upstream_groups[0].clone();
+            let moved = EndpointFields {
+                addr: EndpointAddr::parse("127.0.0.1:3999").unwrap(),
+                weight: 1,
+                state: EndpointState::Enabled,
+            };
+            fast_proxy_store::repository::endpoints::update(
+                conn,
+                site,
+                group.id,
+                group.endpoints[0].id,
+                &moved,
+            )?;
+            Ok(Mutation {
+                value: (),
+                summary: "move".into(),
+            })
+        })
+        .await
+        .unwrap();
+    let fresh = live_runtime(&service, "shop.example.com");
+    assert!(!Arc::ptr_eq(&runtime, &fresh));
+    assert!(fresh.is_active_healthy(), "a moved endpoint starts healthy");
+}
+
+#[tokio::test]
+async fn a_rejected_change_keeps_the_live_runtime_state() {
+    let service = service().await;
+    service
+        .apply(create_site(
+            "shop",
+            "shop.example.com".into(),
+            "127.0.0.1:3000",
+        ))
+        .await
+        .unwrap();
+    let runtime = live_runtime(&service, "shop.example.com");
+    runtime.record_probe(false, 1, 1);
+    let rejected = service
+        .apply(|conn| {
+            conn.execute("DELETE FROM upstream_endpoint", [])?;
+            Ok(Mutation {
+                value: (),
+                summary: "bad".into(),
+            })
+        })
+        .await;
+    assert!(rejected.is_err());
+    let after = live_runtime(&service, "shop.example.com");
+    assert!(Arc::ptr_eq(&runtime, &after) && !after.is_active_healthy());
+}
+
+fn subsystem_fields_for(name: &str) -> SubsystemFields {
+    SubsystemFields {
+        name: SubsystemName::parse(name).unwrap(),
+        enabled: true,
+        description: String::new(),
+    }
+}
+
+#[tokio::test]
+async fn removing_an_endpoint_deletes_its_metric_series() {
+    use fast_proxy_telemetry::{EndpointLabels, Metrics, UpstreamOutcome};
+    let metrics = Arc::new(Metrics::new());
+    let service =
+        ConfigService::start_with_metrics(Store::open_in_memory().unwrap(), metrics.clone())
+            .await
+            .unwrap();
+    let site = service
+        .apply(create_site(
+            "shop",
+            "shop.example.com".into(),
+            "127.0.0.1:3000",
+        ))
+        .await
+        .unwrap()
+        .value;
+    let second = service
+        .apply(move |conn| {
+            let group = subsystems::get(conn, site)?.upstream_groups[0].id;
+            let added = EndpointFields {
+                addr: EndpointAddr::parse("127.0.0.1:3001").unwrap(),
+                weight: 1,
+                state: EndpointState::Enabled,
+            };
+            let id = fast_proxy_store::repository::endpoints::add(conn, site, group, &added)?;
+            Ok(Mutation {
+                value: (group, id),
+                summary: "add".into(),
+            })
+        })
+        .await
+        .unwrap()
+        .value;
+    for endpoint in ["127.0.0.1:3000", "127.0.0.1:3001"] {
+        let labels = EndpointLabels {
+            subsystem: "shop",
+            upstream: "backend",
+            endpoint,
+        };
+        metrics.upstream_request(labels, UpstreamOutcome::Success);
+    }
+    assert!(metrics.render().contains("127.0.0.1:3001"));
+
+    service
+        .apply(move |conn| {
+            fast_proxy_store::repository::endpoints::delete(conn, site, second.0, second.1)?;
+            Ok(Mutation {
+                value: (),
+                summary: "remove".into(),
+            })
+        })
+        .await
+        .unwrap();
+    let text = metrics.render();
+    assert!(text.contains("127.0.0.1:3000"));
+    assert!(!text.contains("127.0.0.1:3001"), "{text}");
 }

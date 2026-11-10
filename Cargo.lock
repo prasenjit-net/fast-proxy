@@ -443,6 +443,7 @@ dependencies = [
  "fast-proxy-admin",
  "fast-proxy-config-service",
  "fast-proxy-dataplane",
+ "fast-proxy-health",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "humantime",
@@ -463,6 +464,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "chrono",
+ "fast-proxy-balancing",
  "fast-proxy-config-service",
  "fast-proxy-model",
  "fast-proxy-routing",
@@ -480,9 +482,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-balancing"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+]
+
+[[package]]
 name = "fast-proxy-config-service"
 version = "0.0.0"
 dependencies = [
+ "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-store",
@@ -497,6 +507,7 @@ name = "fast-proxy-dataplane"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-telemetry",
@@ -516,6 +527,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-health"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-balancing",
+ "fast-proxy-config-service",
+ "fast-proxy-model",
+ "fast-proxy-routing",
+ "fast-proxy-telemetry",
+ "rand 0.8.7",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "fast-proxy-model"
 version = "0.0.0"
 
@@ -524,6 +550,7 @@ name = "fast-proxy-routing"
 version = "0.0.0"
 dependencies = [
  "arc-swap",
+ "fast-proxy-balancing",
  "fast-proxy-model",
  "http",
  "proptest",

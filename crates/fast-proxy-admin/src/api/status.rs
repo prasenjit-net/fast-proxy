@@ -3,6 +3,7 @@ use axum::Json;
 use serde::Serialize;
 
 use super::envelope::Envelope;
+use super::upstream_health::{summarize, UpstreamHealth};
 use crate::state::SharedState;
 
 #[derive(Debug, Serialize)]
@@ -23,6 +24,8 @@ pub struct Status {
     listeners: Vec<ListenerDto>,
     database: String,
     subsystems: SubsystemCounts,
+    /// Endpoints in rotation and the ones that are not, with reasons.
+    upstreams: UpstreamHealth,
     started_at_ms: i64,
     uptime_secs: u64,
 }
@@ -47,6 +50,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<Envelope<Status>> 
                 total: snapshot.subsystems.len(),
                 enabled,
             },
+            upstreams: summarize(&snapshot),
             started_at_ms: state.started_at_ms,
             uptime_secs: state.started.elapsed().as_secs(),
         },

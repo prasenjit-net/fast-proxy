@@ -2,7 +2,8 @@ use std::future::Future;
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use fast_proxy_routing::{CompiledRoute, CompiledSubsystem};
+use fast_proxy_balancing::{Candidate, InFlightGuard};
+use fast_proxy_routing::{CompiledEndpoint, CompiledRoute, CompiledSubsystem};
 use http::{Request, Response};
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
@@ -15,6 +16,12 @@ pub type ResponseBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>
 pub struct Target<'snapshot> {
     pub subsystem: &'snapshot CompiledSubsystem,
     pub route: &'snapshot CompiledRoute,
+    /// The endpoint of the route's upstream chosen for this request.
+    pub endpoint: &'snapshot CompiledEndpoint,
+    /// The chosen endpoint's position in the upstream's endpoint list.
+    pub endpoint_index: usize,
+    /// The chosen endpoint's live state, for latency samples and tunnels.
+    pub candidate: &'snapshot Candidate,
     /// How many bytes of the request path the route's prefix consumed; the
     /// rest of the path is `request.uri().path()[consumed_prefix_len..]`.
     pub consumed_prefix_len: usize,
@@ -26,6 +33,30 @@ pub struct Target<'snapshot> {
     pub wants_json: bool,
 }
 
+/// What forwarding a request produced: the response and what it took.
+pub struct Forwarded {
+    pub response: Response<ResponseBody>,
+    /// The endpoint that produced the response (the last one tried).
+    pub endpoint_index: usize,
+    /// How many upstream attempts were made.
+    pub attempts: u32,
+    /// Keeps the answering endpoint's in-flight count up until the response
+    /// body has finished.
+    pub in_flight: Option<InFlightGuard>,
+}
+
+impl Forwarded {
+    /// A response that took exactly one attempt on `endpoint_index`.
+    pub fn single(response: Response<ResponseBody>, endpoint_index: usize) -> Self {
+        Self {
+            response,
+            endpoint_index,
+            attempts: 1,
+            in_flight: None,
+        }
+    }
+}
+
 /// Sends a routed request to its upstream and returns the response. It
 /// reports upstream failures as 502/504 responses, never as errors.
 pub trait Forward: Send + Sync + 'static {
@@ -33,5 +64,5 @@ pub trait Forward: Send + Sync + 'static {
         &'a self,
         request: Request<Incoming>,
         target: Target<'a>,
-    ) -> impl Future<Output = Response<ResponseBody>> + Send + 'a;
+    ) -> impl Future<Output = Forwarded> + Send + 'a;
 }

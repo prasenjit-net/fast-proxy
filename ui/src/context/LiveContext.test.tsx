@@ -127,4 +127,29 @@ describe("LiveProvider", () => {
     expect(predicate({ queryKey: ["revisions"] })).toBe(true);
     expect(predicate({ queryKey: ["config"] })).toBe(false);
   });
+
+  it("refetches endpoint status and the health summary when an endpoint changes state", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    renderLive(client);
+    act(() =>
+      FakeSocket.last.receive({
+        type: "endpointState",
+        subsystem: "shop",
+        upstream: "backend",
+        endpoint: "10.0.0.1:80",
+        change: "ejected",
+        detail: "ejection number 1 in a row",
+        timestampMs: 1,
+      }),
+    );
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    const { predicate } = invalidate.mock.calls[0][0] as unknown as {
+      predicate: (query: { queryKey: unknown[] }) => boolean;
+    };
+    expect(predicate({ queryKey: ["upstream-status", 1, 5] })).toBe(true);
+    expect(predicate({ queryKey: ["status"] })).toBe(true);
+    expect(predicate({ queryKey: ["subsystems"] })).toBe(false);
+    expect(predicate({ queryKey: ["config"] })).toBe(false);
+  });
 });

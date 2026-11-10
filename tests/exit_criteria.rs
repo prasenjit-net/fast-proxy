@@ -59,12 +59,19 @@ fn edits_apply_live_without_a_restart() {
     let (id, upstream) = create_site(&proxy, "shop", "shop.example.com", first);
     assert_eq!(through_proxy(&proxy, "shop.example.com", "/").1, "first /");
 
-    // Repoint the upstream.
+    // Repoint the upstream's endpoint.
+    let (_, groups) = admin(
+        &proxy,
+        "GET",
+        &format!("/api/subsystems/{id}/upstreams"),
+        None,
+    );
+    let endpoint = groups["data"][0]["endpoints"][0]["id"].as_i64().unwrap();
     let (status, _) = admin(
         &proxy,
         "PUT",
-        &format!("/api/subsystems/{id}/upstreams/{upstream}"),
-        Some(json!({ "name": "backend", "addr": format!("127.0.0.1:{second}") })),
+        &format!("/api/subsystems/{id}/upstreams/{upstream}/endpoints/{endpoint}"),
+        Some(json!({ "addr": format!("127.0.0.1:{second}") })),
     );
     assert_eq!(status, 200);
     assert_eq!(through_proxy(&proxy, "shop.example.com", "/").1, "second /");
@@ -327,6 +334,7 @@ fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
     for field in [
         "route=/",
         "upstream=127.0.0.1:",
+        "attempts=1",
         "request_id=",
         "upstream_ms=",
         "bytes_out=",
@@ -339,7 +347,7 @@ fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
         .into_iter()
         .find(|l| l.contains("_unmatched"))
         .unwrap();
-    for field in ["upstream=-", "upstream_ms=-", "route=_none"] {
+    for field in ["upstream=-", "attempts=0", "upstream_ms=-", "route=_none"] {
         assert!(
             unmatched_line.contains(field),
             "{field} missing from {unmatched_line}"

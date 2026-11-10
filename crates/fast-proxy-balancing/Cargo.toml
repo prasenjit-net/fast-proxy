@@ -1,0 +1,9 @@
+[package]
+name = "fast-proxy-balancing"
+version = "0.0.0"
+edition = "2021"
+description = "Endpoint runtime state, selection algorithms and passive health for upstream groups (pure, no I/O)"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }

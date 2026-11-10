@@ -1,5 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { envelope } from "../test/fixtures";
+import { mockApi } from "../test/mockApi";
 import { renderPage } from "../test/renderPage";
 import { trafficSample } from "../test/traffic";
 import DashboardPage from "./Dashboard";
@@ -76,5 +78,66 @@ describe("DashboardPage", () => {
     live.value = { status: "online", traffic: sample, history: [sample, sample], activities: [] };
     renderPage(DashboardPage, { path: "/" });
     expect(await screen.findByText("No traffic has reached the proxy yet.")).toBeInTheDocument();
+  });
+
+  describe("upstream health card", () => {
+    const status = (upstreams: unknown) =>
+      mockApi({
+        "GET /api/status": {
+          body: envelope({
+            listeners: [],
+            database: "x.db",
+            subsystems: { total: 1, enabled: 1 },
+            upstreams,
+            startedAtMs: 0,
+            uptimeSecs: 1,
+          }),
+        },
+      });
+
+    it("lists the endpoints that are out of rotation with the reason", async () => {
+      status({
+        total: 3,
+        healthy: 1,
+        unhealthy: [
+          { subsystem: "shop", upstream: "backend", endpoint: "10.0.0.2:80", reason: "failed health checks" },
+          { subsystem: "shop", upstream: "backend", endpoint: "10.0.0.3:80", reason: "draining" },
+        ],
+      });
+      renderPage(DashboardPage, { path: "/" });
+
+      expect(await screen.findByText("1 of 3 healthy")).toBeInTheDocument();
+      expect(screen.getByText("10.0.0.2:80")).toBeInTheDocument();
+      expect(screen.getByText("failed health checks")).toBeInTheDocument();
+      expect(screen.getByText("draining")).toBeInTheDocument();
+    });
+
+    it("colours the summary by how many endpoints are in rotation", async () => {
+      for (const [healthy, tone] of [[2, "text-ok"], [1, "text-warn"], [0, "text-err"]] as const) {
+        status({ total: 2, healthy, unhealthy: [] });
+        const { unmount } = renderPage(DashboardPage, { path: "/" });
+        expect((await screen.findByText(`${healthy} of 2 healthy`)).className).toContain(tone);
+        unmount();
+      }
+    });
+
+    it("says so when every endpoint is taking requests", async () => {
+      status({ total: 2, healthy: 2, unhealthy: [] });
+      renderPage(DashboardPage, { path: "/" });
+      expect(await screen.findByText("2 of 2 healthy")).toBeInTheDocument();
+      expect(screen.getByText("Every endpoint is taking requests.")).toBeInTheDocument();
+    });
+
+    it("says so when no endpoint is configured", async () => {
+      status({ total: 0, healthy: 0, unhealthy: [] });
+      renderPage(DashboardPage, { path: "/" });
+      expect(await screen.findByText("No endpoints are configured yet.")).toBeInTheDocument();
+    });
+
+    it("says the status is unavailable when it cannot be fetched", async () => {
+      mockApi({});
+      renderPage(DashboardPage, { path: "/" });
+      expect(await screen.findByText("Status is unavailable.")).toBeInTheDocument();
+    });
   });
 });

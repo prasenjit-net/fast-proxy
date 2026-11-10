@@ -15,12 +15,29 @@ const matched: Resolution = {
     id: 7,
     prefix: "/api",
     upstreamName: "backend",
-    endpoint: "127.0.0.1:3000",
+    algorithm: "round_robin",
+    endpoints: [
+      {
+        id: 1,
+        addr: "127.0.0.1:3000",
+        weight: 1,
+        state: "enabled",
+        eligible: true,
+        upstreamUrl: "http://127.0.0.1:3000/v2/users?page=2",
+      },
+      {
+        id: 2,
+        addr: "127.0.0.1:3001",
+        weight: 1,
+        state: "draining",
+        eligible: false,
+        upstreamUrl: "http://127.0.0.1:3001/v2/users?page=2",
+      },
+    ],
     stripPrefix: true,
     upstreamPrefix: "/v2",
     preserveHost: false,
   },
-  upstreamUrl: "http://127.0.0.1:3000/v2/users?page=2",
 };
 
 const unmatched = (reason: NonNullable<Resolution["reason"]>, withSubsystem = false): Resolution => ({
@@ -28,7 +45,6 @@ const unmatched = (reason: NonNullable<Resolution["reason"]>, withSubsystem = fa
   reason,
   subsystem: withSubsystem ? { id: 1, name: "shop" } : null,
   route: null,
-  upstreamUrl: null,
 });
 
 function renderResolver() {
@@ -56,6 +72,9 @@ describe("ResolverPage", () => {
 
     expect(await screen.findByText("matched")).toBeInTheDocument();
     expect(screen.getByText("http://127.0.0.1:3000/v2/users?page=2")).toBeInTheDocument();
+    expect(screen.getByText("round_robin")).toBeInTheDocument();
+    expect(screen.getByText("Not eligible")).toBeInTheDocument();
+    expect(screen.getByText("(draining)")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "shop" })).toHaveAttribute("href", "/subsystems/1");
     expect(screen.getByText("/api")).toBeInTheDocument();
     expect(screen.getByText("strip prefix, prepend /v2, rewrite Host header")).toBeInTheDocument();

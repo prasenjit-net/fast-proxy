@@ -4,6 +4,7 @@
 //! order and under one writer lock. The data plane only ever sees the holder.
 
 mod error;
+mod metric_series;
 mod service;
 
 pub use error::StartError;

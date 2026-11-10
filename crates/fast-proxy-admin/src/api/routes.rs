@@ -2,13 +2,14 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use fast_proxy_model::{
-    parse_timeout_ms, RouteId, RoutePrefix, SubsystemId, UpstreamGroupId, UpstreamPrefix,
+    parse_timeout_ms, RetryPolicy, RouteId, RoutePrefix, SubsystemId, UpstreamGroupId,
+    UpstreamPrefix,
 };
 use fast_proxy_store::repository::{routes, subsystems};
 use fast_proxy_store::{Mutation, RouteFields};
 use serde::Deserialize;
 
-use super::detail::{millis_of, routes_in_match_order, subsystem_name, RouteDto};
+use super::detail::{millis_of, routes_in_match_order, subsystem_name, RetryDto, RouteDto};
 use super::envelope::{Envelope, VersionOnly};
 use super::input::FieldErrors;
 use super::json::ApiJson;
@@ -34,8 +35,19 @@ pub struct RouteRequest {
     connect_timeout_ms: u64,
     #[serde(default = "default_response_timeout")]
     response_timeout_ms: u64,
+    #[serde(default)]
+    retry: RetryRequest,
     #[serde(default = "yes")]
     enabled: bool,
+}
+
+/// A route's retry settings; absent fields take their defaults.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RetryRequest {
+    max_attempts: Option<u32>,
+    idempotent_on_5xx: Option<bool>,
+    on_timeout: Option<bool>,
 }
 
 fn yes() -> bool {
@@ -63,6 +75,16 @@ impl RouteRequest {
             "response_timeout_ms",
             self.response_timeout_ms,
         ));
+        let defaults = RetryPolicy::default();
+        let retry = RetryPolicy {
+            max_attempts: self.retry.max_attempts.unwrap_or(defaults.max_attempts),
+            idempotent_on_5xx: self
+                .retry
+                .idempotent_on_5xx
+                .unwrap_or(defaults.idempotent_on_5xx),
+            on_timeout: self.retry.on_timeout.unwrap_or(defaults.on_timeout),
+        };
+        errors.check(retry.validate());
         errors.finish()?;
         let (Some(prefix), Some(upstream_prefix), Some(connect_timeout), Some(response_timeout)) =
             (prefix, upstream_prefix, connect_timeout, response_timeout)
@@ -77,6 +99,7 @@ impl RouteRequest {
             preserve_host: self.preserve_host,
             connect_timeout,
             response_timeout,
+            retry,
             enabled: self.enabled,
         })
     }
@@ -92,6 +115,11 @@ fn dto_from(id: RouteId, fields: &RouteFields) -> RouteDto {
         preserve_host: fields.preserve_host,
         connect_timeout_ms: millis_of(fields.connect_timeout),
         response_timeout_ms: millis_of(fields.response_timeout),
+        retry: RetryDto {
+            max_attempts: fields.retry.max_attempts,
+            idempotent_on_5xx: fields.retry.idempotent_on_5xx,
+            on_timeout: fields.retry.on_timeout,
+        },
         enabled: fields.enabled,
     }
 }

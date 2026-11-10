@@ -5,6 +5,7 @@ use fast_proxy_store::{Connection, StoreError};
 use serde::Serialize;
 
 use super::envelope::Envelope;
+use super::upstream_dto::{upstream_dto, UpstreamDto};
 use crate::AppResult;
 
 #[derive(Debug, Serialize)]
@@ -14,13 +15,13 @@ pub struct HostDto {
     pub pattern: String,
 }
 
+/// A route's retry behaviour as shown by the API.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UpstreamDto {
-    pub id: i64,
-    pub name: String,
-    pub addr: String,
-    pub weight: u32,
+pub struct RetryDto {
+    pub max_attempts: u32,
+    pub idempotent_on_5xx: bool,
+    pub on_timeout: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,6 +35,7 @@ pub struct RouteDto {
     pub preserve_host: bool,
     pub connect_timeout_ms: u64,
     pub response_timeout_ms: u64,
+    pub retry: RetryDto,
     pub enabled: bool,
 }
 
@@ -65,17 +67,6 @@ pub struct SubsystemSummary {
     pub updated_at_ms: i64,
 }
 
-pub fn upstream_dto(group: &fast_proxy_model::UpstreamGroupConfig) -> UpstreamDto {
-    // M1 groups have exactly one endpoint; the compiler enforces it.
-    let endpoint = group.endpoints.first();
-    UpstreamDto {
-        id: group.id.0,
-        name: group.name.clone(),
-        addr: endpoint.map(|e| e.addr.to_string()).unwrap_or_default(),
-        weight: endpoint.map_or(1, |e| e.weight),
-    }
-}
-
 /// A duration as whole milliseconds, saturating.
 pub fn millis_of(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
@@ -91,6 +82,11 @@ pub fn route_dto(route: &RouteConfig) -> RouteDto {
         preserve_host: route.preserve_host,
         connect_timeout_ms: millis_of(route.connect_timeout),
         response_timeout_ms: millis_of(route.response_timeout),
+        retry: RetryDto {
+            max_attempts: route.retry.max_attempts,
+            idempotent_on_5xx: route.retry.idempotent_on_5xx,
+            on_timeout: route.retry.on_timeout,
+        },
         enabled: route.enabled,
     }
 }

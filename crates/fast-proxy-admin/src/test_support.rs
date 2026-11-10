@@ -9,7 +9,7 @@ use axum::http::{Method, Request, StatusCode};
 use axum::Router;
 use fast_proxy_config_service::ConfigService;
 use fast_proxy_store::Store;
-use fast_proxy_telemetry::{AccessLog, Metrics};
+use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -46,6 +46,7 @@ impl TestApp {
                 database_path: "/tmp/test.db".into(),
             },
             metrics.clone(),
+            EndpointEvents::new(),
         ));
         Self {
             router: crate::router(state.clone()),

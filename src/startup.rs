@@ -10,8 +10,9 @@ use fast_proxy_dataplane::{
     bind, BindError, DataPlane, ListenerSpec, Observability, RequestPipeline, TrustedProxies,
     TrustedProxyError, UpstreamClient,
 };
+use fast_proxy_health::{run_status_gauges, HealthEngine};
 use fast_proxy_store::{Store, StoreError};
-use fast_proxy_telemetry::{AccessLog, Metrics};
+use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -84,6 +85,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     // stays usable while requests finish).
     let data_stop = CancellationToken::new();
     let admin_stop = CancellationToken::new();
+    // Endpoint health changes flow from the data plane and the health checks to
+    // the admin plane's live view.
+    let endpoint_events = EndpointEvents::new();
     let admin_state = Arc::new(AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
@@ -91,13 +95,28 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         config_service.clone(),
         runtime,
         metrics.clone(),
+        endpoint_events.clone(),
     ));
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
+    // Active health checks and the endpoint gauges follow the live
+    // configuration; they stop with the data plane.
+    let health = HealthEngine::new(
+        config_service.snapshot_holder(),
+        metrics.clone(),
+        endpoint_events.clone(),
+    );
+    tokio::spawn(health.run(config_service.subscribe(), data_stop.clone()));
+    tokio::spawn(run_status_gauges(
+        config_service.snapshot_holder(),
+        metrics.clone(),
+        data_stop.clone(),
+    ));
+
     let pipeline = Arc::new(RequestPipeline::new(
         config_service.snapshot_holder(),
-        UpstreamClient::new(trusted_proxies, metrics.clone()),
+        UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
         Observability {
             metrics,
             access_log: access_log.clone(),

@@ -1,47 +1,93 @@
-use fast_proxy_model::{SubsystemId, UpstreamGroupId};
-use rusqlite::{params, Connection};
+use fast_proxy_model::{SubsystemId, UpstreamGroupId, MAX_ENDPOINTS_PER_GROUP};
+use rusqlite::Connection;
 
-use super::{ensure_subsystem, expect_changed, touch};
-use crate::inputs::UpstreamFields;
+use super::{endpoints, ensure_subsystem, expect_changed, policy_columns, touch};
+use crate::inputs::{EndpointFields, UpstreamFields};
 use crate::StoreError;
 
-/// Creates an upstream group with its single endpoint. A duplicate name
-/// within the subsystem is a `Conflict`.
+/// Creates an upstream group together with its endpoints, atomically. At
+/// least one and at most 64 endpoints are required; a duplicate group name
+/// within the subsystem, or a duplicate address, is a `Conflict`.
 pub fn create(
     conn: &Connection,
     subsystem_id: SubsystemId,
     fields: &UpstreamFields,
+    endpoint_fields: &[EndpointFields],
 ) -> Result<UpstreamGroupId, StoreError> {
     ensure_subsystem(conn, subsystem_id)?;
-    conn.execute(
-        "INSERT INTO upstream_group (subsystem_id, name) VALUES (?1, ?2)",
-        params![subsystem_id.0, fields.name],
-    )?;
-    let group_id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO upstream_endpoint (group_id, addr, weight) VALUES (?1, ?2, ?3)",
-        params![group_id, fields.addr.to_string(), fields.weight],
-    )?;
+    check_endpoint_count(endpoint_fields.len())?;
+    let group_id = insert(conn, None, subsystem_id, fields)?;
+    for (index, endpoint) in endpoint_fields.iter().enumerate() {
+        endpoints::insert(
+            conn,
+            None,
+            group_id,
+            endpoint,
+            &format!("endpoints.{index}"),
+        )?;
+    }
     touch(conn, subsystem_id)?;
-    Ok(UpstreamGroupId(group_id))
+    Ok(group_id)
 }
 
-/// Replaces an upstream group's name and endpoint.
+fn check_endpoint_count(count: usize) -> Result<(), StoreError> {
+    if count == 0 || count > MAX_ENDPOINTS_PER_GROUP {
+        return Err(StoreError::invalid_field(
+            "endpoints",
+            "a group needs between 1 and 64 endpoints",
+        ));
+    }
+    Ok(())
+}
+
+/// Inserts the group row, with an explicit id when restoring a revision.
+pub(crate) fn insert(
+    conn: &Connection,
+    id: Option<UpstreamGroupId>,
+    subsystem_id: SubsystemId,
+    fields: &UpstreamFields,
+) -> Result<UpstreamGroupId, StoreError> {
+    fields.policy.validate()?;
+    let bound = policy_columns::Bound::new(&fields.policy);
+    let mut params = bound.named();
+    let id = id.map(|id| id.0);
+    params.push((":id", &id));
+    params.push((":subsystem_id", &subsystem_id.0));
+    params.push((":name", &fields.name));
+    conn.execute(
+        &format!(
+            "INSERT INTO upstream_group (id, subsystem_id, name, {})
+             VALUES (:id, :subsystem_id, :name, {})",
+            policy_columns::INSERT_COLUMNS,
+            policy_columns::INSERT_VALUES
+        ),
+        params.as_slice(),
+    )?;
+    Ok(UpstreamGroupId(conn.last_insert_rowid()))
+}
+
+/// Replaces an upstream group's name and policy; endpoints are untouched.
 pub fn update(
     conn: &Connection,
     subsystem_id: SubsystemId,
     group_id: UpstreamGroupId,
     fields: &UpstreamFields,
 ) -> Result<(), StoreError> {
+    fields.policy.validate()?;
+    let bound = policy_columns::Bound::new(&fields.policy);
+    let mut params = bound.named();
+    params.push((":id", &group_id.0));
+    params.push((":subsystem_id", &subsystem_id.0));
+    params.push((":name", &fields.name));
     let changed = conn.execute(
-        "UPDATE upstream_group SET name = ?1 WHERE id = ?2 AND subsystem_id = ?3",
-        params![fields.name, group_id.0, subsystem_id.0],
+        &format!(
+            "UPDATE upstream_group SET name = :name, {}
+             WHERE id = :id AND subsystem_id = :subsystem_id",
+            policy_columns::UPDATE_SET
+        ),
+        params.as_slice(),
     )?;
     expect_changed(changed, &format!("upstream {}", group_id.0))?;
-    conn.execute(
-        "UPDATE upstream_endpoint SET addr = ?1, weight = ?2 WHERE group_id = ?3",
-        params![fields.addr.to_string(), fields.weight, group_id.0],
-    )?;
     touch(conn, subsystem_id)
 }
 
@@ -64,7 +110,7 @@ pub fn delete(
     }
     let changed = conn.execute(
         "DELETE FROM upstream_group WHERE id = ?1 AND subsystem_id = ?2",
-        params![group_id.0, subsystem_id.0],
+        rusqlite::params![group_id.0, subsystem_id.0],
     )?;
     expect_changed(changed, &format!("upstream {}", group_id.0))?;
     touch(conn, subsystem_id)

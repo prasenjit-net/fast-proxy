@@ -54,9 +54,11 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
+    use fast_proxy_balancing::RuntimeRegistry;
     use fast_proxy_model::{
-        Config, EndpointAddr, EndpointConfig, HostPattern, RouteConfig, RouteId, RoutePrefix,
-        SubsystemConfig, SubsystemName, UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
+        Config, EndpointAddr, EndpointConfig, EndpointId, EndpointState, GroupPolicy, HostPattern,
+        RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemName,
+        UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
     };
 
     use super::*;
@@ -78,9 +80,12 @@ mod tests {
             upstream_groups: vec![UpstreamGroupConfig {
                 id: UpstreamGroupId(id),
                 name: "backend".into(),
+                policy: GroupPolicy::default(),
                 endpoints: vec![EndpointConfig {
+                    id: EndpointId(id),
                     addr: EndpointAddr::parse(addr).unwrap(),
                     weight: 1,
+                    state: EndpointState::Enabled,
                 }],
             }],
             routes: prefixes
@@ -95,6 +100,7 @@ mod tests {
                     preserve_host: true,
                     connect_timeout: std::time::Duration::from_secs(5),
                     response_timeout: std::time::Duration::from_secs(30),
+                    retry: RetryPolicy::default(),
                     enabled: true,
                 })
                 .collect(),
@@ -117,7 +123,7 @@ mod tests {
                 off,
             ],
         };
-        compile(1, &config).unwrap()
+        compile(1, &config, &RuntimeRegistry::new()).unwrap()
     }
 
     #[test]
@@ -126,12 +132,18 @@ mod tests {
         let Lookup::Matched { route, .. } = snapshot.lookup("shop.example.com", "/x") else {
             panic!("expected a match");
         };
-        assert_eq!(route.route.endpoint.to_string(), "127.0.0.1:3000");
+        assert_eq!(
+            route.route.upstream.endpoints[0].addr.to_string(),
+            "127.0.0.1:3000"
+        );
         let Lookup::Matched { route, .. } = snapshot.lookup("blog.example.com:8000", "/posts/1")
         else {
             panic!("expected a match");
         };
-        assert_eq!(route.route.endpoint.to_string(), "127.0.0.1:3001");
+        assert_eq!(
+            route.route.upstream.endpoints[0].addr.to_string(),
+            "127.0.0.1:3001"
+        );
         assert_eq!(route.remainder, "/1");
     }
 

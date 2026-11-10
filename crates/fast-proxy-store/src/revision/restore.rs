@@ -3,6 +3,8 @@ use rusqlite::{params, Connection};
 
 use super::history;
 use crate::clock::now_ms;
+use crate::inputs::{EndpointFields, UpstreamFields};
+use crate::repository::{endpoints, upstreams};
 use crate::StoreError;
 
 fn millis(duration: std::time::Duration) -> i64 {
@@ -34,23 +36,27 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
             )?;
         }
         for group in &subsystem.upstream_groups {
-            conn.execute(
-                "INSERT INTO upstream_group (id, subsystem_id, name) VALUES (?1, ?2, ?3)",
-                params![group.id.0, subsystem.id.0, group.name],
-            )?;
+            let fields = UpstreamFields {
+                name: group.name.clone(),
+                policy: group.policy.clone(),
+            };
+            upstreams::insert(conn, Some(group.id), subsystem.id, &fields)?;
             for endpoint in &group.endpoints {
-                conn.execute(
-                    "INSERT INTO upstream_endpoint (group_id, addr, weight) VALUES (?1, ?2, ?3)",
-                    params![group.id.0, endpoint.addr.to_string(), endpoint.weight],
-                )?;
+                let fields = EndpointFields {
+                    addr: endpoint.addr.clone(),
+                    weight: endpoint.weight,
+                    state: endpoint.state,
+                };
+                endpoints::insert(conn, Some(endpoint.id), group.id, &fields, "endpoints")?;
             }
         }
         for route in &subsystem.routes {
             conn.execute(
                 "INSERT INTO route (id, subsystem_id, prefix, upstream_group_id, strip_prefix,
                                     upstream_prefix, preserve_host, connect_timeout_ms,
-                                    response_timeout_ms, enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                                    response_timeout_ms, retry_max_attempts,
+                                    retry_idempotent_on_5xx, retry_on_timeout, enabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     route.id.0,
                     subsystem.id.0,
@@ -61,6 +67,9 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
                     route.preserve_host,
                     millis(route.connect_timeout),
                     millis(route.response_timeout),
+                    route.retry.max_attempts,
+                    route.retry.idempotent_on_5xx,
+                    route.retry.on_timeout,
                     route.enabled,
                 ],
             )?;

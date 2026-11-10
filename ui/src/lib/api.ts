@@ -10,13 +10,18 @@ import type {
   Route,
   RouteInput,
   ServerConfig,
+  EndpointInput,
+  EndpointState,
+  Endpoint,
   Status,
   SubsystemDetail,
   SubsystemInput,
   SubsystemSummary,
   Traffic,
   Upstream,
-  UpstreamInput,
+  UpstreamCreate,
+  UpstreamSettings,
+  UpstreamStatus,
   VersionOnly,
 } from "./types";
 
@@ -46,13 +51,29 @@ export const api = {
   removeHost: (id: number, hostId: number) =>
     request<VersionOnly>(`${subsystem(id)}/hosts/${hostId}`, send("DELETE")),
 
-  // upstreams
-  createUpstream: (id: number, input: UpstreamInput) =>
+  // upstreams and their endpoints
+  createUpstream: (id: number, input: UpstreamCreate) =>
     request<Envelope<Upstream>>(`${subsystem(id)}/upstreams`, send("POST", input)),
-  updateUpstream: (id: number, upstreamId: number, input: UpstreamInput) =>
+  updateUpstream: (id: number, upstreamId: number, input: UpstreamSettings) =>
     request<Envelope<Upstream>>(`${subsystem(id)}/upstreams/${upstreamId}`, send("PUT", input)),
   deleteUpstream: (id: number, upstreamId: number) =>
     request<VersionOnly>(`${subsystem(id)}/upstreams/${upstreamId}`, send("DELETE")),
+  upstreamStatus: (id: number, upstreamId: number) =>
+    request<Envelope<UpstreamStatus>>(`${subsystem(id)}/upstreams/${upstreamId}/status`),
+  addEndpoint: (id: number, upstreamId: number, input: EndpointInput) =>
+    request<Envelope<Endpoint>>(`${subsystem(id)}/upstreams/${upstreamId}/endpoints`, send("POST", input)),
+  updateEndpoint: (id: number, upstreamId: number, endpointId: number, input: EndpointInput) =>
+    request<Envelope<Endpoint>>(
+      `${subsystem(id)}/upstreams/${upstreamId}/endpoints/${endpointId}`,
+      send("PUT", input),
+    ),
+  setEndpointState: (id: number, upstreamId: number, endpointId: number, state: EndpointState) =>
+    request<Envelope<Endpoint>>(
+      `${subsystem(id)}/upstreams/${upstreamId}/endpoints/${endpointId}/state`,
+      send("PUT", { state }),
+    ),
+  removeEndpoint: (id: number, upstreamId: number, endpointId: number) =>
+    request<VersionOnly>(`${subsystem(id)}/upstreams/${upstreamId}/endpoints/${endpointId}`, send("DELETE")),
 
   // routes
   createRoute: (id: number, input: RouteInput) =>

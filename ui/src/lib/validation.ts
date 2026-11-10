@@ -2,12 +2,10 @@
 // mistakes are caught before a round trip. The server stays the authority:
 // it re-validates everything and its field errors are shown the same way.
 // Field names are the API's camelCase names, shared with server errors.
-import type { RouteInput, SubsystemInput, UpstreamInput } from "./types";
+import type { RouteInput, SubsystemInput } from "./types";
+import { wholeNumber, type FieldErrors, type Validated } from "./policyValidation";
 
-export type FieldErrors = Record<string, string>;
-
-/** The outcome of validating a form: errors, or the request body to send. */
-export type Validated<T> = { errors: FieldErrors; value?: undefined } | { errors: FieldErrors; value: T };
+export * from "./policyValidation";
 
 const SUBSYSTEM_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const MIN_TIMEOUT_MS = 100;
@@ -15,11 +13,6 @@ const MAX_TIMEOUT_MS = 600_000;
 
 function done<T>(errors: FieldErrors, value: T): Validated<T> {
   return Object.keys(errors).length > 0 ? { errors } : { errors, value };
-}
-
-/** A whole number written as digits, or null. */
-function wholeNumber(raw: string): number | null {
-  return /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : null;
 }
 
 export interface SubsystemValues {
@@ -52,29 +45,6 @@ export function validateHost(pattern: string): Validated<string> {
   return done(errors, value);
 }
 
-export interface UpstreamValues {
-  name: string;
-  addr: string;
-  weight: string;
-}
-
-export function validateUpstream(values: UpstreamValues): Validated<UpstreamInput> {
-  const errors: FieldErrors = {};
-  const name = values.name.trim();
-  if (name === "" || name.length > 63) errors.name = "Must be 1 to 63 characters";
-
-  const addr = values.addr.trim();
-  const port = addr.includes(":") ? wholeNumber(addr.slice(addr.lastIndexOf(":") + 1)) : null;
-  if (port === null || port < 1 || port > 65535 || addr.startsWith(":")) {
-    errors.addr = "Use host:port, with a port from 1 to 65535";
-  }
-
-  const weight = wholeNumber(values.weight);
-  if (weight === null || weight < 1) errors.weight = "Must be a whole number, at least 1";
-
-  return done(errors, { name, addr, weight: weight ?? 1 });
-}
-
 export interface RouteValues {
   prefix: string;
   upstreamGroupId: string;
@@ -83,6 +53,9 @@ export interface RouteValues {
   preserveHost: boolean;
   connectTimeoutMs: string;
   responseTimeoutMs: string;
+  retryMaxAttempts: string;
+  retryIdempotentOn5xx: boolean;
+  retryOnTimeout: boolean;
   enabled: boolean;
 }
 
@@ -122,6 +95,11 @@ export function validateRoute(values: RouteValues): Validated<RouteInput> {
   const responseTimeoutMs = timeout(values.responseTimeoutMs);
   if (responseTimeoutMs === null) errors.responseTimeoutMs = "Must be between 100 and 600000 ms";
 
+  const maxAttempts = wholeNumber(values.retryMaxAttempts);
+  if (maxAttempts === null || maxAttempts < 1 || maxAttempts > 5) {
+    errors["retry.maxAttempts"] = "Must be a whole number from 1 to 5 (1 means never retry)";
+  }
+
   return done(errors, {
     prefix,
     upstreamGroupId: upstreamGroupId ?? 0,
@@ -130,6 +108,11 @@ export function validateRoute(values: RouteValues): Validated<RouteInput> {
     preserveHost: values.preserveHost,
     connectTimeoutMs: connectTimeoutMs ?? 0,
     responseTimeoutMs: responseTimeoutMs ?? 0,
+    retry: {
+      maxAttempts: maxAttempts ?? 1,
+      idempotentOn5xx: values.retryIdempotentOn5xx,
+      onTimeout: values.retryOnTimeout,
+    },
     enabled: values.enabled,
   });
 }

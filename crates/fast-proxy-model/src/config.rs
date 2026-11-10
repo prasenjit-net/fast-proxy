@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use crate::{EndpointAddr, HostPattern, RoutePrefix, SubsystemName, UpstreamPrefix};
+use crate::{
+    EndpointConfig, GroupPolicy, HostPattern, RetryPolicy, RoutePrefix, SubsystemName,
+    UpstreamPrefix,
+};
 
 /// Database id of a subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -38,19 +41,15 @@ pub struct SubsystemConfig {
     pub routes: Vec<RouteConfig>,
 }
 
-/// A named set of endpoints. M1 requires exactly one endpoint.
+/// A named set of endpoints with the policy that governs them: one to
+/// [`MAX_ENDPOINTS_PER_GROUP`](crate::MAX_ENDPOINTS_PER_GROUP), checked when the
+/// routing snapshot is compiled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpstreamGroupConfig {
     pub id: UpstreamGroupId,
     pub name: String,
+    pub policy: GroupPolicy,
     pub endpoints: Vec<EndpointConfig>,
-}
-
-/// One backend address; `weight` is unused until load balancing (M2).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EndpointConfig {
-    pub addr: EndpointAddr,
-    pub weight: u32,
 }
 
 /// A prefix route that forwards to an upstream group of the same subsystem.
@@ -64,5 +63,6 @@ pub struct RouteConfig {
     pub preserve_host: bool,
     pub connect_timeout: Duration,
     pub response_timeout: Duration,
+    pub retry: RetryPolicy,
     pub enabled: bool,
 }

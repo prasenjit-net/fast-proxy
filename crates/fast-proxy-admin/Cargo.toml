@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 fast-proxy-config-service = { path = "../fast-proxy-config-service" }
 fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }

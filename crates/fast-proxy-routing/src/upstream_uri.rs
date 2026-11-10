@@ -1,9 +1,11 @@
 use http::uri::{Authority, PathAndQuery, Scheme};
 use http::Uri;
 
+use fast_proxy_model::EndpointAddr;
+
 use crate::CompiledRoute;
 
-/// Builds the URI to request from the upstream: the route's endpoint, the
+/// Builds the URI to request from the chosen `endpoint`: its address, the
 /// rewritten path, and the original query string byte for byte.
 ///
 /// With `strip_prefix` the path the route matched on is replaced by the
@@ -11,6 +13,7 @@ use crate::CompiledRoute;
 /// and `upstream_prefix` is simply put in front.
 pub fn build_upstream_uri(
     route: &CompiledRoute,
+    endpoint: &EndpointAddr,
     original: &Uri,
     consumed_prefix_len: usize,
 ) -> Option<Uri> {
@@ -29,7 +32,7 @@ pub fn build_upstream_uri(
         rewritten.push_str(query);
     }
 
-    let authority: Authority = route.endpoint.to_string().parse().ok()?;
+    let authority: Authority = endpoint.to_string().parse().ok()?;
     let path_and_query: PathAndQuery = rewritten.parse().ok()?;
     Uri::builder()
         .scheme(Scheme::HTTP)
@@ -41,11 +44,21 @@ pub fn build_upstream_uri(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
-    use fast_proxy_model::{EndpointAddr, RouteId, UpstreamPrefix};
+    use fast_proxy_balancing::RuntimeRegistry;
+    use fast_proxy_model::{
+        EndpointConfig, EndpointId, EndpointState, FailurePolicy, GroupPolicy, RetryPolicy,
+        RouteId, UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
+    };
 
     use super::*;
+    use crate::CompiledUpstream;
+
+    fn endpoint() -> EndpointAddr {
+        EndpointAddr::parse("127.0.0.1:3000").unwrap()
+    }
 
     fn route(strip_prefix: bool, upstream_prefix: &str) -> CompiledRoute {
         CompiledRoute {
@@ -56,14 +69,33 @@ mod tests {
             preserve_host: true,
             connect_timeout: Duration::from_secs(5),
             response_timeout: Duration::from_secs(30),
-            upstream_name: "backend".into(),
-            endpoint: EndpointAddr::parse("127.0.0.1:3000").unwrap(),
+            retry: RetryPolicy::default(),
+            upstream: Arc::new(
+                CompiledUpstream::build(
+                    &UpstreamGroupConfig {
+                        id: UpstreamGroupId(1),
+                        name: "backend".into(),
+                        policy: GroupPolicy {
+                            failure: FailurePolicy::FailOpen,
+                            ..GroupPolicy::default()
+                        },
+                        endpoints: vec![EndpointConfig {
+                            id: EndpointId(1),
+                            addr: endpoint(),
+                            weight: 1,
+                            state: EndpointState::Enabled,
+                        }],
+                    },
+                    &RuntimeRegistry::new().rebuilt_for([(EndpointId(1), &endpoint())]),
+                )
+                .unwrap(),
+            ),
         }
     }
 
     fn rewrite(strip: bool, upstream_prefix: &str, request: &str, consumed: usize) -> String {
         let uri: Uri = request.parse().unwrap();
-        build_upstream_uri(&route(strip, upstream_prefix), &uri, consumed)
+        build_upstream_uri(&route(strip, upstream_prefix), &endpoint(), &uri, consumed)
             .unwrap()
             .to_string()
     }
@@ -125,11 +157,13 @@ mod tests {
 
     #[test]
     fn ipv6_endpoints_keep_their_brackets() {
-        let mut route = route(false, "");
-        route.endpoint = EndpointAddr::parse("[::1]:8080").unwrap();
+        let route = route(false, "");
         let uri: Uri = "/x".parse().unwrap();
+        let ipv6 = EndpointAddr::parse("[::1]:8080").unwrap();
         assert_eq!(
-            build_upstream_uri(&route, &uri, 0).unwrap().to_string(),
+            build_upstream_uri(&route, &ipv6, &uri, 0)
+                .unwrap()
+                .to_string(),
             "http://[::1]:8080/x"
         );
     }

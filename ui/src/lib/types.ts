@@ -63,11 +63,78 @@ export interface Host {
   pattern: string;
 }
 
-export interface Upstream {
+/** What the operator has decided about an endpoint. */
+export type EndpointState = "enabled" | "draining" | "disabled";
+
+export interface Endpoint {
   id: number;
-  name: string;
   addr: string;
   weight: number;
+  state: EndpointState;
+}
+
+export type LbAlgorithm =
+  | "round_robin"
+  | "weighted_round_robin"
+  | "least_connections"
+  | "p2c_ewma"
+  | "consistent_hash";
+
+export interface LbPolicy {
+  algorithm: LbAlgorithm;
+  /** `client_ip`, `header:<name>` or `cookie:<name>`; used by consistent hash. */
+  hashKey: string;
+}
+
+/** What a group does when no endpoint is eligible. */
+export type FailurePolicy = "fail_open" | "fail_closed";
+
+export type HealthCheckKind = "none" | "http" | "tcp";
+
+export interface HealthPolicy {
+  check: HealthCheckKind;
+  path: string;
+  /** Lowest and highest HTTP status that counts as healthy. */
+  expectedStatus: [number, number];
+  intervalMs: number;
+  timeoutMs: number;
+  rise: number;
+  fall: number;
+}
+
+export interface PassivePolicy {
+  /** Consecutive failures that eject an endpoint; 0 turns ejection off. */
+  consecutiveFailures: number;
+  baseEjectionMs: number;
+  maxEjectionMs: number;
+  maxEjectionPercent: number;
+}
+
+export interface RetryBudget {
+  percent: number;
+  minPerSec: number;
+}
+
+/** How a group spreads load and protects its endpoints. */
+export interface UpstreamPolicy {
+  lb: LbPolicy;
+  failurePolicy: FailurePolicy;
+  health: HealthPolicy;
+  passive: PassivePolicy;
+  retryBudget: RetryBudget;
+}
+
+export interface Upstream extends UpstreamPolicy {
+  id: number;
+  name: string;
+  endpoints: Endpoint[];
+}
+
+/** A route's retry behaviour. */
+export interface RetryPolicy {
+  maxAttempts: number;
+  idempotentOn5xx: boolean;
+  onTimeout: boolean;
 }
 
 export interface Route {
@@ -79,6 +146,7 @@ export interface Route {
   preserveHost: boolean;
   connectTimeoutMs: number;
   responseTimeoutMs: number;
+  retry: RetryPolicy;
   enabled: boolean;
 }
 
@@ -101,10 +169,20 @@ export interface SubsystemInput {
   description: string;
 }
 
-export interface UpstreamInput {
+/** The body of `PUT` on an upstream: its name and policy (endpoints are separate). */
+export interface UpstreamSettings extends UpstreamPolicy {
   name: string;
+}
+
+/** The body of `POST` and `PUT` on an endpoint. */
+export interface EndpointInput {
   addr: string;
   weight: number;
+}
+
+/** The body of `POST` on a subsystem's upstreams: settings plus the first endpoint. */
+export interface UpstreamCreate extends UpstreamSettings {
+  endpoints: EndpointInput[];
 }
 
 export type RouteInput = Omit<Route, "id">;
@@ -148,18 +226,67 @@ export interface Resolution {
     id: number;
     prefix: string;
     upstreamName: string;
-    endpoint: string;
+    algorithm: string;
+    endpoints: {
+      id: number;
+      addr: string;
+      weight: number;
+      state: "enabled" | "draining" | "disabled";
+      /** Admin-enabled, healthy and not ejected right now. */
+      eligible: boolean;
+      upstreamUrl: string | null;
+    }[];
     stripPrefix: boolean;
     upstreamPrefix: string;
     preserveHost: boolean;
   } | null;
-  upstreamUrl: string | null;
+}
+
+/** An endpoint that is not taking requests, and why. */
+export interface UnhealthyEndpoint {
+  subsystem: string;
+  upstream: string;
+  endpoint: string;
+  reason: string;
+}
+
+/** How many endpoints are in rotation across all upstreams. */
+export interface UpstreamHealth {
+  total: number;
+  healthy: number;
+  unhealthy: UnhealthyEndpoint[];
+}
+
+/** What the proxy does with an endpoint right now. */
+export type EffectiveState = "healthy" | "unhealthy" | "ejected" | "draining" | "disabled";
+
+export interface EndpointStatus {
+  id: number;
+  addr: string;
+  weight: number;
+  state: EndpointState;
+  effective: EffectiveState;
+  reason: string;
+  inFlight: number;
+  /** Smoothed time to first byte; null before the first response. */
+  ewmaMs: number | null;
+  lastProbe: { ok: boolean; agoMs: number } | null;
+}
+
+/** The live state of an upstream group. */
+export interface UpstreamStatus {
+  name: string;
+  algorithm: LbAlgorithm;
+  failurePolicy: FailurePolicy;
+  healthy: number;
+  endpoints: EndpointStatus[];
 }
 
 export interface Status {
   listeners: { name: string; addr: string }[];
   database: string;
   subsystems: { total: number; enabled: number };
+  upstreams: UpstreamHealth;
   startedAtMs: number;
   uptimeSecs: number;
 }

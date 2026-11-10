@@ -1,6 +1,6 @@
 # fast-proxy: Plan and Roadmap
 
-Status: v0.3 (2026-11-09). **M0 and M1 are complete**; M2 is next. This is a
+Status: v0.4 (2026-11-10). **M0, M1 and M2 are complete**; M3 (TLS) is next. This is a
 living document; update it as decisions are made and milestones land.
 
 ## 1. Vision
@@ -360,15 +360,18 @@ listed in [M1-PLAN.md](M1-PLAN.md) section 10.
 
 ### M2: Upstream groups, load balancing, health
 
-- [ ] Multi-endpoint upstream groups with weights.
-- [ ] Round robin, weighted, least-connections, P2C+EWMA, consistent hash.
-- [ ] Active HTTP/TCP health checks; passive outlier ejection.
-- [ ] Endpoint draining and manual disable via admin API.
-- [ ] Idempotent retries with budget; all-unhealthy policy.
-- [ ] Health and LB state in metrics and admin UI.
+Detailed task plan and outcome: [M2-PLAN.md](M2-PLAN.md).
 
-**Exit criteria:** killing one of three backends causes no sustained errors
-and the endpoint returns to rotation automatically after recovery.
+- [x] Multi-endpoint upstream groups with weights.
+- [x] Round robin, weighted, least-connections, P2C+EWMA, consistent hash.
+- [x] Active HTTP/TCP health checks; passive outlier ejection.
+- [x] Endpoint draining and manual disable via admin API.
+- [x] Idempotent retries with budget; all-unhealthy policy.
+- [x] Health and LB state in metrics and admin UI.
+
+**Exit criteria (met, `tests/upstream_groups.rs`):** killing one of three
+backends causes no client errors and the endpoint returns to rotation
+automatically after recovery.
 
 ### M3: TLS termination
 
@@ -461,11 +464,11 @@ direct throughput. Reload with thousands of routes is not measured yet.
 
 | Risk / question | Mitigation or next step |
 |---|---|
-| hyper client pool may not give enough control (per-endpoint limits, health-aware reuse) | **Resolved for M1:** the spike passed ([ADR 0002](adr/0002-hyper-for-the-data-plane.md)). Re-check in M2 when per-endpoint limits and health-aware reuse matter |
+| hyper client pool may not give enough control (per-endpoint limits, health-aware reuse) | **Resolved for M1:** the spike passed ([ADR 0002](adr/0002-hyper-for-the-data-plane.md)). **Re-checked in M2:** per-endpoint health and selection sit in front of the pool (health-aware choice, not reuse), and the client's body handling was verified by spike G2 ([ADR 0008](adr/0008-retries-budget-and-body-replay.md)). Per-endpoint connection limits are M7 |
 | ACME rate limits and failure modes can lock out a domain | Staging by default, persisted state, backoff, clear status in UI |
 | Admin plane exposure is a high-impact security risk | Loopback default, auth in M5, audit log, never routable by default |
 | Sampling can leak secrets or hurt latency | Redaction on by default, bodies opt-in, off the request path, bounded buffers |
-| Windows support in CI vs. Unix-only features (signals for reload) | **Seen in M1:** the SIGINT end-to-end tests could not run on Windows and are Unix-only. Draining is also tested without signals. Reload is via the admin API, which is portable |
+| Windows support in CI vs. Unix-only features (signals for reload) | **Seen in M1:** the SIGINT end-to-end tests could not run on Windows and are Unix-only. Draining is also tested without signals. Reload is via the admin API, which is portable **Seen again in M2:** a refused connection takes about a second to be reported on Windows, which broke two fixed-wait tests; waits on such events must be generous and event-driven. |
 | ACME needs host names that live in the DB, but ACME config lives in the file | Derive domains from DB hosts, constrained by a file allowlist; wildcards wait for DNS-01 |
 | SQLite from async code (blocking I/O) | **Done in M1:** one dedicated store thread; the hot path only reads the in-memory snapshot, never the DB |
 | Admin UI is the only way to configure subsystems; no config-as-code | Add import/export (JSON/TOML) of subsystem config in M5 so setups are reproducible and reviewable |
@@ -488,3 +491,5 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | 2026-11-09 | `route.upstream_group_id` uses NO ACTION rather than RESTRICT in the schema, so deleting a subsystem cascades while deleting a used upstream is still refused. |
 | 2026-11-09 | The SIGINT end-to-end tests are Unix-only (they deliver a real signal); graceful draining is covered on every platform by signal-free tests. |
 | 2026-11-09 | Performance is measured with `oha` against a small fixed-response backend example; the baseline is informational, not a gate ([benchmarks.md](benchmarks.md)). |
+| 2026-11-09 | M2 design decisions E1-E16 (see [M2-PLAN.md](M2-PLAN.md) section 3 and ADRs [0005](adr/0005-runtime-state-and-endpoint-identity.md), [0006](adr/0006-selection-algorithms-and-eligibility.md), [0007](adr/0007-health-checks-and-ejection.md), [0008](adr/0008-retries-budget-and-body-replay.md)): stable endpoint ids; runtime state in carried `Arc<EndpointRuntime>`; new crates `balancing` and `health`; round robin default; fail-open default; passive ejection on, active checks off; retry connect failures and idempotent 5xx with a 20% budget; E12 body replay confirmed by spike G2 (shared-pointer body wrapper; idempotent requests also retried on connection resets). |
+| 2026-11-10 | M2 outcome: all E1-E16 held, with one refinement and one fix found by the end-to-end tests. Refinement (ADR 0008): idempotent requests are also retried after a connection reset, not only on 502/503/504. Fix: the power-of-two-choices cold start now gives an unsampled endpoint its rival's latency, so a fresh endpoint is neither starved nor flooded (it had been starved by faster measured endpoints). `UpstreamClient` and the pipeline report each request's actual endpoint and attempt count; requests cancelled by their client are counted and logged as 499. |

@@ -5,7 +5,9 @@
 //   history    – recent traffic samples  (live chart)
 //   activities – recent server events (activity feed)
 // A configChanged event (someone, maybe another admin, changed the
-// configuration) refetches every list and detail that shows it.
+// configuration) refetches every list and detail that shows it. An
+// endpointState event (an endpoint became unhealthy, was ejected, or came
+// back) refetches the live endpoint status and the upstream health summary.
 // Connection transitions surface as toast bubbles, but only when a
 // previously-live connection drops — a backend that is simply not
 // running yet retries quietly.
@@ -19,7 +21,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Traffic } from "../lib/api";
-import { refreshConfigData } from "../lib/refreshConfigData";
+import { refreshConfigData, refreshEndpointStatus } from "../lib/refreshConfigData";
 import { useToast } from "./ToastContext";
 
 export interface Activity {
@@ -41,7 +43,16 @@ type ServerEvent =
   | { type: "hello"; message: string; timestampMs: number }
   | { type: "traffic"; data: Traffic }
   | { type: "configChanged"; version: number; summary: string; timestampMs: number }
-  | { type: "activity"; kind: string; message: string; timestampMs: number };
+  | { type: "activity"; kind: string; message: string; timestampMs: number }
+  | {
+      type: "endpointState";
+      subsystem: string;
+      upstream: string;
+      endpoint: string;
+      change: "unhealthy" | "healthy" | "ejected" | "recovered";
+      detail: string | null;
+      timestampMs: number;
+    };
 
 const HISTORY_LIMIT = 90; // ~3 minutes at one sample per 2s
 const ACTIVITY_LIMIT = 50;
@@ -99,6 +110,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           ]);
         } else if (event.type === "configChanged") {
           void refreshConfigData(queryClientRef.current);
+        } else if (event.type === "endpointState") {
+          void refreshEndpointStatus(queryClientRef.current);
         } else if (event.type === "activity") {
           prepend({
             kind: event.kind,

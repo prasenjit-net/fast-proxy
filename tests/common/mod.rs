@@ -10,6 +10,10 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod flaky;
+pub mod groups;
+pub mod load;
+
 use serde_json::{json, Value};
 
 pub fn free_port() -> u16 {
@@ -223,7 +227,10 @@ pub fn create_site(proxy: &Proxy, name: &str, host: &str, backend_port: u16) -> 
         proxy,
         "POST",
         &format!("{base}/upstreams"),
-        Some(json!({ "name": "backend", "addr": format!("127.0.0.1:{backend_port}") })),
+        Some(json!({
+            "name": "backend",
+            "endpoints": [{ "addr": format!("127.0.0.1:{backend_port}") }]
+        })),
     );
     assert_eq!(status, 201, "{body}");
     let upstream = body["data"]["id"].as_i64().unwrap();

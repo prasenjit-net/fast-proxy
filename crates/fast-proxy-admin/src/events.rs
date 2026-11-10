@@ -27,6 +27,18 @@ pub enum Event {
         timestamp_ms: i64,
     },
 
+    /// An endpoint's health or ejection state changed. `change` is one of
+    /// `unhealthy`, `healthy`, `ejected` or `recovered`; `detail` says why.
+    #[serde(rename_all = "camelCase")]
+    EndpointState {
+        subsystem: String,
+        upstream: String,
+        endpoint: String,
+        change: &'static str,
+        detail: Option<String>,
+        timestamp_ms: i64,
+    },
+
     #[serde(rename_all = "camelCase")]
     Activity {
         kind: String,
@@ -51,6 +63,19 @@ mod tests {
         assert_eq!(changed["version"], 7);
         assert_eq!(changed["summary"], "route created");
         assert_eq!(changed["timestampMs"], 5);
+
+        let endpoint = serde_json::to_value(Event::EndpointState {
+            subsystem: "shop".into(),
+            upstream: "backend".into(),
+            endpoint: "a:1".into(),
+            change: "ejected",
+            detail: Some("for 10 s".into()),
+            timestamp_ms: 9,
+        })
+        .unwrap();
+        assert_eq!(endpoint["type"], "endpointState");
+        assert_eq!(endpoint["change"], "ejected");
+        assert_eq!(endpoint["timestampMs"], 9);
 
         let hello = serde_json::to_value(Event::Hello {
             message: "hi".into(),

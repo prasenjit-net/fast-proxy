@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestone 1 is complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI. TLS, load balancing, health checks, ACME and maintenance mode are the next milestones.
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); and upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). TLS, ACME and maintenance mode are the next milestones.
 
 - Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
@@ -22,13 +22,24 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   file per resource: subsystems, hosts, upstreams, routes), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-telemetry/` holds `Metrics` (Prometheus registry, the single
-  source for `/metrics` and the live traffic stats) and the `AccessLog`
-  (non-blocking; `flush()` at shutdown). Metric labels must come only from
-  config names, never raw hosts or paths.
+  source for `/metrics` and the live traffic stats), the `AccessLog`
+  (non-blocking; `flush()` at shutdown) and the `EndpointEvents` bus (endpoint
+  health and ejection changes). Metric labels must come only from config
+  values (names, endpoint addresses), never raw hosts or paths; series of
+  removed endpoints and groups are deleted (`retain_upstream_series`).
 - `crates/fast-proxy-model/` holds validated domain types (`HostPattern`,
   `RoutePrefix`, `EndpointAddr`, ...) and the `Config` tree; no I/O.
+- `crates/fast-proxy-balancing/` is pure: `EndpointRuntime` (atomics: in-flight,
+  health, ejection, latency), `RuntimeRegistry`, the selection algorithms and
+  `Balancer` (eligibility and the failure policy), the passive-health state
+  machine (`record_outcome`), `RetryBudget`. State machines take `now` as a
+  parameter; `monotonic_ms()` is the one process clock callers use.
+- `crates/fast-proxy-health/` runs the active probes: `HealthEngine` keeps one
+  prober task per endpoint of groups with checks on, reconciled with every
+  config change, plus the status gauges sampler.
 - `crates/fast-proxy-routing/` compiles a `Config` into an immutable `Snapshot`
-  (host and route matchers) shared through `SnapshotHolder`; also owns
+  (host and route matchers, and each group as a `CompiledUpstream` holding its
+  `Balancer` and endpoint runtime) shared through `SnapshotHolder`; also owns
   `build_upstream_uri` (path rewriting), used by both the data plane and the
   admin resolver so they can never disagree. No I/O.
 - `crates/fast-proxy-store/` is SQLite persistence: `Database` (sync core, all
@@ -40,14 +51,20 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   broadcasts `ConfigChanged`. All admin writes must go through it.
 - `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
   `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
-  (fixed 404/503/502/504), `upstream_client` (pooled forwarding, protocol
-  upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
+  (fixed 404/503/502/504), `selection` (pick an endpoint per request),
+  `upstream_client` (pooled forwarding, the retry loop, passive outcomes),
+  `retry_policy` (pure retry rules), `replay_body` (a request body shared across
+  attempts), `pending_request` (reports a request cancelled by its client as
+  499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
 - `tests/` holds end-to-end tests that run the real binary; shared helpers (spawning
-  a configured proxy, backends, a tiny HTTP client) are in `tests/common/mod.rs`.
+  a configured proxy, backends, a tiny HTTP client) are in `tests/common/mod.rs`,
+  with `flaky.rs` (a backend that can be killed, revived, slowed and made to
+  fail), `groups.rs` (admin helpers for groups and endpoints) and `load.rs` (a
+  keep-alive load client). `upstream_groups.rs` is the M2 exit criteria.
   Tests that deliver real signals are `#[cfg(unix)]`.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
   (measured with `oha` against the `bench_backend` example in the data plane crate).
@@ -78,6 +95,15 @@ These invariants hold across the codebase; do not break them without an ADR in `
   change); subsystems, hosts, upstreams and routes are in the database.
 - **Metric labels come only from config names** (subsystem name, route prefix,
   `_unmatched`/`_none`), never raw hosts or paths.
+- **Endpoint runtime state lives in `fast-proxy-balancing`** and is carried across
+  snapshot swaps by endpoint id and address (`compile(.., &registry)`); never
+  keep it in config or in a global map. Endpoint ids are stable and rollback
+  preserves them.
+- **Retries are conservative:** a connect failure may be retried for any method,
+  everything else only for idempotent ones; never after a body byte was read
+  (`BodyOwner::is_replayable`), never for upgrades, always within the group's
+  retry budget and away from the endpoint that just failed.
+- **Draining and disabled endpoints are never selected**, not even in panic mode.
 - **The URL rewrite lives in `fast-proxy-routing`** (`build_upstream_uri`) so the
   proxy and the admin resolver cannot disagree.
 - **API errors never leak paths or storage detail**; the detail goes to the log.
@@ -92,7 +118,7 @@ These rules are set by the project owner and apply to every session.
 - **Never commit or push unless the owner explicitly says so.** When a task is
   done, stop and report. The owner does a manual check first, then asks for the
   commit and push.
-- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`). Keep them
+- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `M2-PLAN.md`). Keep them
   current: tick tasks as they land and record decisions. Start a milestone by
   writing its `docs/Mn-PLAN.md`; record new design decisions as an ADR in
   `docs/adr/` and in the ROADMAP decision log.
@@ -129,7 +155,10 @@ These rules are set by the project owner and apply to every session.
   `cargo llvm-cov`, and report the number when finishing a task. Do not lower
   coverage to ship a change.
 - Run the checks listed under Testing Expectations before reporting a task done.
-- **Tests must pass on Linux, macOS and Windows** (CI runs all three). Do not
+- **Tests must pass on Linux, macOS and Windows** (CI runs all three). A refused
+  connection takes about a second to be reported on Windows, so tests that wait
+  on one must wait for the event with a generous limit, never a fixed short
+  sleep. Do not
   shell out to Unix commands (`kill`, `sh`) in tests without `#[cfg(unix)]`. In
   tests that talk raw TCP, send each request in one write and set `TCP_NODELAY`:
   tiny split writes stall for tens of milliseconds on Linux (Nagle plus delayed

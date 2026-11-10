@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use fast_proxy_model::{EndpointAddr, RoutePrefix, SubsystemName, UpstreamGroupId, UpstreamPrefix};
+use fast_proxy_model::{
+    EndpointAddr, EndpointState, GroupPolicy, RetryPolicy, RoutePrefix, SubsystemName,
+    UpstreamGroupId, UpstreamPrefix,
+};
 
 /// The editable fields of a subsystem.
 #[derive(Debug, Clone)]
@@ -10,12 +13,19 @@ pub struct SubsystemFields {
     pub description: String,
 }
 
-/// The editable fields of an upstream group and its single endpoint (M1).
+/// The editable settings of an upstream group (its endpoints are separate).
 #[derive(Debug, Clone)]
 pub struct UpstreamFields {
     pub name: String,
+    pub policy: GroupPolicy,
+}
+
+/// The editable fields of one endpoint.
+#[derive(Debug, Clone)]
+pub struct EndpointFields {
     pub addr: EndpointAddr,
     pub weight: u32,
+    pub state: EndpointState,
 }
 
 /// The editable fields of a route.
@@ -28,5 +38,6 @@ pub struct RouteFields {
     pub preserve_host: bool,
     pub connect_timeout: Duration,
     pub response_timeout: Duration,
+    pub retry: RetryPolicy,
     pub enabled: bool,
 }

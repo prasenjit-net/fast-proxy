@@ -9,20 +9,34 @@ mod connections;
 mod forward;
 mod headers;
 mod listener;
+mod pending_request;
 mod pipeline;
+mod protocol_switch;
+mod replay_body;
 mod request_id;
 mod responses;
+mod retry_policy;
+mod selection;
 mod server;
 mod tracked_body;
 mod trusted_proxies;
 mod upstream_client;
+mod upstream_errors;
 
+#[cfg(test)]
+mod accounting_tests;
+#[cfg(test)]
+mod balancing_tests;
 #[cfg(test)]
 mod drain_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
 mod observability_tests;
+#[cfg(test)]
+mod passive_health_tests;
+#[cfg(test)]
+mod retry_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -32,7 +46,7 @@ mod tests;
 #[cfg(test)]
 mod upgrade_tests;
 
-pub use forward::{Forward, ResponseBody, Target};
+pub use forward::{Forward, Forwarded, ResponseBody, Target};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use responses::FixedResponse;

@@ -3,13 +3,14 @@
 use std::time::Duration;
 
 use fast_proxy_model::{
-    EndpointAddr, HostPattern, RoutePrefix, SubsystemId, SubsystemName, UpstreamGroupId,
-    UpstreamPrefix,
+    EndpointAddr, EndpointState, GroupPolicy, HostPattern, RetryPolicy, RoutePrefix, SubsystemId,
+    SubsystemName, UpstreamGroupId, UpstreamPrefix,
 };
 use rusqlite::Connection;
 
 use crate::{
-    Database, Mutation, RouteFields, StoreError, SubsystemFields, UpstreamFields, Written,
+    Database, EndpointFields, Mutation, RouteFields, StoreError, SubsystemFields, UpstreamFields,
+    Written,
 };
 
 pub fn subsystem_fields(name: &str) -> SubsystemFields {
@@ -20,12 +21,34 @@ pub fn subsystem_fields(name: &str) -> SubsystemFields {
     }
 }
 
-pub fn upstream_fields(name: &str, addr: &str) -> UpstreamFields {
+pub fn upstream_fields(name: &str) -> UpstreamFields {
     UpstreamFields {
         name: name.into(),
+        policy: GroupPolicy::default(),
+    }
+}
+
+pub fn endpoint_fields(addr: &str) -> EndpointFields {
+    EndpointFields {
         addr: EndpointAddr::parse(addr).unwrap(),
         weight: 1,
+        state: EndpointState::Enabled,
     }
+}
+
+/// A group with one endpoint at `addr` and the default policy.
+pub fn create_group(
+    conn: &Connection,
+    subsystem: SubsystemId,
+    name: &str,
+    addr: &str,
+) -> Result<UpstreamGroupId, StoreError> {
+    crate::repository::upstreams::create(
+        conn,
+        subsystem,
+        &upstream_fields(name),
+        &[endpoint_fields(addr)],
+    )
 }
 
 pub fn route_fields(prefix: &str, group: UpstreamGroupId) -> RouteFields {
@@ -37,6 +60,7 @@ pub fn route_fields(prefix: &str, group: UpstreamGroupId) -> RouteFields {
         preserve_host: true,
         connect_timeout: Duration::from_secs(5),
         response_timeout: Duration::from_secs(30),
+        retry: RetryPolicy::default(),
         enabled: true,
     }
 }
@@ -69,15 +93,11 @@ pub struct Fixture {
 }
 
 pub fn seed(db: &mut Database, name: &str, host_pattern: &str) -> Fixture {
-    use crate::repository::{hosts, routes, subsystems, upstreams};
+    use crate::repository::{hosts, routes, subsystems};
     commit(db, &format!("seed {name}"), |conn| {
         let subsystem = subsystems::create(conn, &subsystem_fields(name))?;
         hosts::add(conn, subsystem, &host(host_pattern))?;
-        let group = upstreams::create(
-            conn,
-            subsystem,
-            &upstream_fields("backend", "127.0.0.1:3000"),
-        )?;
+        let group = create_group(conn, subsystem, "backend", "127.0.0.1:3000")?;
         routes::create(conn, subsystem, &route_fields("/", group))?;
         Ok(Fixture { subsystem, group })
     })

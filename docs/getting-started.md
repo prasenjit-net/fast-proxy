@@ -1,20 +1,22 @@
 # Getting started
 
 A copy-paste walkthrough that sets up two subsystems through the admin API and
-sends traffic through the proxy. It follows the M1 exit criteria and uses
-`curl` so every step is explicit.
+sends traffic through the proxy, then (from section 15) puts several backends
+behind one upstream, kills one, and drains another. It follows the M1 and M2
+exit criteria and uses `curl` so every step is explicit.
 
 **Prefer clicking?** Everything below can also be done in the admin UI at
 http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`):
 
-- **Subsystems**: create a subsystem, then on its page add hosts, upstreams and
-  routes. Forms check your input and show the server's messages next to the
+- **Subsystems**: create a subsystem, then on its page add hosts, upstreams (each
+  with its endpoints, load-balancing and health settings) and routes. Forms check your input and show the server's messages next to the
   fields; deletes ask first and say what will be removed.
 - **Revisions**: browse the history, view the configuration at any revision, and
   roll back.
-- **Resolver**: try a host and path and see the subsystem, route and the exact
-  upstream URL, or why nothing matched.
-- **Dashboard**: live requests/s, error rate and connections, by subsystem.
+- **Resolver**: try a host and path and see the subsystem, route, the upstream's
+  algorithm and every endpoint's URL and eligibility, or why nothing matched.
+- **Dashboard**: live requests/s, error rate and connections by subsystem, and
+  which upstream endpoints are out of rotation and why.
 
 ## 1. Start the proxy
 
@@ -59,13 +61,13 @@ J='Content-Type: application/json'
 # shop
 curl -s -H "$J" -d '{"name":"shop"}' $A/subsystems
 curl -s -H "$J" -d '{"pattern":"shop.example.com"}' $A/subsystems/1/hosts
-curl -s -H "$J" -d '{"name":"backend","addr":"127.0.0.1:3001"}' $A/subsystems/1/upstreams
+curl -s -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
 curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":1}' $A/subsystems/1/routes
 
 # blog
 curl -s -H "$J" -d '{"name":"blog"}' $A/subsystems
 curl -s -H "$J" -d '{"pattern":"blog.example.com"}' $A/subsystems/2/hosts
-curl -s -H "$J" -d '{"name":"backend","addr":"127.0.0.1:3002"}' $A/subsystems/2/upstreams
+curl -s -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3002"}]}' $A/subsystems/2/upstreams
 curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":2}' $A/subsystems/2/routes
 ```
 
@@ -95,7 +97,7 @@ curl -s $A/subsystems/1        # detail: hosts, upstreams, routes (longest prefi
 Point the shop at the blog's backend, and watch the very next request change:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"name":"backend","addr":"127.0.0.1:3002"}' $A/subsystems/1/upstreams/1
+curl -s -X PUT -H "$J" -d '{"addr":"127.0.0.1:3002"}' $A/subsystems/1/upstreams/1/endpoints/1
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # hello from blog
 ```
 
@@ -103,7 +105,7 @@ Add a path-based route with a rewrite (here `/old/x` is sent to the backend as `
 The new upstream gets id `3`:
 
 ```sh
-curl -s -H "$J" -d '{"name":"legacy","addr":"127.0.0.1:3001"}' $A/subsystems/1/upstreams
+curl -s -H "$J" -d '{"name":"legacy","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
 curl -s -H "$J" -d '{"prefix":"/old","upstreamGroupId":3,"stripPrefix":true}' $A/subsystems/1/routes
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/old/index.html   # hello from shop
 ```
@@ -119,11 +121,13 @@ curl -s -X PUT -H "$J" -d '{"name":"shop","enabled":true}' $A/subsystems/1
 ## 7. Dry-run a request with the resolver
 
 `POST /api/resolve` performs the same lookup the proxy does and tells you what
-would happen, including the exact upstream URL, without sending anything:
+would happen, including the exact URL for each endpoint of the upstream and whether it would
+take a request right now, without sending anything:
 
 ```sh
 curl -s -H "$J" -d '{"host":"shop.example.com","path":"/old/index.html?x=1"}' $A/resolve
-# matched: true, route.prefix "/old", upstreamUrl "http://127.0.0.1:3001/index.html?x=1"
+# matched: true, route.prefix "/old", route.algorithm "round_robin",
+# route.endpoints[0].upstreamUrl "http://127.0.0.1:3001/index.html?x=1", eligible: true
 curl -s -H "$J" -d '{"host":"nope.example.com","path":"/"}' $A/resolve
 # matched: false, reason: "unknown_host"   (or "subsystem_disabled" / "no_route")
 ```
@@ -153,7 +157,7 @@ The last 100 revisions are kept.
 ## 9. What is running
 
 ```sh
-curl -s $A/status      # listeners, database path, subsystem counts, uptime, live config version
+curl -s $A/status      # listeners, database path, subsystem counts, upstream health, uptime, live config version
 ```
 
 ## 10. Metrics, access log, and live traffic
@@ -169,15 +173,25 @@ curl -s http://127.0.0.1:9000/metrics | grep fastproxy_
 # fastproxy_upstream_errors_total{kind="connect|timeout|other",subsystem="shop"}
 # fastproxy_active_connections, fastproxy_active_requests
 # fastproxy_config_version, fastproxy_config_reloads_total{outcome="applied|rejected"}
+# fastproxy_upstream_requests_total{endpoint=..,outcome="success|bad_status|connect|timeout|other",..}
+# fastproxy_upstream_retries_total{reason=..}, fastproxy_retry_budget_exhausted_total
+# fastproxy_endpoint_ejections_total, fastproxy_health_checks_total{result="ok|fail"}
+# fastproxy_upstream_endpoint_healthy, fastproxy_upstream_endpoint_in_flight
+# fastproxy_upstream_panic_total, fastproxy_requests_cancelled_total
 ```
 
-Label values come only from your configuration (subsystem names and route
-prefixes); traffic for an unknown host is counted as `subsystem="_unmatched"`,
+Label values come only from your configuration (subsystem, upstream and route
+names and endpoint addresses); traffic for an unknown host is counted as `subsystem="_unmatched"`,
 and requests with no route as `route="_none"`. An access-log line looks like:
 
 ```
-127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
+127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 attempts=1 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
 ```
+
+`upstream` is the endpoint that answered (the last one tried) and `attempts` how
+many were tried: 2 means the first failed and a retry succeeded. A request whose
+client left before the response is logged with status `499` and counted in
+`fastproxy_requests_cancelled_total`.
 
 The dashboard's numbers come from the same counters, sampled every 2 seconds:
 
@@ -217,7 +231,66 @@ until the data plane has drained.
 Start the proxy again with `cargo run`. The same requests route the same way:
 the configuration is in `./state/fast-proxy.db`.
 
+## 15. Several endpoints in one upstream
+
+An upstream is a group of endpoints behind one name. Start two more backends
+(ports 3003 and 3004), then create a group of three for the shop:
+
+```sh
+mkdir -p /tmp/shop2 /tmp/shop3 && echo "hello from shop 2" > /tmp/shop2/index.html && echo "hello from shop 3" > /tmp/shop3/index.html
+(cd /tmp/shop2 && python3 -m http.server 3003 --bind 127.0.0.1)    # terminal
+(cd /tmp/shop3 && python3 -m http.server 3004 --bind 127.0.0.1)    # terminal
+
+curl -s -H "$J" -d '{
+  "name": "pool",
+  "lb": { "algorithm": "round_robin" },
+  "health": { "check": "http", "path": "/index.html", "intervalMs": 1000, "timeoutMs": 500 },
+  "endpoints": [ {"addr":"127.0.0.1:3001"}, {"addr":"127.0.0.1:3003"}, {"addr":"127.0.0.1:3004"} ]
+}' $A/subsystems/1/upstreams                                    # the new upstream gets id 4 (its endpoints 4, 5, 6)
+curl -s -X PUT -H "$J" -d '{"prefix":"/","upstreamGroupId":4}' $A/subsystems/1/routes/1   # point "/" at the pool
+for i in 1 2 3 4 5 6; do curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html; done
+# hello from shop, shop 2, shop 3, shop, shop 2, shop 3
+```
+
+The other algorithms are `weighted_round_robin` (give endpoints a `weight`),
+`least_connections`, `p2c_ewma` (prefers faster, less busy endpoints) and
+`consistent_hash` (`"hashKey": "client_ip"`, `"header:x-user"` or `"cookie:sid"`).
+
+**Kill one and watch it leave.** Stop the backend on 3003 (Ctrl-C) and keep
+sending requests: none fail, because a failed connect is retried on another
+endpoint, and after three failures in a row the proxy stops using the dead one.
+The health checks notice too, with no traffic at all:
+
+```sh
+for i in $(seq 1 12); do curl -s -o /dev/null -w '%{http_code} ' -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html; done   # 200 x12
+curl -s $A/subsystems/1/upstreams/4/status    # 127.0.0.1:3003 -> effective "ejected" or "unhealthy", with the reason
+curl -s $A/status                             # upstreams: 2 of 3 healthy, and which one is out
+```
+
+**Watch it return.** Start the backend on 3003 again. Within a few seconds
+(health checks, or the ejection expiring and one trial request succeeding) its
+`effective` state is `healthy` and it takes traffic again. Nobody did anything.
+
+**Drain one before taking it down.** Draining (or disabling) stops *new* requests
+to an endpoint while the ones already on it finish; the state is saved and
+survives a restart:
+
+```sh
+curl -s -X PUT -H "$J" -d '{"state":"draining"}' $A/subsystems/1/upstreams/4/endpoints/5/state
+curl -s $A/subsystems/1/upstreams/4/status    # inFlight shows what is left; 0 means it is drained
+curl -s -X PUT -H "$J" -d '{"state":"enabled"}'  $A/subsystems/1/upstreams/4/endpoints/5/state
+```
+
+Endpoints can also be added, changed (`weight`, `addr`) and removed one by one
+(`POST/PUT/DELETE $A/subsystems/1/upstreams/4/endpoints[/ID]`); the last endpoint of a
+group cannot be removed. If **every** endpoint is unhealthy the group keeps
+serving anyway ("fail open", so a wrong health verdict is not a total outage),
+or answers `503` if you set `"failurePolicy": "fail_closed"`. A draining or
+disabled endpoint is never used, even then. Routes can tune retries with
+`"retry": {"maxAttempts": 2, "idempotentOn5xx": true, "onTimeout": false}`.
+
 ## Not available yet
 
-Authentication for the admin plane, TLS, multiple endpoints per upstream and load
-balancing are later milestones (see [ROADMAP.md](ROADMAP.md)).
+Authentication for the admin plane, TLS to clients and upstreams, ACME certificates,
+maintenance mode, rate limits and request sampling are later milestones (see
+[ROADMAP.md](ROADMAP.md)).

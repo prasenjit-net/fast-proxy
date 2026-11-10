@@ -3,7 +3,6 @@ import {
   validateHost,
   validateRoute,
   validateSubsystem,
-  validateUpstream,
   type RouteValues,
 } from "./validation";
 
@@ -48,44 +47,6 @@ describe("validateHost", () => {
   );
 });
 
-describe("validateUpstream", () => {
-  const ok = { name: "backend", addr: "127.0.0.1:3000", weight: "1" };
-
-  it("accepts hostnames, IPs and bracketed IPv6 with a port", () => {
-    for (const addr of ["backend:8080", "127.0.0.1:3000", "[::1]:3000", "a.internal:65535"]) {
-      expect(validateUpstream({ ...ok, addr }).value?.addr).toBe(addr);
-    }
-  });
-
-  it("builds numeric fields", () => {
-    expect(validateUpstream({ ...ok, weight: " 3 " }).value).toEqual({
-      name: "backend",
-      addr: "127.0.0.1:3000",
-      weight: 3,
-    });
-  });
-
-  it.each(["", "backend", "backend:", ":80", "backend:0", "backend:65536", "backend:http"])(
-    "rejects the address %j",
-    (addr) => {
-      expect(validateUpstream({ ...ok, addr }).errors.addr).toBeDefined();
-    },
-  );
-
-  it("rejects an empty or overlong name and a bad weight", () => {
-    expect(validateUpstream({ ...ok, name: " " }).errors.name).toBeDefined();
-    expect(validateUpstream({ ...ok, name: "x".repeat(64) }).errors.name).toBeDefined();
-    for (const weight of ["0", "-1", "1.5", "", "abc"]) {
-      expect(validateUpstream({ ...ok, weight }).errors.weight).toBeDefined();
-    }
-  });
-
-  it("reports every problem at once", () => {
-    const result = validateUpstream({ name: "", addr: "nope", weight: "0" });
-    expect(Object.keys(result.errors)).toEqual(["name", "addr", "weight"]);
-  });
-});
-
 describe("validateRoute", () => {
   const ok: RouteValues = {
     prefix: "/api/",
@@ -95,6 +56,9 @@ describe("validateRoute", () => {
     preserveHost: true,
     connectTimeoutMs: "5000",
     responseTimeoutMs: "30000",
+    retryMaxAttempts: "2",
+    retryIdempotentOn5xx: true,
+    retryOnTimeout: false,
     enabled: true,
   };
 
@@ -107,6 +71,7 @@ describe("validateRoute", () => {
       preserveHost: true,
       connectTimeoutMs: 5000,
       responseTimeoutMs: 30000,
+      retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
       enabled: true,
     });
   });
@@ -137,6 +102,21 @@ describe("validateRoute", () => {
       expect(result.errors.connectTimeoutMs).toBeDefined();
       expect(result.errors.responseTimeoutMs).toBeDefined();
     }
+  });
+
+  it.each(["0", "6", "", "x", "1.5"])("rejects %j retry attempts", (retryMaxAttempts) => {
+    expect(validateRoute({ ...ok, retryMaxAttempts }).errors["retry.maxAttempts"]).toBeDefined();
+  });
+
+  it("builds the retry settings from the toggles and attempts", () => {
+    const result = validateRoute({
+      ...ok,
+      retryMaxAttempts: "5",
+      retryIdempotentOn5xx: false,
+      retryOnTimeout: true,
+    });
+    expect(result.value?.retry).toEqual({ maxAttempts: 5, idempotentOn5xx: false, onTimeout: true });
+    expect(validateRoute({ ...ok, retryMaxAttempts: "1" }).value?.retry.maxAttempts).toBe(1);
   });
 
   it("reports every problem at once, in field order", () => {

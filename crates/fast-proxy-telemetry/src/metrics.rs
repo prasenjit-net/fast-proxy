@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::upstream_metrics::{EndpointLabels, RetryReason, UpstreamMetrics, UpstreamOutcome};
 use prometheus::{
     Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
 };
@@ -87,6 +88,8 @@ pub struct Metrics {
     active_requests: IntGauge,
     config_version: IntGauge,
     config_reloads: IntCounterVec,
+    cancelled: IntCounterVec,
+    upstream: UpstreamMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -123,7 +126,15 @@ impl Metrics {
         registry
             .register(Box::new(duration.clone()))
             .expect(REGISTRATION);
+        let upstream = UpstreamMetrics::new(&registry);
         Self {
+            upstream,
+            cancelled: counter_vec(
+                &registry,
+                "fastproxy_requests_cancelled_total",
+                "Requests whose client left before the response head, by subsystem and route",
+                &["subsystem", "route"],
+            ),
             requests: counter_vec(
                 &registry,
                 "fastproxy_requests_total",
@@ -173,10 +184,61 @@ impl Metrics {
             .observe(elapsed.as_secs_f64());
     }
 
+    /// Counts a request whose client closed the connection before the proxy
+    /// had a response.
+    pub fn request_cancelled(&self, subsystem: &str, route: &str) {
+        self.cancelled.with_label_values(&[subsystem, route]).inc();
+    }
+
     pub fn upstream_error(&self, subsystem: &str, kind: UpstreamErrorKind) {
         self.upstream_errors
             .with_label_values(&[subsystem, kind.label()])
             .inc();
+    }
+
+    /// Counts one request sent to an endpoint, by how it turned out.
+    pub fn upstream_request(&self, endpoint: EndpointLabels<'_>, outcome: UpstreamOutcome) {
+        self.upstream.request(endpoint, outcome);
+    }
+
+    /// Counts one active health probe of an endpoint.
+    pub fn health_check(&self, endpoint: EndpointLabels<'_>, ok: bool) {
+        self.upstream.health_check(endpoint, ok);
+    }
+
+    /// Publishes an endpoint's routability and in-flight count as gauges.
+    pub fn set_endpoint_state(&self, endpoint: EndpointLabels<'_>, healthy: bool, in_flight: i64) {
+        self.upstream
+            .set_endpoint_state(endpoint, healthy, in_flight);
+    }
+
+    /// Counts one ejection of an endpoint.
+    pub fn endpoint_ejected(&self, endpoint: EndpointLabels<'_>) {
+        self.upstream.ejected(endpoint);
+    }
+
+    /// Counts one retry of a request on another endpoint.
+    pub fn upstream_retry(&self, subsystem: &str, upstream: &str, reason: RetryReason) {
+        self.upstream.retry(subsystem, upstream, reason);
+    }
+
+    /// Counts a retry refused because the group's budget is spent.
+    pub fn retry_budget_exhausted(&self, subsystem: &str, upstream: &str) {
+        self.upstream.budget_exhausted(subsystem, upstream);
+    }
+
+    /// Counts a request served in panic mode by an upstream group.
+    pub fn upstream_panic(&self, subsystem: &str, upstream: &str) {
+        self.upstream.panic_pick(subsystem, upstream);
+    }
+
+    /// Deletes the per-endpoint series of endpoints no longer configured.
+    /// `live` holds `(subsystem, upstream, endpoint)` for every configured one.
+    pub fn retain_upstream_series(
+        &self,
+        live: &std::collections::HashSet<(String, String, String)>,
+    ) {
+        self.upstream.retain(live);
     }
 
     /// Counts a request as active until the returned guard drops.
@@ -314,6 +376,21 @@ mod tests {
         assert_eq!(
             line(r#"route="/",status_class="4xx",subsystem="blog""#),
             Some(1.0)
+        );
+    }
+
+    #[test]
+    fn cancelled_requests_are_counted_by_subsystem_and_route() {
+        let metrics = Metrics::new();
+        metrics.request_cancelled("shop", "/api");
+        metrics.request_cancelled("shop", "/api");
+        let text = metrics.render();
+        assert_eq!(
+            value_of(
+                &text,
+                r#"fastproxy_requests_cancelled_total{route="/api",subsystem="shop"}"#
+            ),
+            Some(2.0)
         );
     }
 

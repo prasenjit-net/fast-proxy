@@ -22,7 +22,9 @@ export default function ConfigViewer({ subsystems }: { subsystems: SubsystemView
             <dd className="font-mono">{subsystem.hosts.join(", ") || "none"}</dd>
             <dt className="text-ink-muted">Upstreams</dt>
             <dd className="font-mono">
-              {subsystem.upstreams.map((u) => `${u.name} → ${u.addr}`).join(", ") || "none"}
+              {subsystem.upstreams
+                .map((u) => `${u.name} → ${u.endpoints.map((e) => e.addr).join(" ")}`)
+                .join(", ") || "none"}
             </dd>
             <dt className="text-ink-muted">Routes</dt>
             <dd>

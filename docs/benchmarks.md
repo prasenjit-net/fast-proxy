@@ -128,3 +128,94 @@ oha -z 8s -c 64 --no-tui -H "Host: bench.example.com" http://127.0.0.1:8000/
 To compare logging, add `access_log = "access.log"` under a `[logging]` section
 (file), or drop the `access=off` filter (default console line). Vary `-c` for
 the connection counts above.
+
+## Endpoint selection cost (M2, task B8)
+
+Cost of `Balancer::select` alone (no I/O), all endpoints eligible, release
+build, Apple silicon laptop. Budget from the M2 plan: under 200 ns at three
+endpoints, a few microseconds at 64, no allocation.
+
+```sh
+cargo test -p fast-proxy-balancing --release --test selection_cost -- --ignored --nocapture
+```
+
+| Algorithm | 3 endpoints | 64 endpoints |
+|---|---|---|
+| round_robin | 11.8 ns | 63.3 ns |
+| weighted_round_robin | 4.3 ns | 61.2 ns |
+| least_connections | 4.4 ns | 106.0 ns |
+| p2c_ewma | 16.6 ns | 85.3 ns |
+| consistent_hash | 6.5 ns | 12.0 ns |
+
+All are well inside the budget. Round robin and p2c count and index the
+eligible endpoints in a second pass, which is why they grow with group size;
+that is fine at the 64-endpoint cap.
+
+## M2 results: groups, algorithms and reload cost
+
+Re-run of the procedure above at the end of M2 (same machine and tools; the
+proxy ran with `--log-level "info,access=off"`; each point is 6 s after a 2 s
+warm-up; the direct reference was measured in the same run). Retries, passive
+health and endpoint selection are always on in these runs; the groups use
+default policies and no active checks. Every request succeeded in every run.
+The runs came from `scripts/bench-m2.sh`, which builds the release binaries,
+starts 16 `bench_backend` instances and configures the proxy through the admin
+API.
+
+### One endpoint against the M1 baseline
+
+The cost of everything M2 added to the request path for a group of one.
+
+| Connections | Direct rps | M1 proxy rps | M2 proxy rps | Change | M2 p50 / p99 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 35,210 | 18,339 | 17,793 | -3.0% | 0.054 / 0.072 ms |
+| 16 | 179,573 | 81,575 | 85,126 | +4.4% | 0.181 / 0.307 ms |
+| 64 | 208,465 | 97,298 | 97,920 | +0.6% | 0.634 / 1.162 ms |
+
+The added latency at one connection is about 27 µs at p50 (0.027 ms direct,
+0.054 ms through the proxy) against about 25 µs in M1. The differences are
+within the run-to-run noise noted below (about 10%), so a single-endpoint group
+is **not measurably slower than M1**; the plan's budget was 5%.
+
+### Three and 16 endpoints, per algorithm (64 connections)
+
+| Algorithm | 3 endpoints rps | p50 | 16 endpoints rps | p50 |
+|---|---:|---:|---:|---:|
+| round_robin | 99,007 | 0.629 ms | 96,607 | 0.647 ms |
+| weighted_round_robin | 98,707 | 0.628 ms | 96,124 | 0.646 ms |
+| least_connections | 99,036 | 0.632 ms | 93,475 | 0.657 ms |
+| p2c_ewma | 99,034 | 0.630 ms | 96,179 | 0.641 ms |
+| consistent_hash | 100,019 | 0.624 ms | 96,972 | 0.641 ms |
+
+Selecting among three endpoints costs nothing visible: throughput equals the
+single-endpoint figure (about 98k rps). With 16 endpoints it is 1% to 5% lower
+(least connections is the lowest at 93.5k, since it looks at every endpoint's
+load); that is about what the selection timings above predict, and it is small
+next to the cost of the request itself. Consistent hash is the cheapest at both
+sizes because a lookup in the precomputed ring does not scan the endpoints.
+
+### Reload cost with a large configuration
+
+`cargo test -p fast-proxy-config-service --release --test reload_cost -- --ignored --nocapture`
+builds 200 subsystems with 4,000 routes and 600 endpoints, then measures:
+
+| What | Time |
+|---|---:|
+| Compile, carrying every endpoint's runtime state over (median of 20) | 0.64 ms |
+| Compile from scratch | 0.63 ms |
+| A whole change, a small edit: mutate, compile as the veto, store the full-configuration revision, swap (median of 10) | 7.5 ms |
+
+A change to a configuration this size takes milliseconds, almost all of it the
+revision write (the whole configuration is stored per change); compiling,
+including building consistent-hash rings and carrying runtime state, is well
+under a millisecond. In-flight requests are not affected: they keep the
+snapshot they started with.
+
+### Caveats
+
+The M1 caveats apply: one machine shared by the load generator, backends and
+proxy; one run per point; treat differences under about 10% as noise. The
+throughput at 16 endpoints and the one-endpoint comparison in particular are
+inside that band. Reproduce with the commands above, and run every throughput point with
+`scripts/bench-m2.sh results.txt` (needs `oha`; it builds the release binaries,
+starts the backends and configures the proxy itself).

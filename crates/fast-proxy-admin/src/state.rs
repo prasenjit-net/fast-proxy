@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fast_proxy_config_service::ConfigService;
-use fast_proxy_telemetry::{AccessLog, Metrics};
+use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::events::Event;
@@ -30,6 +30,8 @@ pub struct AdminState {
     pub access_log: Arc<AccessLog>,
     /// The proxy's Prometheus metrics, rendered at `GET /metrics`.
     pub metrics: Arc<Metrics>,
+    /// Endpoint health and ejection changes, forwarded to the UI.
+    pub endpoint_events: EndpointEvents,
 }
 
 pub type SharedState = Arc<AdminState>;
@@ -42,6 +44,7 @@ impl AdminState {
         config: Arc<ConfigService>,
         runtime: RuntimeInfo,
         metrics: Arc<Metrics>,
+        endpoint_events: EndpointEvents,
     ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
@@ -56,6 +59,7 @@ impl AdminState {
             started_at_ms: chrono::Utc::now().timestamp_millis(),
             access_log,
             metrics,
+            endpoint_events,
         }
     }
 

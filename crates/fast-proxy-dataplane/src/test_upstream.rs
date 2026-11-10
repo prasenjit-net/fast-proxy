@@ -2,7 +2,7 @@
 //! it receives.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use crate::ResponseBody;
 
@@ -57,6 +58,11 @@ pub struct TestUpstream {
     /// The sender feeding the current `StreamResponse` body.
     pub stream_sender: Mutex<Option<Sender<Bytes>>>,
     pub stream_started: Notify,
+    /// When non-zero, every request is answered with this status instead of
+    /// following `behavior` (see [`TestUpstream::fail_with`]).
+    forced_status: AtomicU16,
+    /// Stops the current accept loop and drops its open connections.
+    stop: Mutex<CancellationToken>,
     behavior: Behavior,
 }
 
@@ -72,25 +78,73 @@ impl TestUpstream {
             dropped: Notify::new(),
             stream_sender: Mutex::new(None),
             stream_started: Notify::new(),
+            forced_status: AtomicU16::new(0),
+            stop: Mutex::new(CancellationToken::new()),
             behavior,
         });
-        let state = upstream.clone();
+        upstream.accept_on(listener);
+        upstream
+    }
+
+    /// Serves connections from `listener` until [`TestUpstream::kill`].
+    fn accept_on(self: &Arc<Self>, listener: TcpListener) {
+        let state = self.clone();
+        let stop = CancellationToken::new();
+        *self.stop.lock().unwrap() = stop.clone();
         tokio::spawn(async move {
             loop {
-                let Ok((stream, _)) = listener.accept().await else {
+                let accepted = tokio::select! {
+                    accepted = listener.accept() => accepted,
+                    () = stop.cancelled() => return,
+                };
+                let Ok((stream, _)) = accepted else {
                     return;
                 };
                 state.connections.fetch_add(1, Ordering::SeqCst);
-                let state = state.clone();
+                let (state, stop) = (state.clone(), stop.clone());
                 tokio::spawn(async move {
                     let service = service_fn(move |request| handle(state.clone(), request));
-                    let _ = hyper::server::conn::http1::Builder::new()
-                        .serve_connection(TokioIo::new(stream), service)
-                        .await;
+                    let serving = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service);
+                    tokio::select! {
+                        _ = serving => {}
+                        () = stop.cancelled() => {}
+                    }
                 });
             }
         });
-        upstream
+    }
+
+    /// Simulates a crashed backend: stops listening and drops every open
+    /// connection, so new connects are refused.
+    pub fn kill(&self) {
+        self.stop.lock().unwrap().cancel();
+    }
+
+    /// Brings a killed backend back on the same address.
+    pub async fn revive(self: &Arc<Self>) {
+        let mut bound = None;
+        for _ in 0..100 {
+            match TcpListener::bind(self.addr).await {
+                Ok(listener) => {
+                    bound = Some(listener);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+        self.accept_on(bound.expect("the killed backend's port should become free"));
+    }
+
+    /// Answers every request with `status` (for example 503) until
+    /// [`TestUpstream::recover`].
+    pub fn fail_with(&self, status: u16) {
+        self.forced_status.store(status, Ordering::SeqCst);
+    }
+
+    /// Goes back to the configured behavior.
+    pub fn recover(&self) {
+        self.forced_status.store(0, Ordering::SeqCst);
     }
 
     pub fn request_count(&self) -> usize {
@@ -176,6 +230,13 @@ async fn handle(
         _ => {}
     }
     state.requests.lock().unwrap().push(recorded);
+
+    let forced = state.forced_status.load(Ordering::SeqCst);
+    if forced != 0 {
+        let mut response = Response::new(boxed("forced"));
+        *response.status_mut() = http::StatusCode::from_u16(forced).unwrap();
+        return Ok(response);
+    }
 
     Ok(match state.behavior.clone() {
         Behavior::Respond {

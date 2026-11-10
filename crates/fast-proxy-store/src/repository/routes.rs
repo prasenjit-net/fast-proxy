@@ -39,11 +39,13 @@ pub fn create(
 ) -> Result<RouteId, StoreError> {
     ensure_subsystem(conn, subsystem_id)?;
     ensure_group_in_subsystem(conn, subsystem_id, fields.upstream_group_id)?;
+    fields.retry.validate()?;
     conn.execute(
         "INSERT INTO route (subsystem_id, prefix, upstream_group_id, strip_prefix,
                             upstream_prefix, preserve_host, connect_timeout_ms,
-                            response_timeout_ms, enabled)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                            response_timeout_ms, retry_max_attempts, retry_idempotent_on_5xx,
+                            retry_on_timeout, enabled)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             subsystem_id.0,
             fields.prefix.as_str(),
@@ -53,6 +55,9 @@ pub fn create(
             fields.preserve_host,
             millis(fields.connect_timeout),
             millis(fields.response_timeout),
+            fields.retry.max_attempts,
+            fields.retry.idempotent_on_5xx,
+            fields.retry.on_timeout,
             fields.enabled,
         ],
     )?;
@@ -68,11 +73,13 @@ pub fn update(
     fields: &RouteFields,
 ) -> Result<(), StoreError> {
     ensure_group_in_subsystem(conn, subsystem_id, fields.upstream_group_id)?;
+    fields.retry.validate()?;
     let changed = conn.execute(
         "UPDATE route SET prefix = ?1, upstream_group_id = ?2, strip_prefix = ?3,
                           upstream_prefix = ?4, preserve_host = ?5, connect_timeout_ms = ?6,
-                          response_timeout_ms = ?7, enabled = ?8
-         WHERE id = ?9 AND subsystem_id = ?10",
+                          response_timeout_ms = ?7, retry_max_attempts = ?8,
+                          retry_idempotent_on_5xx = ?9, retry_on_timeout = ?10, enabled = ?11
+         WHERE id = ?12 AND subsystem_id = ?13",
         params![
             fields.prefix.as_str(),
             fields.upstream_group_id.0,
@@ -81,6 +88,9 @@ pub fn update(
             fields.preserve_host,
             millis(fields.connect_timeout),
             millis(fields.response_timeout),
+            fields.retry.max_attempts,
+            fields.retry.idempotent_on_5xx,
+            fields.retry.on_timeout,
             fields.enabled,
             route_id.0,
             subsystem_id.0,

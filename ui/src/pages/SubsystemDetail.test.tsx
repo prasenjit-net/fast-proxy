@@ -27,10 +27,11 @@ describe("SubsystemDetailPage", () => {
     renderDetail({});
 
     expect(await screen.findByRole("heading", { name: "shop", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("enabled")).toBeInTheDocument();
+    const header = screen.getByRole("heading", { name: "shop", level: 2 }).parentElement as HTMLElement;
+    expect(within(header).getByText("enabled")).toBeInTheDocument();
     expect(screen.getByText("shop.example.com")).toBeInTheDocument();
     expect(screen.getByText("127.0.0.1:3000")).toBeInTheDocument();
-    expect(screen.getByText("2 routes")).toBeInTheDocument();
+    expect(screen.getByText("used by 2 routes")).toBeInTheDocument();
 
     const routes = screen.getAllByRole("table")[1];
     const rows = within(routes).getAllByRole("row").slice(1);
@@ -137,11 +138,27 @@ describe("SubsystemDetailPage", () => {
   });
 
   describe("upstreams", () => {
+    const defaults = {
+      lb: { algorithm: "round_robin", hashKey: "client_ip" },
+      failurePolicy: "fail_open",
+      health: {
+        check: "none",
+        path: "/",
+        expectedStatus: [200, 399],
+        intervalMs: 5000,
+        timeoutMs: 2000,
+        rise: 2,
+        fall: 3,
+      },
+      passive: { consecutiveFailures: 3, baseEjectionMs: 10000, maxEjectionMs: 300000, maxEjectionPercent: 50 },
+      retryBudget: { percent: 20, minPerSec: 10 },
+    };
+
     it("checks the form before sending, naming every problem", async () => {
       const { api } = renderDetail({});
       await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
 
-      await userEvent.type(dialog().getByLabelText("Address"), "no-port");
+      await userEvent.type(dialog().getByLabelText("First endpoint address"), "no-port");
       await userEvent.click(dialog().getByRole("button", { name: "Add upstream" }));
 
       const alerts = await dialog().findAllByRole("alert");
@@ -152,43 +169,93 @@ describe("SubsystemDetailPage", () => {
       expect(api.called("POST", "/api/subsystems/1/upstreams")).toHaveLength(0);
     });
 
-    it("adds an upstream and closes the dialog", async () => {
+    it("adds an upstream with the default policy and its first endpoint", async () => {
       const { api } = renderDetail({
-        "POST /api/subsystems/1/upstreams": {
-          status: 201,
-          body: envelope(upstream({ id: 8, name: "api", addr: "api.internal:8080" }), 5),
-        },
+        "POST /api/subsystems/1/upstreams": { status: 201, body: envelope(upstream({ id: 8, name: "api" }), 5) },
       });
       await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
 
       await userEvent.type(dialog().getByLabelText("Name"), "api");
-      await userEvent.type(dialog().getByLabelText("Address"), "api.internal:8080");
+      await userEvent.type(dialog().getByLabelText("First endpoint address"), "api.internal:8080");
       await userEvent.click(dialog().getByRole("button", { name: "Add upstream" }));
 
       expect(await screen.findByText("Added upstream api")).toBeInTheDocument();
       expect(api.called("POST", "/api/subsystems/1/upstreams")[0].body).toEqual({
         name: "api",
-        addr: "api.internal:8080",
-        weight: 1,
+        ...defaults,
+        endpoints: [{ addr: "api.internal:8080", weight: 1 }],
       });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("edits an upstream, prefilled with its current values", async () => {
+    it("sends the chosen algorithm, hash key, failure policy and health check", async () => {
+      const { api } = renderDetail({
+        "POST /api/subsystems/1/upstreams": { status: 201, body: envelope(upstream(), 5) },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
+      const form = dialog();
+      await userEvent.type(form.getByLabelText("Name"), "sticky");
+      await userEvent.type(form.getByLabelText("First endpoint address"), "10.0.0.1:80");
+      await userEvent.selectOptions(form.getByLabelText("Load balancing"), "consistent_hash");
+      await userEvent.selectOptions(form.getByLabelText("Hash on"), "header");
+      await userEvent.type(form.getByLabelText("Header name"), "x-user");
+      await userEvent.selectOptions(form.getByLabelText("When no endpoint is healthy"), "fail_closed");
+      await userEvent.selectOptions(form.getByLabelText("Active health check"), "http");
+      await userEvent.clear(form.getByLabelText("Probe path"));
+      await userEvent.type(form.getByLabelText("Probe path"), "/healthz");
+      await userEvent.clear(form.getByLabelText("Probe interval (ms)"));
+      await userEvent.type(form.getByLabelText("Probe interval (ms)"), "3000");
+      await userEvent.click(form.getByRole("button", { name: "Add upstream" }));
+
+      await screen.findByText("Added upstream sticky");
+      const body = api.called("POST", "/api/subsystems/1/upstreams")[0].body as Record<string, unknown>;
+      expect(body.lb).toEqual({ algorithm: "consistent_hash", hashKey: "header:x-user" });
+      expect(body.failurePolicy).toBe("fail_closed");
+      expect(body.health).toEqual({
+        check: "http",
+        path: "/healthz",
+        expectedStatus: [200, 399],
+        intervalMs: 3000,
+        timeoutMs: 2000,
+        rise: 2,
+        fall: 3,
+      });
+    });
+
+    it("opens the advanced section to show a problem inside it", async () => {
+      renderDetail({});
+      await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
+      const form = dialog();
+      await userEvent.type(form.getByLabelText("Name"), "api");
+      await userEvent.type(form.getByLabelText("First endpoint address"), "a:1");
+      await userEvent.click(form.getByText(/advanced: health checks/i));
+      await userEvent.clear(form.getByLabelText("Longest ejection (ms)"));
+      await userEvent.type(form.getByLabelText("Longest ejection (ms)"), "5");
+      // Fold it away again: the error must bring it back into view.
+      await userEvent.click(form.getByText(/advanced: health checks/i));
+      expect(form.getByLabelText("Longest ejection (ms)")).not.toBeVisible();
+      await userEvent.click(form.getByRole("button", { name: "Add upstream" }));
+
+      const alert = await form.findByRole("alert");
+      expect(alert).toHaveTextContent("Must be a whole number from 100 to 3600000");
+      expect(form.getByLabelText("Longest ejection (ms)")).toBeVisible();
+    });
+
+    it("edits an upstream's settings, prefilled, without touching its endpoints", async () => {
       const { api } = renderDetail({ "PUT /api/subsystems/1/upstreams/5": { body: envelope(upstream(), 5) } });
       await userEvent.click(await screen.findByRole("button", { name: "Edit upstream backend" }));
 
       expect(dialog().getByLabelText("Name")).toHaveValue("backend");
-      expect(dialog().getByLabelText("Address")).toHaveValue("127.0.0.1:3000");
-      await userEvent.clear(dialog().getByLabelText("Address"));
-      await userEvent.type(dialog().getByLabelText("Address"), "127.0.0.1:4000");
+      expect(dialog().getByLabelText("Load balancing")).toHaveValue("round_robin");
+      expect(dialog().queryByLabelText("First endpoint address")).not.toBeInTheDocument();
+      await userEvent.selectOptions(dialog().getByLabelText("Load balancing"), "p2c_ewma");
       await userEvent.click(dialog().getByRole("button", { name: "Save upstream" }));
 
       expect(await screen.findByText("Updated upstream backend")).toBeInTheDocument();
       expect(api.called("PUT", "/api/subsystems/1/upstreams/5")[0].body).toEqual({
         name: "backend",
-        addr: "127.0.0.1:4000",
-        weight: 1,
+        ...defaults,
+        lb: { algorithm: "p2c_ewma", hashKey: "client_ip" },
       });
     });
 
@@ -196,9 +263,23 @@ describe("SubsystemDetailPage", () => {
       renderDetail({ "POST /api/subsystems/1/upstreams": apiError(409, "CONFLICT", "name already exists") });
       await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
       await userEvent.type(dialog().getByLabelText("Name"), "backend");
-      await userEvent.type(dialog().getByLabelText("Address"), "127.0.0.1:1");
+      await userEvent.type(dialog().getByLabelText("First endpoint address"), "127.0.0.1:1");
       await userEvent.click(dialog().getByRole("button", { name: "Add upstream" }));
       expect(await dialog().findByRole("alert")).toHaveTextContent("name already exists");
+    });
+
+    it("shows a nested field error the server found next to its input", async () => {
+      renderDetail({
+        "POST /api/subsystems/1/upstreams": apiError(400, "VALIDATION_FAILED", "validation failed", [
+          { field: "endpoints.0.addr", message: "port must be from 1 to 65535" },
+        ]),
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
+      await userEvent.type(dialog().getByLabelText("Name"), "api");
+      await userEvent.type(dialog().getByLabelText("First endpoint address"), "a:1");
+      await userEvent.click(dialog().getByRole("button", { name: "Add upstream" }));
+      expect(await dialog().findByText("port must be from 1 to 65535")).toBeInTheDocument();
+      expect(dialog().getByLabelText("First endpoint address")).toHaveAttribute("aria-invalid", "true");
     });
 
     it("warns that an upstream in use cannot be deleted, and shows the server's refusal", async () => {
@@ -250,6 +331,7 @@ describe("SubsystemDetailPage", () => {
         preserveHost: false,
         connectTimeoutMs: 1500,
         responseTimeoutMs: 30000,
+        retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
         enabled: true,
       });
     });
@@ -322,6 +404,35 @@ describe("SubsystemDetailPage", () => {
       });
     });
 
+    it("edits a route's retry settings", async () => {
+      const { api } = renderDetail({ "PUT /api/subsystems/1/routes/7": { body: envelope({}, 5) } });
+      await userEvent.click(await screen.findByRole("button", { name: "Edit route /api" }));
+
+      expect(dialog().getByLabelText("Attempts")).toHaveValue("2");
+      expect(dialog().getByRole("checkbox", { name: /retry idempotent requests on 502/i })).toBeChecked();
+      expect(dialog().getByRole("checkbox", { name: "Also retry response timeouts" })).not.toBeChecked();
+      await userEvent.clear(dialog().getByLabelText("Attempts"));
+      await userEvent.type(dialog().getByLabelText("Attempts"), "4");
+      await userEvent.click(dialog().getByRole("checkbox", { name: /retry idempotent requests on 502/i }));
+      await userEvent.click(dialog().getByRole("checkbox", { name: "Also retry response timeouts" }));
+      await userEvent.click(dialog().getByRole("button", { name: "Save route" }));
+
+      expect(await screen.findByText("Updated route /api")).toBeInTheDocument();
+      expect(api.called("PUT", "/api/subsystems/1/routes/7")[0].body).toMatchObject({
+        retry: { maxAttempts: 4, idempotentOn5xx: false, onTimeout: true },
+      });
+    });
+
+    it("rejects an out-of-range number of attempts before sending", async () => {
+      const { api } = renderDetail({});
+      await userEvent.click(await screen.findByRole("button", { name: "Edit route /api" }));
+      await userEvent.clear(dialog().getByLabelText("Attempts"));
+      await userEvent.type(dialog().getByLabelText("Attempts"), "9");
+      await userEvent.click(dialog().getByRole("button", { name: "Save route" }));
+      expect(await dialog().findByRole("alert")).toHaveTextContent("Must be a whole number from 1 to 5");
+      expect(api.called("PUT", "/api/subsystems/1/routes/7")).toHaveLength(0);
+    });
+
     it("switches a route off with its other settings unchanged", async () => {
       const { api } = renderDetail({ "PUT /api/subsystems/1/routes/7": { body: envelope({}, 5) } });
       const row = (await screen.findByText("/api")).closest("tr") as HTMLElement;
@@ -336,6 +447,7 @@ describe("SubsystemDetailPage", () => {
         preserveHost: false,
         connectTimeoutMs: 1000,
         responseTimeoutMs: 2000,
+        retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
         enabled: false,
       });
     });

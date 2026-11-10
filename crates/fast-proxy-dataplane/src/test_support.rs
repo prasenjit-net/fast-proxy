@@ -6,13 +6,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_model::{
-    Config, EndpointAddr, EndpointConfig, HostPattern, RouteConfig, RouteId, RoutePrefix,
-    SubsystemConfig, SubsystemId, SubsystemName, UpstreamGroupConfig, UpstreamGroupId,
-    UpstreamPrefix,
+    Config, EndpointAddr, EndpointConfig, EndpointId, EndpointState, GroupPolicy, HostPattern,
+    RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemId, SubsystemName,
+    UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
 };
 use fast_proxy_routing::{compile, SnapshotHolder};
-use fast_proxy_telemetry::{AccessLog, Metrics};
+use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
@@ -33,6 +34,7 @@ pub fn route(id: i64, prefix: &str) -> RouteConfig {
         preserve_host: true,
         connect_timeout: Duration::from_secs(5),
         response_timeout: Duration::from_secs(30),
+        retry: RetryPolicy::default(),
         enabled: true,
     }
 }
@@ -46,6 +48,19 @@ pub fn site_to(
     endpoint: SocketAddr,
     routes: Vec<RouteConfig>,
 ) -> SubsystemConfig {
+    site_to_group(id, name, host, &[endpoint], GroupPolicy::default(), routes)
+}
+
+/// Like [`site_to`] with several enabled endpoints (ids 1, 2, ...) under
+/// `policy`.
+pub fn site_to_group(
+    id: i64,
+    name: &str,
+    host: &str,
+    endpoints: &[SocketAddr],
+    policy: GroupPolicy,
+    routes: Vec<RouteConfig>,
+) -> SubsystemConfig {
     SubsystemConfig {
         id: SubsystemId(id),
         name: SubsystemName::parse(name).unwrap(),
@@ -55,10 +70,17 @@ pub fn site_to(
         upstream_groups: vec![UpstreamGroupConfig {
             id: UpstreamGroupId(1),
             name: "backend".into(),
-            endpoints: vec![EndpointConfig {
-                addr: EndpointAddr::parse(&endpoint.to_string()).unwrap(),
-                weight: 1,
-            }],
+            policy,
+            endpoints: endpoints
+                .iter()
+                .enumerate()
+                .map(|(index, addr)| EndpointConfig {
+                    id: EndpointId(index as i64 + 1),
+                    addr: EndpointAddr::parse(&addr.to_string()).unwrap(),
+                    weight: 1,
+                    state: EndpointState::Enabled,
+                })
+                .collect(),
         }],
         routes,
     }
@@ -71,13 +93,14 @@ pub struct Harness {
     pub addr: SocketAddr,
     pub shutdown: CancellationToken,
     pub metrics: Arc<Metrics>,
+    pub events: EndpointEvents,
     pub access_log: Arc<AccessLog>,
 }
 
 impl Harness {
     /// Serves `config` with a custom forwarder (no real upstream).
     pub async fn start<F: Forward>(config: Config, forwarder: F) -> Self {
-        Self::start_full(config, |_| forwarder, None).await
+        Self::start_full(config, |_, _| forwarder, None).await
     }
 
     /// Serves `config` through the real upstream client.
@@ -95,20 +118,21 @@ impl Harness {
         let trusted = TrustedProxies::parse(&entries).unwrap();
         Self::start_full(
             config,
-            |metrics| UpstreamClient::new(trusted, metrics),
+            |metrics, events| UpstreamClient::new(trusted, metrics, events),
             log_path,
         )
         .await
     }
 
-    /// The general form: `make_forwarder` receives the metrics the pipeline reports to.
+    /// The general form: `make_forwarder` receives the metrics and the endpoint
+    /// event bus the pipeline reports to.
     pub async fn start_full<F: Forward>(
         config: Config,
-        make_forwarder: impl FnOnce(Arc<Metrics>) -> F,
+        make_forwarder: impl FnOnce(Arc<Metrics>, EndpointEvents) -> F,
         log_path: Option<&Path>,
     ) -> Self {
         let holder = Arc::new(SnapshotHolder::new());
-        holder.swap(compile(1, &config).unwrap());
+        holder.swap(compile(1, &config, &RuntimeRegistry::new()).unwrap());
         let specs = [ListenerSpec {
             name: "http".into(),
             addr: ([127, 0, 0, 1], 0).into(),
@@ -116,6 +140,7 @@ impl Harness {
         let bound = bind(&specs).await.unwrap();
         let shutdown = CancellationToken::new();
         let metrics = Arc::new(Metrics::new());
+        let events = EndpointEvents::new();
         let access_log = Arc::new(AccessLog::open(log_path).await);
         let observability = Observability {
             metrics: metrics.clone(),
@@ -123,7 +148,7 @@ impl Harness {
         };
         let pipeline = Arc::new(RequestPipeline::new(
             holder.clone(),
-            make_forwarder(metrics.clone()),
+            make_forwarder(metrics.clone(), events.clone()),
             observability,
         ));
         let plane = DataPlane::start(bound, pipeline, shutdown.clone());
@@ -134,6 +159,7 @@ impl Harness {
             addr,
             shutdown,
             metrics,
+            events,
             access_log,
         }
     }
@@ -200,12 +226,21 @@ pub async fn get(addr: SocketAddr, host: &str, path: &str, extra: &str) -> Reply
 }
 
 /// Polls `condition` for up to a second.
-pub async fn eventually(mut condition: impl FnMut() -> bool) -> bool {
-    for _ in 0..100 {
+pub async fn eventually(condition: impl FnMut() -> bool) -> bool {
+    eventually_within(Duration::from_secs(1), condition).await
+}
+
+/// Polls `condition` for up to `limit`, for waits that depend on the platform
+/// (connecting to a closed port takes about a second on Windows).
+pub async fn eventually_within(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
         if condition() {
             return true;
         }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    false
 }

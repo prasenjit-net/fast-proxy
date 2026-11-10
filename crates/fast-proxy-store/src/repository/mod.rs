@@ -2,8 +2,10 @@
 //! `&Connection` (a `Transaction` derefs to one), so the same code serves
 //! reads and the transactional write path.
 
+pub mod endpoints;
 pub mod hosts;
 pub mod load;
+mod policy_columns;
 pub mod routes;
 pub mod subsystems;
 pub mod upstreams;
