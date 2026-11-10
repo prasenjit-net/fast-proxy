@@ -3,8 +3,9 @@
 //! files are involved), and a TLS client for handshake assertions.
 
 mod client;
-pub mod fixed_keys;
 mod issue;
+mod key_formats;
 
 pub use client::{handshake, ClientHello, HandshakeError, Negotiated};
 pub use issue::{Issued, LeafSpec, TestCa};
+pub use key_formats::pkcs8_pem_to_sec1_pem;

@@ -6,6 +6,7 @@ description = "Test-only helpers: an in-memory CA and leaf certificates as PEM s
 publish = false
 
 [dependencies]
+base64 = "0.22"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 time = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

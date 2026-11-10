@@ -722,6 +722,7 @@ dependencies = [
 name = "fast-proxy-test-pki"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "rcgen",
  "rustls",
  "time",

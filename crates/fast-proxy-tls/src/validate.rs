@@ -198,10 +198,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use fast_proxy_test_pki::fixed_keys::{
-        EC_PKCS8, EC_SEC1, ENCRYPTED_PKCS8, RSA_PKCS1, RSA_PKCS8,
-    };
-    use fast_proxy_test_pki::{LeafSpec, TestCa};
+    use fast_proxy_test_pki::{pkcs8_pem_to_sec1_pem, LeafSpec, TestCa};
 
     use super::*;
 
@@ -233,22 +230,22 @@ mod tests {
     }
 
     #[test]
-    fn sec1_and_pkcs1_keys_are_accepted() {
-        let ca = TestCa::new("ca");
-        let ec = ca.issue_with_key(
-            &LeafSpec::new(&["ec.example.com"]),
-            EC_PKCS8,
-            &rcgen::PKCS_ECDSA_P256_SHA256,
-        );
-        let validated = validate_upload(&ec.cert_pem, EC_SEC1, now_ms()).unwrap();
+    fn a_sec1_key_is_accepted_and_matched_to_its_certificate() {
+        let issued = TestCa::new("ca").issue(&LeafSpec::new(&["ec.example.com"]));
+        let sec1 = pkcs8_pem_to_sec1_pem(&issued.key_pem);
+        assert!(sec1.contains("BEGIN EC PRIVATE KEY"));
+        let validated = validate_upload(&issued.cert_pem, &sec1, now_ms()).unwrap();
         assert_eq!(validated.key.kind(), KeyKind::Sec1);
-        let rsa = ca.issue_with_key(
-            &LeafSpec::new(&["rsa.example.com"]),
-            RSA_PKCS8,
-            &rcgen::PKCS_RSA_SHA256,
-        );
-        let validated = validate_upload(&rsa.cert_pem, RSA_PKCS1, now_ms()).unwrap();
-        assert_eq!(validated.key.kind(), KeyKind::Pkcs1);
+    }
+
+    #[test]
+    fn a_pkcs1_pem_is_recognized_by_its_kind() {
+        // The bytes are not a real RSA key: this checks only the format dispatch.
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n";
+        assert_eq!(parse_key(pem).unwrap().kind(), KeyKind::Pkcs1);
+        let issued = TestCa::new("ca").issue(&LeafSpec::new(&["a.example.com"]));
+        let err = validate_upload(&issued.cert_pem, pem, now_ms()).unwrap_err();
+        assert_eq!(err.field, "keyPem");
     }
 
     #[test]
@@ -313,7 +310,9 @@ mod tests {
     #[test]
     fn an_encrypted_key_is_rejected_with_a_clear_message() {
         let good = TestCa::new("ca").issue(&LeafSpec::new(&["a.example.com"]));
-        let err = validate_upload(&good.cert_pem, ENCRYPTED_PKCS8, now_ms()).unwrap_err();
+        let encrypted =
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n";
+        let err = validate_upload(&good.cert_pem, encrypted, now_ms()).unwrap_err();
         assert_eq!(err.field, "keyPem");
         assert!(err.message.contains("passphrase"));
         let legacy = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00\n\nAAAA\n-----END RSA PRIVATE KEY-----\n";

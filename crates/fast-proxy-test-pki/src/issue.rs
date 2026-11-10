@@ -81,18 +81,6 @@ impl TestCa {
         self.issue_for_key(spec, &key)
     }
 
-    /// Issues a leaf for an existing key (given as PKCS#8 PEM and its algorithm).
-    pub fn issue_with_key(
-        &self,
-        spec: &LeafSpec,
-        pkcs8_pem: &str,
-        algorithm: &'static rcgen::SignatureAlgorithm,
-    ) -> Issued {
-        let key = KeyPair::from_pem_and_sign_algo(pkcs8_pem, algorithm)
-            .expect("loading the fixed test key");
-        self.issue_for_key(spec, &key)
-    }
-
     fn issue_for_key(&self, spec: &LeafSpec, key: &KeyPair) -> Issued {
         let mut params = CertificateParams::default();
         params.distinguished_name.push(
