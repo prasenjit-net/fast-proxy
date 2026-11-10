@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use fast_proxy_auth::TokenCache;
 use fast_proxy_balancing::RuntimeRegistry;
-use fast_proxy_routing::{compile_with_tls, Snapshot, SnapshotHolder};
+use fast_proxy_routing::{compile_all, MaintenanceInputs, Snapshot, SnapshotHolder};
 use fast_proxy_store::repository::{audit, certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
 use fast_proxy_telemetry::{Metrics, ReloadOutcome, SyncResult};
@@ -12,7 +12,8 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::change_context::committed_entry;
 use crate::dev_certificates;
-use crate::metric_series::live_endpoints;
+use crate::maintenance::stored_inputs;
+use crate::metric_series::{live_endpoints, maintenance_readings};
 use crate::tls_state::{Prepared, TlsSettings, TlsState, VaultStatus};
 use crate::{Audited, ChangeContext, StartError};
 
@@ -76,7 +77,7 @@ impl ConfigService {
         settings: TlsSettings,
     ) -> Result<Self, StartError> {
         let tls_enabled = settings.enabled;
-        let (config, version, has_certificates, check) = store
+        let (config, version, has_certificates, check, maintenance) = store
             .run(|db| {
                 db.read(|conn| {
                     Ok((
@@ -84,6 +85,7 @@ impl ConfigService {
                         revision::current_version(conn)?,
                         !certificates::list(conn)?.is_empty(),
                         vault::get(conn)?,
+                        stored_inputs(conn, now_ms())?,
                     ))
                 })
             })
@@ -95,12 +97,14 @@ impl ConfigService {
                 move |db| db.read(|conn| tls.build(conn))
             })
             .await?;
-        let snapshot = compile_with_tls(
+        let snapshot = compile_all(
             version,
             &config,
             &RuntimeRegistry::new(),
             &tls.inputs(&prepared, false),
+            &maintenance,
         )?;
+        metrics.set_maintenance_active(&maintenance_readings(&snapshot));
         let holder = Arc::new(SnapshotHolder::new());
         holder.swap(snapshot);
         metrics.set_config_version(version);
@@ -161,13 +165,23 @@ impl ConfigService {
                 move |db| db.read(|conn| tls.build(conn))
             })
             .await?;
-        let (config, version) = self
+        let (config, version, maintenance) = self
             .store
-            .run(|db| Ok((db.load_all()?, db.current_version()?)))
+            .run(|db| {
+                db.read(|conn| {
+                    Ok((
+                        load::load_all(conn)?,
+                        revision::current_version(conn)?,
+                        stored_inputs(conn, now_ms())?,
+                    ))
+                })
+            })
             .await?;
         let inputs = self.tls.inputs(&prepared, true);
-        self.holder
-            .swap(compile_with_tls(version, &config, &previous, &inputs)?);
+        let snapshot = compile_all(version, &config, &previous, &inputs, &maintenance)?;
+        self.metrics
+            .set_maintenance_active(&maintenance_readings(&snapshot));
+        self.holder.swap(snapshot);
         self.tls.install(prepared.cache);
         Ok(())
     }
@@ -212,7 +226,7 @@ impl ConfigService {
     async fn reload_from_database(&self) -> Result<ConfigChanged, StartError> {
         let previous = self.holder.load().runtime_registry();
         let tls = self.tls.clone();
-        let (config, version, prepared) = self
+        let (config, version, prepared, maintenance) = self
             .store
             .run(move |db| {
                 db.read(|conn| {
@@ -221,12 +235,15 @@ impl ConfigService {
                         load::load_all(conn)?,
                         revision::current_version(conn)?,
                         tls.build(conn)?,
+                        stored_inputs(conn, now_ms())?,
                     ))
                 })
             })
             .await?;
         let inputs = self.tls.inputs(&prepared, self.tls.settings.enabled);
-        let snapshot = compile_with_tls(version, &config, &previous, &inputs)?;
+        let snapshot = compile_all(version, &config, &previous, &inputs, &maintenance)?;
+        self.metrics
+            .set_maintenance_active(&maintenance_readings(&snapshot));
         self.metrics
             .retain_upstream_series(&live_endpoints(&snapshot));
         self.metrics.set_config_version(version);
@@ -376,6 +393,8 @@ impl ConfigService {
         self.metrics
             .retain_upstream_series(&live_endpoints(&snapshot));
         publish_certificates(&self.metrics, &prepared);
+        self.metrics
+            .set_maintenance_active(&maintenance_readings(&snapshot));
         self.tls.install(prepared.cache);
         self.holder.swap(snapshot);
         self.refresh_tokens().await?;
@@ -452,12 +471,16 @@ fn persist_and_compile<T>(
     let mut compiled = None;
     let mut summary = String::new();
     let prepared: RefCell<Option<Prepared>> = RefCell::new(None);
+    let maintenance: RefCell<Option<MaintenanceInputs>> = RefCell::new(None);
     let written = db.write_as(
         actor,
         |conn| {
             let mutation = mutate(conn)?;
             summary = mutation.summary.clone();
             *prepared.borrow_mut() = Some(tls.prepare(conn, now_ms())?);
+            // Read after the mutation, so a scope cascaded away with its
+            // subsystem or route is not compiled.
+            *maintenance.borrow_mut() = Some(stored_inputs(conn, now_ms())?);
             Ok(mutation)
         },
         |config| {
@@ -465,8 +488,12 @@ fn persist_and_compile<T>(
             let Some(ready) = borrowed.as_ref() else {
                 return Err("certificates were not prepared".to_string());
             };
+            let borrowed_maintenance = maintenance.borrow();
+            let Some(scopes) = borrowed_maintenance.as_ref() else {
+                return Err("maintenance was not read".to_string());
+            };
             let inputs = tls.inputs(ready, tls.settings.enabled);
-            match compile_with_tls(0, config, previous, &inputs) {
+            match compile_all(0, config, previous, &inputs, scopes) {
                 Ok(snapshot) => {
                     compiled = Some(snapshot);
                     Ok(())

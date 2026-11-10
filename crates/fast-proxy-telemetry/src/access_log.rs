@@ -42,6 +42,9 @@ pub struct DataPlaneFields {
     pub upstream_time: Option<Duration>,
     /// Response body bytes sent to the client.
     pub bytes_out: u64,
+    /// The maintenance scope that answered the request (`global`, `subsystem`
+    /// or `route`), when one did.
+    pub maintenance: Option<String>,
 }
 
 /// One finished request, as written to the access log.
@@ -101,6 +104,9 @@ impl AccessRecord<'_> {
                 escape_log_field(&data.proto),
                 escape_log_field(data.tls.as_deref().unwrap_or("-"))
             ));
+            if let Some(scope) = data.maintenance.as_deref() {
+                line.push_str(&format!(" maintenance={}", escape_log_field(scope)));
+            }
         }
         if let Some(actor) = self.actor {
             line.push_str(&format!(" actor={}", escape_log_field(actor)));
@@ -239,6 +245,7 @@ mod tests {
             request_id: "abc123".into(),
             upstream_time: Some(Duration::from_micros(1200)),
             bytes_out: 456,
+            maintenance: None,
         }
     }
 
@@ -251,6 +258,23 @@ mod tests {
         line.split(' ')
             .filter_map(|part| part.split_once('='))
             .collect()
+    }
+
+    #[test]
+    fn a_data_line_names_the_maintenance_scope_only_when_one_answered() {
+        let plain = data_fields();
+        let answered = DataPlaneFields {
+            maintenance: Some("subsystem".into()),
+            ..data_fields()
+        };
+        let mut record = admin_record("/");
+        record.plane = Plane::Data;
+        record.data_plane = Some(&plain);
+        assert!(!record.format_line(at()).contains("maintenance="));
+        record.data_plane = Some(&answered);
+        assert!(record
+            .format_line(at())
+            .contains(" maintenance=subsystem total_ms="));
     }
 
     #[test]

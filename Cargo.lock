@@ -680,6 +680,7 @@ name = "fast-proxy-dataplane"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
@@ -732,6 +733,7 @@ name = "fast-proxy-routing"
 version = "0.0.0"
 dependencies = [
  "arc-swap",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-test-pki",

@@ -39,6 +39,15 @@ pub struct AdminState {
 
 pub type SharedState = Arc<AdminState>;
 
+/// What changed about one maintenance scope, for [`AdminState::maintenance_changed`].
+pub struct MaintenanceChange<'a> {
+    pub scope: &'static str,
+    pub subsystem: Option<&'a str>,
+    pub route: Option<&'a str>,
+    pub active: bool,
+    pub expires_at_ms: Option<i64>,
+}
+
 impl AdminState {
     // Each argument is a distinct collaborator the admin plane is wired from.
     #[allow(clippy::too_many_arguments)]
@@ -99,6 +108,26 @@ impl AdminState {
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
         });
         self.activity("token", format!("token {change}: {token}"));
+    }
+
+    /// Tells every client maintenance was turned on or off for a scope, with a
+    /// matching activity entry.
+    pub fn maintenance_changed(&self, change: MaintenanceChange<'_>) {
+        let verb = if change.active { "on" } else { "off" };
+        let target = match (change.subsystem, change.route) {
+            (Some(subsystem), Some(route)) => format!("{subsystem} {route}"),
+            (Some(subsystem), None) => subsystem.to_string(),
+            _ => "the whole proxy".to_string(),
+        };
+        self.broadcast(Event::MaintenanceChanged {
+            scope: change.scope,
+            subsystem: change.subsystem.map(str::to_string),
+            route: change.route.map(str::to_string),
+            active: change.active,
+            expires_at_ms: change.expires_at_ms,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        self.activity("maintenance", format!("maintenance {verb}: {target}"));
     }
 
     /// Push a human-readable entry to every client's activity feed.

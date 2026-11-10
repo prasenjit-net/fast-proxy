@@ -7,7 +7,7 @@ use fast_proxy_model::{
     RetryPolicy, RouteId, SubsystemId, SubsystemName, UpstreamGroupId, UpstreamPrefix,
 };
 
-use crate::{CompiledHttps, CompiledUpstream, HostTable, RouteTable};
+use crate::{CompiledHttps, CompiledMaintenance, CompiledUpstream, HostTable, RouteTable};
 
 /// A route with its upstream group resolved. The endpoint is chosen per
 /// request from [`CompiledRoute::upstream`].
@@ -24,6 +24,8 @@ pub struct CompiledRoute {
     pub retry: RetryPolicy,
     /// Shared by every route of the same group.
     pub upstream: Arc<CompiledUpstream>,
+    /// Maintenance set on this route alone, while active.
+    pub maintenance: Option<Arc<CompiledMaintenance>>,
 }
 
 /// One subsystem ready for request handling. Disabled routes are not
@@ -37,6 +39,8 @@ pub struct CompiledSubsystem {
     /// Every upstream group of the subsystem, including ones no enabled
     /// route uses (their runtime state must survive too).
     pub upstreams: HashMap<UpstreamGroupId, Arc<CompiledUpstream>>,
+    /// Maintenance set on the whole subsystem, while active.
+    pub maintenance: Option<Arc<CompiledMaintenance>>,
 }
 
 /// The immutable, ready-to-serve view of the whole configuration at one
@@ -49,6 +53,8 @@ pub struct Snapshot {
     pub tls_enabled: bool,
     pub hosts: HostTable,
     pub subsystems: HashMap<SubsystemId, CompiledSubsystem>,
+    /// Maintenance set on the whole proxy, while active.
+    pub maintenance: Option<Arc<CompiledMaintenance>>,
 }
 
 impl Snapshot {

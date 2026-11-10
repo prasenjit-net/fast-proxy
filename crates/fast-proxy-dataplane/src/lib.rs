@@ -9,6 +9,7 @@ mod connections;
 mod forward;
 mod headers;
 mod listener;
+mod maintenance;
 mod pending_request;
 mod pipeline;
 mod protocol_switch;
@@ -34,6 +35,8 @@ mod balancing_tests;
 mod drain_tests;
 #[cfg(test)]
 mod forwarding_tests;
+#[cfg(test)]
+mod maintenance_tests;
 #[cfg(test)]
 mod observability_tests;
 #[cfg(test)]

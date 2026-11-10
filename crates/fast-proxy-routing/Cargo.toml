@@ -6,6 +6,7 @@ description = "Compiled routing snapshot and host/route matchers (pure, no I/O)"
 publish = false
 
 [dependencies]
+fast-proxy-auth = { path = "../fast-proxy-auth" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-tls = { path = "../fast-proxy-tls" }

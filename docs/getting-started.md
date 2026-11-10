@@ -404,7 +404,26 @@ is lost the keys are unreadable and certificates must be uploaded again. To run
 several instances on one database give them all the same key
 (`FAST_PROXY_MASTER_KEY`): a change on one reaches the others within a few seconds.
 
+## 17. Maintenance mode
+
+Take `shop` out of service for a deploy, with an explanation, a TTL and a way in
+for you:
+
+```sh
+curl -s -H "$H" -H "$J" -X PUT -d '{"message":"Deploying v2","ttlSecs":600,
+  "bypass":{"cidrs":["127.0.0.0/8"]}}' $A/subsystems/1/maintenance
+curl -si -H 'Host: blog.example.com' http://127.0.0.1:8000/ | head -1   # blog is untouched
+curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/ | head -3   # 200, X-Maintenance-Bypass: subsystem
+curl -s  -H "$H" $A/maintenance                                          # what is on, secondsLeft
+curl -s  -H "$H" -X DELETE $A/subsystems/1/maintenance                   # reopen
+```
+
+From another address (or without the bypass) the same request gets
+`503 Service Unavailable` with `Retry-After` and your message, and never reaches
+the backend. See the README's *Maintenance mode* section for the scopes, the
+secret-header bypass and the metrics.
+
 ## Not available yet
 
-Authentication for the admin plane, ACME certificates, maintenance mode, rate
-limits and request sampling are later milestones (see [ROADMAP.md](ROADMAP.md)).
+ACME certificates, rate limits and request sampling are later milestones (see
+[ROADMAP.md](ROADMAP.md)); the audit log and the command line follow in M5.

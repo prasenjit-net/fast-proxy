@@ -816,3 +816,139 @@ async fn the_running_sweeper_clears_an_expired_scope_by_itself() {
     .expect("the sweeper clears it");
     stop.cancel();
 }
+
+// ---- maintenance in the live snapshot ----
+
+#[tokio::test]
+async fn a_scope_is_live_in_the_snapshot_and_the_gauge_until_it_is_cleared() {
+    let metrics = Arc::new(fast_proxy_telemetry::Metrics::new());
+    let service = Arc::new(
+        ConfigService::start_with_metrics(Store::open_in_memory().unwrap(), metrics.clone())
+            .await
+            .unwrap(),
+    );
+    let shop = add_site(&service, "shop").await;
+    let live = || service.snapshot_holder().load();
+    assert!(live().subsystems[&shop].maintenance.is_none());
+
+    service
+        .set_maintenance(&ann(), MaintenanceTarget::Subsystem(shop), on("x", None))
+        .await
+        .unwrap();
+    assert!(live().subsystems[&shop].maintenance.is_some());
+    assert!(live().maintenance.is_none());
+    assert!(metrics.render().contains(
+        r#"fastproxy_maintenance_active{route="_none",scope="subsystem",subsystem="shop"} 1"#
+    ));
+
+    service
+        .clear_maintenance(&ann(), MaintenanceTarget::Subsystem(shop))
+        .await
+        .unwrap();
+    assert!(live().subsystems[&shop].maintenance.is_none());
+    assert!(!metrics.render().contains("fastproxy_maintenance_active{"));
+}
+
+#[tokio::test]
+async fn a_vetoed_change_leaves_maintenance_the_snapshot_and_the_log_as_they_were() {
+    let service = memory().await;
+    let shop = add_site(&service, "shop").await;
+    service
+        .set_maintenance(
+            &ann(),
+            MaintenanceTarget::Subsystem(shop),
+            on("keep me", None),
+        )
+        .await
+        .unwrap();
+    let version = service.snapshot_holder().load().version;
+    let audit_before = all_audit(&service).await.len();
+    let rows_before = service.list_maintenance().await.unwrap();
+
+    let vetoed = service
+        .apply(&ann(), Audited::new("test.break", "x"), |conn| {
+            conn.execute("DELETE FROM upstream_endpoint", [])?;
+            Ok(Mutation {
+                value: (),
+                summary: "bad".into(),
+            })
+        })
+        .await;
+    assert!(vetoed.is_err());
+
+    assert_eq!(service.snapshot_holder().load().version, version);
+    assert!(service.snapshot_holder().load().subsystems[&shop]
+        .maintenance
+        .is_some());
+    assert_eq!(all_audit(&service).await.len(), audit_before);
+    assert_eq!(service.list_maintenance().await.unwrap(), rows_before);
+}
+
+#[tokio::test]
+async fn a_restart_compiles_the_stored_scopes_and_leaves_out_one_already_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fast-proxy.db");
+    let shop;
+    {
+        let service = start_at(&path).await;
+        shop = add_site(&service, "shop").await;
+        service
+            .set_maintenance(&ann(), MaintenanceTarget::Global, on("g", None))
+            .await
+            .unwrap();
+        service
+            .set_maintenance(
+                &ann(),
+                MaintenanceTarget::Subsystem(shop),
+                on("short", Some(now() + 80)),
+            )
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let restarted = start_at(&path).await;
+    let live = restarted.snapshot_holder().load();
+    assert!(live.maintenance.is_some(), "the open-ended scope is back");
+    assert!(
+        live.subsystems[&shop].maintenance.is_none(),
+        "the one that ended while the proxy was down is not compiled"
+    );
+    assert_eq!(
+        restarted.list_maintenance().await.unwrap().len(),
+        2,
+        "it stays stored until the sweeper clears it"
+    );
+    assert_eq!(restarted.sweep_expired_maintenance().await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn deleting_a_subsystem_drops_its_scope_from_the_snapshot_and_keeps_the_others() {
+    let service = memory().await;
+    let shop = add_site(&service, "shop").await;
+    add_site(&service, "blog").await;
+    service
+        .set_maintenance(&ann(), MaintenanceTarget::Subsystem(shop), on("x", None))
+        .await
+        .unwrap();
+    service
+        .set_maintenance(&ann(), MaintenanceTarget::Global, on("g", None))
+        .await
+        .unwrap();
+    service
+        .apply(
+            &ann(),
+            Audited::new("subsystem.delete", "shop"),
+            move |conn| {
+                subsystems::delete(conn, shop)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "deleted".into(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+    let live = service.snapshot_holder().load();
+    assert!(live.maintenance.is_some());
+    assert!(!live.subsystems.contains_key(&shop));
+}

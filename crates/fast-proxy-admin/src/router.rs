@@ -140,6 +140,29 @@ pub(crate) fn build(state: SharedState) -> (Router, Vec<RouteSpec>) {
         .post("/api/resolve", Needs(Read), api::resolve)
         .get("/api/status", Needs(Read), api::status)
         .post("/api/reload", Needs(Write), api::reload)
+        .get("/api/maintenance", Needs(Read), api::list_maintenance)
+        .put("/api/maintenance/global", Needs(Write), api::set_global)
+        .delete("/api/maintenance/global", Needs(Write), api::clear_global)
+        .put(
+            "/api/subsystems/{id}/maintenance",
+            Needs(Write),
+            api::set_subsystem,
+        )
+        .delete(
+            "/api/subsystems/{id}/maintenance",
+            Needs(Write),
+            api::clear_subsystem,
+        )
+        .put(
+            "/api/subsystems/{id}/routes/{route_id}/maintenance",
+            Needs(Write),
+            api::set_route,
+        )
+        .delete(
+            "/api/subsystems/{id}/routes/{route_id}/maintenance",
+            Needs(Write),
+            api::clear_route,
+        )
         .get("/ws", Ticket(Read), ws::handler)
         .finish();
     // Layers run outermost first: the access log sees every response, the

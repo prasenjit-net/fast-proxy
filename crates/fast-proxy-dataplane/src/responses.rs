@@ -96,12 +96,31 @@ pub fn accepts_json(headers: &HeaderMap) -> bool {
         .any(|value| value.to_ascii_lowercase().contains("application/json"))
 }
 
+/// How a client prefers a maintenance answer: JSON, else HTML when it accepts
+/// that, else plain text.
+pub fn response_format(headers: &HeaderMap) -> fast_proxy_routing::ResponseFormat {
+    use fast_proxy_routing::ResponseFormat;
+    if accepts_json(headers) {
+        return ResponseFormat::Json;
+    }
+    let wants_html = headers
+        .get_all(header::ACCEPT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.to_ascii_lowercase().contains("text/html"));
+    if wants_html {
+        ResponseFormat::Html
+    } else {
+        ResponseFormat::Text
+    }
+}
+
 /// Request ids are visible ASCII, so only `"` and `\` need escaping.
 fn json_escape(raw: &str) -> String {
     raw.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn boxed(body: String) -> ResponseBody {
+pub(crate) fn boxed(body: String) -> ResponseBody {
     Full::new(Bytes::from(body))
         .map_err(|never| match never {})
         .boxed()

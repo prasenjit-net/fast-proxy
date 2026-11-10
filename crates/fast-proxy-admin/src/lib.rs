@@ -28,6 +28,8 @@ mod api_tests;
 #[cfg(test)]
 mod audit_trail_tests;
 #[cfg(test)]
+mod maintenance_api_tests;
+#[cfg(test)]
 mod security_tests;
 #[cfg(test)]
 mod test_support;

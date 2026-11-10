@@ -46,6 +46,11 @@ impl<T> RouteTable<T> {
         self.by_prefix.is_empty()
     }
 
+    /// Every route, in no particular order.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.by_prefix.values()
+    }
+
     /// Finds the route with the longest prefix that matches `path` (the
     /// path only, without a query string). Paths not starting with `/`
     /// match nothing.

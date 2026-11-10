@@ -463,14 +463,14 @@ carry-over.
 
 ### Workstream R: Routing and compile
 
-- [ ] **R1 (M) Compile maintenance into the snapshot.** `Snapshot.maintenance` (global),
+- [x] **R1 (M) Compile maintenance into the snapshot.** `Snapshot.maintenance` (global),
   `CompiledSubsystem.maintenance` and `CompiledRoute.maintenance`, each an `Option` of a
   compiled form (the message and body prepared once, the bypass CIDRs parsed, the secret
   hash as bytes, the expiry); a row that references a missing subsystem or route is a
   compile error naming it.
   *Done when:* tests cover each scope, an inactive row being absent, a dangling reference
   being rejected, and unrelated edits keeping runtime state as before.
-- [ ] **R2 (S) The maintenance decision as one pure function.** `check(scope, now,
+- [x] **R2 (S) The maintenance decision as one pure function.** `check(scope, now,
   client_ip, header_value) -> Allow | Bypassed | Respond`, in `routing`, shared by the
   data plane and the admin resolver so they cannot disagree (and bypassable for the ACME
   challenge path in M4).
@@ -479,31 +479,47 @@ carry-over.
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (M) The maintenance check.** The pipeline step of 4.2: global and subsystem
+- [x] **D1 (M) The maintenance check.** The pipeline step of 4.2: global and subsystem
   after the 421 and redirect checks, route after matching, before endpoint selection;
   upgrade requests included; the effective client address from `trusted_proxies`; no
   clock read and no allocation when nothing is active.
   *Done when:* end-to-end tests cover each scope, precedence, an unknown host staying 404,
   the redirect still working, a WebSocket handshake getting 503, an established tunnel
   surviving, and no endpoint, retry budget or health state being touched.
-- [ ] **D2 (M) The response.** 503 with `Retry-After`, the built-in page (escaped),
+- [x] **D2 (M) The response.** 503 with `Retry-After`, the built-in page (escaped),
   JSON by `Accept`, a custom body and content type, `Cache-Control: no-store`, the
   request id, and the access-log field `maintenance=<scope>`.
   *Done when:* tests cover each format, the derived and the configured `Retry-After`, an
   HTML-escaped message containing markup, and the size limit of a custom body.
-- [ ] **D3 (M) Bypass in the data plane.** CIDR and secret-header bypass, the
+- [x] **D3 (M) Bypass in the data plane.** CIDR and secret-header bypass, the
   `X-Maintenance-Bypass` response header, and the counters.
   *Done when:* tests cover a bypass by address, by header, a forged `X-Forwarded-For`
   from an untrusted peer not bypassing, a trusted proxy's value being honoured, and a
   bypassed request reaching the upstream.
-- [ ] **D4 (S) Metrics and the error rate.** The three maintenance metrics of H14, and the
+- [x] **D4 (S) Metrics and the error rate.** The three maintenance metrics of H14, and the
   traffic sampler subtracting maintenance responses from the error rate.
   *Done when:* a scrape after known events asserts each metric, and a burst of
   maintenance responses leaves the dashboard error rate at zero.
-- [ ] **D5 (S) Health checks continue.** A test that a group in maintenance keeps being
+- [x] **D5 (S) Health checks continue.** A test that a group in maintenance keeps being
   probed and ejected or recovered, so it is ready on exit.
   *Done when:* the test shows endpoint state changing during maintenance and the group
   serving at once when maintenance ends.
+
+**PR6 notes (decisions made while building):**
+- `compile_all` takes `MaintenanceInputs` beside the `Config` (maintenance is not part of it); the old
+  `compile` and `compile_with_tls` keep working with none. This also completes CS3: a change vetoed by
+  compile leaves the maintenance rows, the snapshot and the audit log as they were (tested).
+- The pure decision is `CompiledMaintenance::check`, used by the data plane and by `POST /api/resolve`
+  (which gained an optional `clientIp`); `ResolveRequest` is now camelCase.
+- `TrustedProxies::effective_client` reads `X-Forwarded-For` from the right, skipping trusted hops, so
+  a client cannot write its way onto a bypass network.
+- The maintenance 503 is counted in `requests_total` (status class 5xx) like any 503, and also in
+  `fastproxy_maintenance_responses_total`; the traffic sampler subtracts the latter from the error rate.
+  The access log names the scope (`maintenance=<scope>`).
+- The sweeper runs every second (one read of a small table), so the stored state follows the clock
+  closely.
+- The redirect-before-maintenance and HSTS-with-maintenance cases are tested end to end on the real HTTP
+  and HTTPS listeners (`tests/tls_redirect.rs`).
 
 ### Workstream A: Admin API and security
 
@@ -537,7 +553,7 @@ carry-over.
   *Done when:* tests cover each filter, paging, the export, every action name appearing
   once for one change, denials and validation failures appearing, and no secret, key or
   PEM in any entry (a test uploads a certificate and a token and scans the log).
-- [ ] **A6 (M) Maintenance API.** The routes of 5.3 with validation (`bypass.cidrs`,
+- [x] **A6 (M) Maintenance API.** The routes of 5.3 with validation (`bypass.cidrs`,
   `retryAfterSecs`, `body`, `contentType`), the bypass secret returned once,
   `GET /api/maintenance`, the `maintenanceChanged` event and activity entry; the resolver
   (`POST /api/resolve`) reports whether the host would be in maintenance and why.

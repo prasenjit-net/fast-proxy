@@ -1,6 +1,6 @@
 # ADR 0018: maintenance mode
 
-Status: proposed (awaiting owner confirmation). Plan reference: M5 H9 to H14.
+Status: proposed (awaiting owner confirmation); built in M5 PR6. Plan reference: M5 H9 to H14.
 
 ## Context
 
@@ -51,6 +51,24 @@ that explains itself and ends by itself.
 | TTL | none in the API; the UI and CLI offer one by default |
 | `retry_after_secs` | derived from the TTL, else 120 |
 | Built-in page | message escaped, no custom body |
+
+## As built
+
+- The compiled form (`CompiledMaintenance`: parsed bypass rules, the prepared
+  HTML, text and JSON message, the settings) lives in the routing snapshot beside
+  the configuration, from `compile_all`, which takes the maintenance rows as an
+  extra input because maintenance is not part of `Config`. A scope already over
+  at compile time is left out; one that ends later is still judged by the clock on
+  each request. A scope naming a subsystem or route that does not exist is a
+  compile error.
+- The decision is `CompiledMaintenance::check(now, client, header_value)`; the
+  data plane and `POST /api/resolve` both call it.
+- The effective client is `TrustedProxies::effective_client`: the peer, or, when
+  the peer is trusted, the nearest `X-Forwarded-For` entry from the right that is
+  not itself trusted.
+- The traffic sampler subtracts the maintenance answers of a subsystem from its
+  5xx count, so the dashboard error rate stays at zero during planned maintenance.
+- The sweeper runs every second; each sweep is one read of the maintenance table.
 
 ## Consequences
 

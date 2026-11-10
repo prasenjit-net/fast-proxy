@@ -7,28 +7,36 @@
 mod compile;
 mod compile_error;
 mod compiled_https;
+mod compiled_maintenance;
 mod compiled_upstream;
 mod holder;
 mod host_table;
 mod lookup;
+mod maintenance_inputs;
 mod redirect;
 mod route_table;
 mod snapshot;
 mod tls_inputs;
 mod upstream_uri;
 
-pub use compile::{compile, compile_with_tls};
+pub use compile::{compile, compile_all, compile_with_tls};
 pub use compile_error::CompileError;
 pub use compiled_https::CompiledHttps;
+pub use compiled_maintenance::{
+    CompiledMaintenance, MaintenanceCheck, MaintenanceScope, RenderedBody, ResponseFormat,
+};
 pub use compiled_upstream::{CompiledEndpoint, CompiledUpstream};
 pub use holder::SnapshotHolder;
 pub use host_table::{dns_host, HostTable};
 pub use lookup::{Lookup, SniLookup};
+pub use maintenance_inputs::MaintenanceInputs;
 pub use redirect::redirect_target;
 pub use route_table::{RouteMatch, RouteTable};
 pub use snapshot::{CompiledRoute, CompiledSubsystem, Snapshot};
 pub use tls_inputs::TlsInputs;
 pub use upstream_uri::build_upstream_uri;
 
+#[cfg(test)]
+mod maintenance_compile_tests;
 #[cfg(test)]
 mod tls_compile_tests;

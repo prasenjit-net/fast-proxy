@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
 use crate::tls_metrics::{
     CacheResult, CertificateReading, HandshakeResult, SyncResult, TlsMetrics,
 };
@@ -94,6 +95,7 @@ pub struct Metrics {
     cancelled: IntCounterVec,
     upstream: UpstreamMetrics,
     tls: TlsMetrics,
+    maintenance: MaintenanceMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -132,9 +134,11 @@ impl Metrics {
             .expect(REGISTRATION);
         let upstream = UpstreamMetrics::new(&registry);
         let tls = TlsMetrics::new(&registry);
+        let maintenance = MaintenanceMetrics::new(&registry);
         Self {
             upstream,
             tls,
+            maintenance,
             cancelled: counter_vec(
                 &registry,
                 "fastproxy_requests_cancelled_total",
@@ -188,6 +192,23 @@ impl Metrics {
         self.duration
             .with_label_values(&[subsystem, route])
             .observe(elapsed.as_secs_f64());
+    }
+
+    /// Counts a request answered with the maintenance response by `scope`.
+    /// `subsystem` and `route` are the ones the request matched (`_none` for a
+    /// route not yet matched).
+    pub fn maintenance_response(&self, scope: &str, subsystem: &str, route: &str) {
+        self.maintenance.response(scope, subsystem, route);
+    }
+
+    /// Counts a request that passed through a maintenance scope by a bypass rule.
+    pub fn maintenance_bypass(&self, scope: &str, subsystem: &str) {
+        self.maintenance.bypass(scope, subsystem);
+    }
+
+    /// Sets which maintenance scopes are on; any not listed read as off.
+    pub fn set_maintenance_active(&self, readings: &[MaintenanceReading]) {
+        self.maintenance.set_active(readings);
     }
 
     /// Counts a request whose client closed the connection before the proxy
@@ -327,7 +348,21 @@ impl Metrics {
             active_requests: self.active_requests.get(),
             ..TrafficTotals::default()
         };
+        let mut maintenance_answers: HashMap<String, u64> = HashMap::new();
         for family in self.registry.gather() {
+            if family.name() == RESPONSES_METRIC {
+                for metric in family.get_metric() {
+                    let subsystem = metric
+                        .get_label()
+                        .iter()
+                        .find(|pair| pair.name() == "subsystem")
+                        .map(|pair| pair.value().to_string())
+                        .unwrap_or_default();
+                    *maintenance_answers.entry(subsystem).or_default() +=
+                        metric.get_counter().value() as u64;
+                }
+                continue;
+            }
             if family.name() != "fastproxy_requests_total" {
                 continue;
             }
@@ -346,6 +381,12 @@ impl Metrics {
                 if label("status_class") == "5xx" {
                     entry.errors += count;
                 }
+            }
+        }
+        // A maintenance answer is a 503 on purpose, so it is not an error.
+        for (subsystem, answers) in maintenance_answers {
+            if let Some(counts) = totals.per_subsystem.get_mut(&subsystem) {
+                counts.errors = counts.errors.saturating_sub(answers);
             }
         }
         totals
@@ -596,5 +637,66 @@ mod tests {
             classes,
             ["1xx", "2xx", "3xx", "4xx", "5xx", "other", "other"]
         );
+    }
+
+    #[test]
+    fn maintenance_answers_are_counted_and_do_not_count_as_errors() {
+        let metrics = Metrics::new();
+        let elapsed = Duration::from_millis(1);
+        for _ in 0..3 {
+            metrics.observe_request("shop", "_none", 503, elapsed);
+            metrics.maintenance_response("global", "shop", "_none");
+        }
+        metrics.observe_request("shop", "/", 502, elapsed);
+        metrics.observe_request("shop", "/", 200, elapsed);
+        let totals = metrics.traffic_totals();
+        let shop = totals.per_subsystem["shop"];
+        assert_eq!(shop.requests, 5);
+        assert_eq!(shop.errors, 1, "only the 502 is an error");
+    }
+
+    #[test]
+    fn a_burst_of_maintenance_answers_leaves_the_error_rate_at_zero() {
+        let metrics = Metrics::new();
+        for _ in 0..50 {
+            metrics.observe_request("shop", "_none", 503, Duration::from_millis(1));
+            metrics.maintenance_response("subsystem", "shop", "_none");
+        }
+        assert_eq!(metrics.traffic_totals().overall().errors, 0);
+    }
+
+    #[test]
+    fn the_maintenance_series_render_with_names_from_configuration_only() {
+        let metrics = Metrics::new();
+        metrics.maintenance_response("route", "shop", "/api");
+        metrics.maintenance_bypass("global", "shop");
+        metrics.set_maintenance_active(&[MaintenanceReading {
+            scope: "route",
+            subsystem: "shop".into(),
+            route: "/api".into(),
+        }]);
+        let text = metrics.render();
+        assert!(text.contains(
+            r#"fastproxy_maintenance_active{route="/api",scope="route",subsystem="shop"} 1"#
+        ));
+        assert!(text.contains(
+            r#"fastproxy_maintenance_responses_total{route="/api",scope="route",subsystem="shop"} 1"#
+        ));
+        assert!(text
+            .contains(r#"fastproxy_maintenance_bypass_total{scope="global",subsystem="shop"} 1"#));
+    }
+
+    #[test]
+    fn a_scope_that_ended_disappears_from_the_active_gauge() {
+        let metrics = Metrics::new();
+        let reading = MaintenanceReading {
+            scope: "global",
+            subsystem: "_none".into(),
+            route: "_none".into(),
+        };
+        metrics.set_maintenance_active(std::slice::from_ref(&reading));
+        assert!(metrics.render().contains("fastproxy_maintenance_active{"));
+        metrics.set_maintenance_active(&[]);
+        assert!(!metrics.render().contains("fastproxy_maintenance_active{"));
     }
 }

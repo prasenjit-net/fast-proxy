@@ -154,7 +154,7 @@ and the decision records in [docs/adr/](docs/adr/).
 | Active and passive health checking, safe retries, drain and disable | Done | M2 |
 | TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
 | ACME automatic certificates | Planned | M4 |
-| Maintenance mode, admin authentication, audit log | Planned | M5 |
+| Admin authentication, admin TLS, maintenance mode | Done so far | M5 (audit API, CLI and UI pages follow) |
 | Request sampling of unusual requests | Planned | M6 |
 | Rate and connection limits, hardening, 1.0 | Planned | M7 |
 
@@ -227,6 +227,10 @@ All routes except `/api/health` need `Authorization: Bearer <token>`; a missing 
 | GET, POST | `/api/tokens` | List / create (`name`, `role`, optional `expiresInDays`; the secret appears only in the creation response) |
 | DELETE | `/api/tokens/{id}` | Revoke at once (409 for the last usable admin token) |
 | POST | `/api/reload` | Re-read the database now and recompile; answers with the live version |
+| GET | `/api/maintenance` | Every maintenance scope that is on, with its target names, message, `secondsLeft`, who set it and its bypass rules (never a secret) |
+| PUT, DELETE | `/api/maintenance/global` | Turn maintenance on (replacing earlier settings) or off for the whole proxy |
+| PUT, DELETE | `/api/subsystems/{id}/maintenance` | The same for one subsystem |
+| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}/maintenance` | The same for one route |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
 | GET | `/api/status` | Listeners, database path, subsystem counts, upstream health summary, uptime, live config version |
 | GET | `/api/traffic` | Latest live traffic sample: requests/s, 5xx error rate, connections, per subsystem |
@@ -286,6 +290,51 @@ WebSocket events are JSON discriminated by `type`:
 { "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```
 
+## Maintenance mode
+
+Take a whole proxy, one subsystem or one route out of service **temporarily**,
+with an explanation, instead of disabling it (a disabled subsystem answers a bare
+503 with no expiry). A request in a maintenance scope gets a **503** with
+`Retry-After`, `Cache-Control: no-store` and a page (HTML, plain text or JSON,
+chosen by `Accept`); it **never reaches an upstream**, consumes no retry budget
+and touches no endpoint's health. Unknown hosts are still 404, plain HTTP still
+redirects to HTTPS, and a WebSocket handshake gets the 503 (connections already
+upgraded stay open). Health checks keep running, so the group is ready the moment
+maintenance ends, and the admin plane is never in maintenance.
+
+```sh
+# the whole proxy for 30 minutes, with a custom message and a way in for you
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"Upgrading the database","ttlSecs":1800,
+       "bypass":{"cidrs":["10.0.0.0/8"],"header":"X-Maintenance-Pass"}}' \
+  http://127.0.0.1:9000/api/maintenance/global
+# -> {"data":{...},"version":N,"bypassSecret":"<shown once>"}
+
+curl -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9000/api/maintenance/global
+```
+
+- **Scopes** are global, subsystem and route; any applicable scope that is on and
+  does not let the request through answers it (widest first). A bypass belongs to
+  its scope: passing a route's scope does not pass a subsystem-wide one.
+- **`ttlSecs`** (up to 30 days) ends it by itself: the clock is checked on every
+  request, so the end is exact, and a sweeper then clears the stored row. A
+  restart during maintenance stays in maintenance.
+- **Bypass** lets chosen source networks (`bypass.cidrs`) or requests carrying a
+  secret header (`bypass.header`; the secret is generated and returned once if
+  you do not give one of at least 16 characters) through, so you can verify a
+  deploy before reopening. A request that passed carries
+  `X-Maintenance-Bypass: <scope>`. The source address is the peer's, or the
+  client behind a `trusted_proxies` peer, never a forged `X-Forwarded-For`.
+- **`message`**, `body` and `contentType` (`text/html`, `text/plain`,
+  `application/json`, up to 16 KiB) shape the answer; the built-in page escapes
+  the message. `retryAfterSecs` overrides the value derived from the TTL (120 s
+  when there is none).
+- A **rollback never changes maintenance**, and maintenance is not part of the
+  stored configuration. `POST /api/resolve` (optionally with `clientIp`) shows
+  which scopes apply to a host and what each would do.
+- To take a *backend* out of rotation use an endpoint's `draining`/`disabled`
+  state instead; maintenance is for a *site*.
+
 ## TLS
 
 TLS is **off by default** (no listener, no cost). Switch it on for the process with
@@ -337,6 +386,10 @@ read, and never serves the ones it cannot.
   `fastproxy_endpoint_ejections_total` and `fastproxy_health_checks_total`; per
   group `fastproxy_upstream_retries_total`, `fastproxy_retry_budget_exhausted_total`
   and `fastproxy_upstream_panic_total`; and `fastproxy_requests_cancelled_total`.
+  Maintenance adds `fastproxy_maintenance_active{scope,subsystem,route}` (1 while
+  on), `fastproxy_maintenance_responses_total{scope,subsystem,route}` and
+  `fastproxy_maintenance_bypass_total{scope,subsystem}`; the dashboard's error
+  rate does not count maintenance answers, which are intended.
   TLS adds `fastproxy_tls_handshakes_total` (by listener, result and version),
   `fastproxy_tls_cert_expiry_seconds{cert,source}` and
   `fastproxy_tls_cert_unreadable{cert}` (labels are certificate names you chose),

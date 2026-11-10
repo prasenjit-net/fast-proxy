@@ -101,7 +101,7 @@ pub struct Harness {
 impl Harness {
     /// Serves `config` with a custom forwarder (no real upstream).
     pub async fn start<F: Forward>(config: Config, forwarder: F) -> Self {
-        Self::start_full(config, |_, _| forwarder, None).await
+        Self::start_full(config, |_, _| forwarder, None, TrustedProxies::default()).await
     }
 
     /// Serves `config` through the real upstream client.
@@ -117,10 +117,12 @@ impl Harness {
     ) -> Self {
         let entries: Vec<String> = trusted_proxies.iter().map(ToString::to_string).collect();
         let trusted = TrustedProxies::parse(&entries).unwrap();
+        let for_pipeline = trusted.clone();
         Self::start_full(
             config,
             |metrics, events| UpstreamClient::new(trusted, metrics, events),
             log_path,
+            for_pipeline,
         )
         .await
     }
@@ -131,6 +133,7 @@ impl Harness {
         config: Config,
         make_forwarder: impl FnOnce(Arc<Metrics>, EndpointEvents) -> F,
         log_path: Option<&Path>,
+        trusted: TrustedProxies,
     ) -> Self {
         let holder = Arc::new(SnapshotHolder::new());
         holder.swap(compile(1, &config, &RuntimeRegistry::new()).unwrap());
@@ -147,11 +150,14 @@ impl Harness {
             metrics: metrics.clone(),
             access_log: access_log.clone(),
         };
-        let pipeline = Arc::new(RequestPipeline::new(
-            holder.clone(),
-            make_forwarder(metrics.clone(), events.clone()),
-            observability,
-        ));
+        let pipeline = Arc::new(
+            RequestPipeline::new(
+                holder.clone(),
+                make_forwarder(metrics.clone(), events.clone()),
+                observability,
+            )
+            .with_trusted_proxies(trusted),
+        );
         let plane = DataPlane::start(bound, pipeline, shutdown.clone());
         let addr = plane.local_addrs()[0].1;
         Self {

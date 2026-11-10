@@ -30,7 +30,7 @@ use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig
 /// The environment variable that seeds the first admin token (for containers).
 const BOOTSTRAP_TOKEN_VARIABLE: &str = "FAST_PROXY_BOOTSTRAP_TOKEN";
 /// How often expired maintenance scopes are cleared.
-const MAINTENANCE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const MAINTENANCE_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 /// How much audit history is kept until `[admin.audit]` settings exist.
 const AUDIT_RETENTION: AuditRetention = AuditRetention {
     max_age: Duration::from_secs(90 * 86_400),
@@ -196,13 +196,14 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let pipeline = Arc::new(
         RequestPipeline::new(
             config_service.snapshot_holder(),
-            UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
+            UpstreamClient::new(trusted_proxies.clone(), metrics.clone(), endpoint_events),
             Observability {
                 metrics,
                 access_log: access_log.clone(),
             },
         )
-        .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref())),
+        .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref()))
+        .with_trusted_proxies(trusted_proxies),
     );
     let plane = DataPlane::start_with_tls(bound, https, pipeline, data_stop.clone());
 

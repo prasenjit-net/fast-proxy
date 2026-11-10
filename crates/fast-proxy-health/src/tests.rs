@@ -358,3 +358,70 @@ async fn a_group_that_does_not_verify_upstream_certificates_is_marked_in_the_met
     );
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn a_group_in_maintenance_keeps_being_probed_so_it_is_ready_when_maintenance_ends() {
+    use fast_proxy_balancing::RuntimeRegistry;
+    use fast_proxy_model::{BypassRules, MaintenanceSettings, MaintenanceTarget};
+    use fast_proxy_routing::{compile_all, MaintenanceInputs, TlsInputs};
+
+    let backend = Backend::start().await;
+    let config = config_for(fast_check("/"), &[backend.addr]);
+    let maintenance = |on: bool| MaintenanceInputs {
+        scopes: if on {
+            vec![(
+                MaintenanceTarget::Global,
+                MaintenanceSettings {
+                    message: "deploying".into(),
+                    body: None,
+                    retry_after_secs: None,
+                    bypass: BypassRules::default(),
+                    expires_at_ms: None,
+                    set_by: "ops".into(),
+                    set_at_ms: 0,
+                },
+            )]
+        } else {
+            vec![]
+        },
+        now_ms: 0,
+    };
+    let compile = |version, previous: &RuntimeRegistry, on| {
+        compile_all(
+            version,
+            &config,
+            previous,
+            &TlsInputs::off(),
+            &maintenance(on),
+        )
+        .unwrap()
+    };
+    let holder = Arc::new(SnapshotHolder::new());
+    holder.swap(compile(1, &RuntimeRegistry::new(), true));
+    assert!(holder.load().maintenance.is_some());
+    let runtime = only_runtime(&holder.load());
+    let (_changes_tx, changes) = broadcast::channel::<ConfigChanged>(4);
+    let shutdown = CancellationToken::new();
+    let engine = HealthEngine::new(
+        holder.clone(),
+        Arc::new(Metrics::new()),
+        EndpointEvents::new(),
+    );
+    tokio::spawn(engine.run(changes, shutdown.clone()));
+
+    // The probes go on while everything is in maintenance: a failing backend
+    // is noticed, and a recovered one is noticed too.
+    backend.kill();
+    assert!(eventually(5, || !runtime.is_active_healthy()).await);
+    backend.revive().await;
+    assert!(eventually(5, || runtime.is_active_healthy()).await);
+
+    // Maintenance ends: the same runtime state carries into the new snapshot,
+    // so the group serves at once, with no warm-up.
+    holder.swap(compile(2, &holder.load().runtime_registry(), false));
+    assert!(holder.load().maintenance.is_none());
+    let after = only_runtime(&holder.load());
+    assert!(Arc::ptr_eq(&runtime, &after));
+    assert!(after.is_active_healthy());
+    shutdown.cancel();
+}

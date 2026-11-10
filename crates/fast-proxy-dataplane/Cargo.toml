@@ -27,6 +27,7 @@ tokio-util = "0.7"
 tracing = { workspace = true }
 
 [dev-dependencies]
+fast-proxy-auth = { path = "../fast-proxy-auth" }
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 http-body-util = { workspace = true, features = ["channel"] }
 futures-util = "0.3"

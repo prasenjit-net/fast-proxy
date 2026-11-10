@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_model::{MaintenanceSettings, MaintenanceTarget};
+use fast_proxy_routing::MaintenanceInputs;
 use fast_proxy_store::repository::maintenance::{self, MaintenanceRow};
 use fast_proxy_store::{Mutation, StoreError};
 use tokio_util::sync::CancellationToken;
@@ -142,6 +143,19 @@ impl ConfigService {
             }
         }
     }
+}
+
+/// The stored scopes as the compile step takes them, with the time they are
+/// compiled at.
+pub(crate) fn stored_inputs(
+    conn: &fast_proxy_store::Connection,
+    now_ms: i64,
+) -> Result<MaintenanceInputs, StoreError> {
+    let scopes = maintenance::list(conn)?
+        .into_iter()
+        .map(|row| (row.target, row.settings))
+        .collect();
+    Ok(MaintenanceInputs { scopes, now_ms })
 }
 
 fn expired_targets(rows: &[MaintenanceRow], now_ms: i64) -> Vec<MaintenanceTarget> {

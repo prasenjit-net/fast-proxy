@@ -261,3 +261,45 @@ async fn the_redirect_and_hsts_follow_live_edits() {
     configure(&stack, &shop, RedirectMode::Off, Hsts::default()).await;
     assert_eq!(plain(&stack, "shop.example.com", "/").await.status, 200);
 }
+
+#[tokio::test]
+async fn maintenance_is_served_on_the_same_terms_as_the_site_redirect_first_hsts_with_it() {
+    use fast_proxy_model::{BypassRules, MaintenanceSettings, MaintenanceTarget};
+
+    let stack = Stack::start(Options::default()).await;
+    let ca = TestCa::new("ca");
+    let shop = shop(&stack, &ca).await;
+    configure(&stack, &shop, RedirectMode::Permanent308, hsts(false)).await;
+    stack
+        .service
+        .set_maintenance(
+            &ChangeContext::system(),
+            MaintenanceTarget::Global,
+            MaintenanceSettings {
+                message: "deploying".into(),
+                body: None,
+                retry_after_secs: None,
+                bypass: BypassRules::default(),
+                expires_at_ms: None,
+                set_by: String::new(),
+                set_at_ms: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Plain HTTP is still sent to HTTPS first: the redirect is not hidden by maintenance.
+    let plain = plain(&stack, "shop.example.com", "/cart").await;
+    assert_eq!(plain.status, 308);
+    assert!(plain
+        .header("location")
+        .unwrap()
+        .starts_with("https://shop.example.com"));
+
+    // On HTTPS the site answers with the maintenance page, and HSTS still goes with it.
+    let secure = secure(&stack, &ca, "shop.example.com").await;
+    assert_eq!(secure.status, 503);
+    assert!(secure.text.contains("deploying"));
+    assert!(secure.header("retry-after").is_some());
+    assert!(secure.header("strict-transport-security").is_some());
+}
