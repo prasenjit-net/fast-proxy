@@ -1,10 +1,11 @@
+use std::collections::HashSet;
+
 use fast_proxy_model::Config;
 use rusqlite::{params, Connection};
 
 use super::history;
-use crate::clock::now_ms;
-use crate::inputs::{EndpointFields, UpstreamFields};
-use crate::repository::{endpoints, upstreams};
+use crate::inputs::{EndpointFields, SubsystemFields, UpstreamFields};
+use crate::repository::{ca_bundles, certificates, endpoints, subsystems, upstreams};
 use crate::StoreError;
 
 fn millis(duration: std::time::Duration) -> i64 {
@@ -13,22 +14,22 @@ fn millis(duration: std::time::Duration) -> i64 {
 
 /// Replaces the live tables with the configuration stored in `version`,
 /// keeping all ids. The caller records the result as a new revision.
+///
+/// Certificate material is never touched. A revision that references a
+/// certificate or CA bundle that no longer exists is refused with a message
+/// naming it, and nothing changes.
 pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
     let config = history::get(conn, version)?.config;
+    ensure_references_exist(conn, version, &config)?;
     conn.execute("DELETE FROM subsystem", [])?;
-    let now = now_ms();
     for subsystem in &config.subsystems {
-        conn.execute(
-            "INSERT INTO subsystem (id, name, enabled, description, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![
-                subsystem.id.0,
-                subsystem.name.as_str(),
-                subsystem.enabled,
-                subsystem.description,
-                now
-            ],
-        )?;
+        let fields = SubsystemFields {
+            name: subsystem.name.clone(),
+            enabled: subsystem.enabled,
+            description: subsystem.description.clone(),
+            https: subsystem.https,
+        };
+        subsystems::insert(conn, Some(subsystem.id), &fields)?;
         for host in &subsystem.hosts {
             conn.execute(
                 "INSERT INTO subsystem_host (subsystem_id, pattern) VALUES (?1, ?2)",
@@ -76,4 +77,38 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
         }
     }
     Ok(config)
+}
+
+/// Fails with a `Conflict` naming the first certificate or CA bundle that
+/// `config` references and the database no longer holds. A certificate counts
+/// as present only when both its id and the name recorded in the revision match,
+/// because SQLite may reuse an id.
+fn ensure_references_exist(
+    conn: &Connection,
+    version: u64,
+    config: &Config,
+) -> Result<(), StoreError> {
+    let recorded = history::referenced_certificates(conn, version)?;
+    let current = certificates::names(conn)?;
+    for (id, name) in recorded {
+        if current.get(&id.0) != Some(&name) {
+            return Err(StoreError::Conflict(format!(
+                "cannot roll back: certificate \"{name}\" no longer exists; upload it again first"
+            )));
+        }
+    }
+    let bundles: HashSet<String> = ca_bundles::ids_by_name(conn)?.into_keys().collect();
+    for group in config
+        .subsystems
+        .iter()
+        .flat_map(|subsystem| &subsystem.upstream_groups)
+    {
+        let ca = &group.policy.tls.ca;
+        if !ca.is_empty() && !bundles.contains(ca) {
+            return Err(StoreError::Conflict(format!(
+                "cannot roll back: CA bundle \"{ca}\" no longer exists; upload it again first"
+            )));
+        }
+    }
+    Ok(())
 }

@@ -1,11 +1,16 @@
 import type {
+  CaBundle,
+  Certificate,
   Endpoint,
   EndpointStatus,
   Envelope,
+  HttpsSettings,
   RevisionPage,
   Route,
   SubsystemDetail,
+  StatusTls,
   SubsystemSummary,
+  TlsStatus,
   Upstream,
   UpstreamStatus,
 } from "../lib/types";
@@ -42,6 +47,7 @@ export const upstream = (overrides: Partial<Upstream> = {}): Upstream => ({
     maxEjectionPercent: 50,
   },
   retryBudget: { percent: 20, minPerSec: 10 },
+  tls: { enabled: false, verify: true, serverName: "", ca: "" },
   endpoints: [endpoint()],
   ...overrides,
 });
@@ -85,6 +91,64 @@ export const route = (overrides: Partial<Route> = {}): Route => ({
   ...overrides,
 });
 
+/** HTTPS off, with the server's defaults. */
+export function httpsSettings(overrides: Partial<HttpsSettings> = {}): HttpsSettings {
+  return {
+    enabled: false,
+    certificateId: null,
+    redirect: "off",
+    hsts: { enabled: false, maxAgeSecs: 31_536_000, includeSubdomains: false },
+    effective: false,
+    certificate: null,
+    ...overrides,
+  };
+}
+
+export const certificate = (overrides: Partial<Certificate> = {}): Certificate => ({
+  id: 3,
+  name: "shop",
+  source: "uploaded",
+  names: ["shop.example.com"],
+  subject: "CN=shop.example.com",
+  issuer: "CN=Test CA",
+  notBeforeMs: NOW - 86_400_000,
+  notAfterMs: NOW + 90 * 86_400_000,
+  secondsLeft: 90 * 86_400,
+  state: "ok",
+  fingerprint: "ab".repeat(32),
+  usedBy: [],
+  updatedAtMs: NOW,
+  ...overrides,
+});
+
+export const caBundle = (overrides: Partial<CaBundle> = {}): CaBundle => ({
+  id: 2,
+  name: "corp",
+  certCount: 1,
+  certificates: [{ subject: "CN=Corp Root", notAfterMs: NOW + 365 * 86_400_000 }],
+  updatedAtMs: NOW,
+  ...overrides,
+});
+
+export const tlsStatus = (overrides: Partial<TlsStatus> = {}): TlsStatus => ({
+  enabled: true,
+  listen: "0.0.0.0:8443",
+  http2: true,
+  minVersion: "1.2",
+  vault: "ok",
+  ...overrides,
+});
+
+export const statusTls = (overrides: Partial<StatusTls> = {}): StatusTls => ({
+  enabled: true,
+  listen: "0.0.0.0:8443",
+  vault: "ok",
+  certificates: 0,
+  unreadable: 0,
+  soonestExpiry: null,
+  ...overrides,
+});
+
 /** A subsystem with one host, one upstream, and two routes (in match order). */
 export const subsystemDetail = (overrides: Partial<SubsystemDetail> = {}): SubsystemDetail => ({
   id: 1,
@@ -93,6 +157,7 @@ export const subsystemDetail = (overrides: Partial<SubsystemDetail> = {}): Subsy
   description: "The shop",
   createdAtMs: NOW,
   updatedAtMs: NOW,
+  https: httpsSettings(),
   hosts: [{ id: 10, pattern: "shop.example.com" }],
   upstreams: [upstream()],
   routes: [

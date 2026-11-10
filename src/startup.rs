@@ -4,20 +4,22 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo};
-use fast_proxy_config_service::{ConfigService, StartError};
+use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo, TlsInfo};
+use fast_proxy_config_service::{ConfigService, StartError, TlsSettings};
 use fast_proxy_dataplane::{
-    bind, BindError, DataPlane, ListenerSpec, Observability, RequestPipeline, TrustedProxies,
-    TrustedProxyError, UpstreamClient,
+    bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
+    RequestPipeline, TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError,
+    UpstreamClient,
 };
 use fast_proxy_health::{run_status_gauges, HealthEngine};
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
+use fast_proxy_tls::{MinTlsVersion, ServerTlsPolicy};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, TlsConfig};
 
 /// Anything that stops the proxy from starting or keeps it from serving.
 #[derive(Debug, Error)]
@@ -30,6 +32,8 @@ pub enum StartupError {
     StoredConfig(#[from] StartError),
     #[error(transparent)]
     DataPlaneBind(#[from] BindError),
+    #[error(transparent)]
+    TlsPlane(#[from] TlsPlaneError),
     #[error("cannot bind the admin plane on {addr}: {source}")]
     AdminBind {
         addr: SocketAddr,
@@ -49,7 +53,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let store = Store::open(&database)?;
     // Both planes report to the same metrics and the same access log.
     let metrics = Arc::new(Metrics::new());
-    let config_service = Arc::new(ConfigService::start_with_metrics(store, metrics.clone()).await?);
+    let config_service = Arc::new(
+        ConfigService::start_with_tls(store, metrics.clone(), tls_settings(&config)).await?,
+    );
 
     let specs: Vec<ListenerSpec> = data_plane
         .listener
@@ -60,6 +66,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         })
         .collect();
     let bound = bind(&specs).await?;
+    let https = bind_https(&config, &config_service, &metrics).await?;
     let admin_addr = config.admin.listen;
     let admin_listener =
         TcpListener::bind(admin_addr)
@@ -73,12 +80,24 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let runtime = RuntimeInfo {
         listeners: bound
             .iter()
+            .chain(https.iter().map(|plane| plane.listener()))
             .map(|listener| ListenerInfo {
                 name: listener.name.clone(),
                 addr: listener.local_addr(),
             })
             .collect(),
         database_path: database.display().to_string(),
+        tls: TlsInfo {
+            enabled: config.data_plane.tls.enabled,
+            listen: https.as_ref().map(|plane| plane.listener().local_addr()),
+            http2: config.data_plane.tls.http2,
+            redirect_port: redirect_port(&config.data_plane.tls, https.as_ref()),
+            min_version: match config.data_plane.tls.min_version {
+                MinTlsVersion::V1_2 => "1.2",
+                MinTlsVersion::V1_3 => "1.3",
+            }
+            .to_string(),
+        },
     };
     // Shutdown happens in two stages: the signal stops the data plane, and
     // only once it has drained does the admin plane stop (so the admin API
@@ -108,24 +127,39 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         endpoint_events.clone(),
     );
     tokio::spawn(health.run(config_service.subscribe(), data_stop.clone()));
+    // Changes written by another instance sharing the database are picked up
+    // here; a zero interval turns the sync off.
+    tokio::spawn(
+        config_service
+            .clone()
+            .run_sync(config.data_plane.config_poll_interval, data_stop.clone()),
+    );
     tokio::spawn(run_status_gauges(
         config_service.snapshot_holder(),
         metrics.clone(),
         data_stop.clone(),
     ));
 
-    let pipeline = Arc::new(RequestPipeline::new(
-        config_service.snapshot_holder(),
-        UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
-        Observability {
-            metrics,
-            access_log: access_log.clone(),
-        },
-    ));
-    let plane = DataPlane::start(bound, pipeline, data_stop.clone());
+    let pipeline = Arc::new(
+        RequestPipeline::new(
+            config_service.snapshot_holder(),
+            UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
+            Observability {
+                metrics,
+                access_log: access_log.clone(),
+            },
+        )
+        .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref())),
+    );
+    let plane = DataPlane::start_with_tls(bound, https, pipeline, data_stop.clone());
 
     for (name, addr) in plane.local_addrs() {
-        tracing::info!("data plane listener \"{name}\" serving on http://{addr}");
+        let scheme = if name == HTTPS_LISTENER {
+            "https"
+        } else {
+            "http"
+        };
+        tracing::info!("data plane listener \"{name}\" serving on {scheme}://{addr}");
     }
     tracing::info!(
         "admin plane serving on http://{admin_addr}, database {}, config version {}",
@@ -166,6 +200,65 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
+}
+
+/// The port a redirect to HTTPS names: `public_port` when set (NAT, containers),
+/// else the port the HTTPS listener is bound to, else the default 443.
+fn redirect_port(tls: &TlsConfig, https: Option<&TlsPlane>) -> u16 {
+    tls.public_port
+        .or_else(|| https.map(|plane| plane.listener().local_addr().port()))
+        .unwrap_or(443)
+}
+
+/// The name of the HTTPS listener in logs, metrics and the admin runtime view.
+const HTTPS_LISTENER: &str = "https";
+
+/// What the config service needs to know about TLS: the switch, and where the
+/// master key comes from (`FAST_PROXY_MASTER_KEY` wins over the file).
+fn tls_settings(config: &AppConfig) -> TlsSettings {
+    TlsSettings {
+        enabled: config.data_plane.tls.enabled,
+        master_key_file: Some(config.data_plane.master_key_path()),
+        env_master_key: std::env::var("FAST_PROXY_MASTER_KEY").ok(),
+    }
+}
+
+/// Binds the HTTPS listener and prepares its handshakes when TLS is on.
+async fn bind_https(
+    config: &AppConfig,
+    config_service: &ConfigService,
+    metrics: &Arc<Metrics>,
+) -> Result<Option<TlsPlane>, StartupError> {
+    let tls = &config.data_plane.tls;
+    if !tls.enabled {
+        return Ok(None);
+    }
+    let spec = ListenerSpec {
+        name: HTTPS_LISTENER.into(),
+        addr: tls.listen,
+    };
+    let listener: BoundListener = bind(&[spec]).await?.remove(0);
+    let plane = TlsPlane::new(
+        listener,
+        config_service.snapshot_holder(),
+        TlsPlaneSettings {
+            policy: ServerTlsPolicy {
+                min_version: tls.min_version,
+                http2: tls.http2,
+            },
+            handshake_timeout: tls.handshake_timeout,
+            max_concurrent_handshakes: tls.max_concurrent_handshakes,
+            reject_unknown_sni: tls.reject_unknown_sni,
+            http2: Http2Limits {
+                max_concurrent_streams: tls.http2_max_concurrent_streams,
+                max_header_list_size: tls.http2_max_header_list_size,
+                keep_alive_interval: tls.http2_keep_alive_interval,
+                keep_alive_timeout: tls.http2_keep_alive_timeout,
+            },
+        },
+        metrics.clone(),
+    )?;
+    Ok(Some(plane))
 }
 
 async fn cancel_on_ctrl_c(shutdown: CancellationToken) {

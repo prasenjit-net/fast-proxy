@@ -2,6 +2,10 @@
 // (see http.ts); types live in types.ts and are re-exported from here.
 import { request, send } from "./http";
 import type {
+  CaBundle,
+  Certificate,
+  CertificateChange,
+  CertificateUpload,
   Envelope,
   Host,
   Resolution,
@@ -14,6 +18,7 @@ import type {
   EndpointState,
   Endpoint,
   Status,
+  TlsStatus,
   SubsystemDetail,
   SubsystemInput,
   SubsystemSummary,
@@ -82,6 +87,27 @@ export const api = {
     request<Envelope<Route>>(`${subsystem(id)}/routes/${routeId}`, send("PUT", input)),
   deleteRoute: (id: number, routeId: number) =>
     request<VersionOnly>(`${subsystem(id)}/routes/${routeId}`, send("DELETE")),
+
+  // certificates (private keys are write-only: no response carries one)
+  certificates: () => request<Envelope<Certificate[]>>("/api/certificates"),
+  uploadCertificate: (input: CertificateUpload) =>
+    request<Envelope<Certificate>>("/api/certificates", send("POST", input)),
+  generateSelfSigned: (name: string, names: string[]) =>
+    request<Envelope<Certificate>>("/api/certificates/self-signed", send("POST", { name, names })),
+  changeCertificate: (id: number, change: CertificateChange) =>
+    request<Envelope<Certificate>>(`/api/certificates/${id}`, send("PUT", change)),
+  deleteCertificate: (id: number) => request<VersionOnly>(`/api/certificates/${id}`, send("DELETE")),
+  uploadSubsystemCertificate: (id: number, input: CertificateUpload) =>
+    request<Envelope<Certificate>>(`${subsystem(id)}/certificate`, send("POST", input)),
+  detachSubsystemCertificate: (id: number) =>
+    request<VersionOnly>(`${subsystem(id)}/certificate`, send("DELETE")),
+
+  // CA bundles and the process TLS state
+  caBundles: () => request<Envelope<CaBundle[]>>("/api/ca-bundles"),
+  uploadCaBundle: (name: string, pem: string) =>
+    request<Envelope<CaBundle>>("/api/ca-bundles", send("POST", { name, pem })),
+  deleteCaBundle: (id: number) => request<VersionOnly>(`/api/ca-bundles/${id}`, send("DELETE")),
+  tls: () => request<Envelope<TlsStatus>>("/api/tls"),
 
   // revisions
   revisions: (before?: number | null) =>

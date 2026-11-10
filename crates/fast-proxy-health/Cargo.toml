@@ -11,9 +11,13 @@ fast-proxy-config-service = { path = "../fast-proxy-config-service" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
+fast-proxy-tls = { path = "../fast-proxy-tls" }
 rand = "0.8"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio-util = "0.7"
 tracing = { workspace = true }
 
 [dev-dependencies]
+fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }

@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use fast_proxy_config_service::SubsystemEdit;
 use fast_proxy_model::{SubsystemId, SubsystemName};
 use fast_proxy_store::repository::subsystems;
 use fast_proxy_store::{Mutation, SubsystemFields};
@@ -8,6 +9,7 @@ use serde::Deserialize;
 
 use super::detail::{load_detail, subsystem_name, SubsystemDetail, SubsystemSummary};
 use super::envelope::{Envelope, VersionOnly};
+use super::https_dto::HttpsRequest;
 use super::input::FieldErrors;
 use super::json::ApiJson;
 use crate::state::SharedState;
@@ -24,6 +26,8 @@ pub struct SubsystemRequest {
     enabled: bool,
     #[serde(default)]
     description: String,
+    /// HTTPS settings; on an update, omitting the object keeps the stored ones.
+    https: Option<HttpsRequest>,
 }
 
 fn enabled_by_default() -> bool {
@@ -31,20 +35,24 @@ fn enabled_by_default() -> bool {
 }
 
 impl SubsystemRequest {
-    fn into_fields(self) -> AppResult<SubsystemFields> {
+    /// Validates the request: the edit to apply, with `https` left `None` when
+    /// the request did not carry the object.
+    fn into_edit(self) -> AppResult<SubsystemEdit> {
         let mut errors = FieldErrors::default();
         let name = errors.check(SubsystemName::parse(&self.name));
         if self.description.chars().count() > MAX_DESCRIPTION_LEN {
             errors.add("description", "must be at most 500 characters");
         }
+        let https = self.https.map(|request| request.into_policy(&mut errors));
         errors.finish()?;
         let Some(name) = name else {
             unreachable!("finish() fails when the name is invalid");
         };
-        Ok(SubsystemFields {
+        Ok(SubsystemEdit {
             name,
             enabled: self.enabled,
             description: self.description,
+            https: https.flatten(),
         })
     }
 }
@@ -85,7 +93,13 @@ pub async fn create_subsystem(
     State(state): State<SharedState>,
     ApiJson(body): ApiJson<SubsystemRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<SubsystemDetail>>)> {
-    let fields = body.into_fields()?;
+    let edit = body.into_edit()?;
+    let fields = SubsystemFields {
+        name: edit.name,
+        enabled: edit.enabled,
+        description: edit.description,
+        https: edit.https.unwrap_or_default(),
+    };
     let name = fields.name.as_str().to_string();
     let applied = state
         .config
@@ -116,17 +130,7 @@ pub async fn update_subsystem(
     ApiJson(body): ApiJson<SubsystemRequest>,
 ) -> AppResult<Json<Envelope<SubsystemDetail>>> {
     let id = SubsystemId(id);
-    let fields = body.into_fields()?;
-    let applied = state
-        .config
-        .apply(move |conn| {
-            subsystems::update(conn, id, &fields)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("subsystem updated: {}", fields.name.as_str()),
-            })
-        })
-        .await?;
+    let applied = state.config.update_subsystem(id, body.into_edit()?).await?;
     let mut detail = load_detail(&state.config, id).await?;
     detail.version = applied.version;
     Ok(Json(detail))

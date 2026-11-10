@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use fast_proxy_model::{
-    EndpointAddr, EndpointState, GroupPolicy, RetryPolicy, RoutePrefix, SubsystemName,
+    EndpointAddr, EndpointState, GroupPolicy, HttpsPolicy, RetryPolicy, RoutePrefix, SubsystemName,
     UpstreamGroupId, UpstreamPrefix,
 };
 
@@ -11,6 +11,7 @@ pub struct SubsystemFields {
     pub name: SubsystemName,
     pub enabled: bool,
     pub description: String,
+    pub https: HttpsPolicy,
 }
 
 /// The editable settings of an upstream group (its endpoints are separate).

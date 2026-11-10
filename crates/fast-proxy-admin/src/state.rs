@@ -68,6 +68,21 @@ impl AdminState {
         let _ = self.events.send(event);
     }
 
+    /// Tells every client a certificate changed, with a matching activity entry.
+    /// Only the certificate's name is sent, never key material.
+    pub fn certificate_changed(&self, change: &'static str, certificate: &str) {
+        let timestamp_ms = chrono::Utc::now().timestamp_millis();
+        self.broadcast(Event::CertState {
+            change,
+            certificate: certificate.to_string(),
+            timestamp_ms,
+        });
+        self.activity(
+            "certificate",
+            format!("certificate {change}: {certificate}"),
+        );
+    }
+
     /// Push a human-readable entry to every client's activity feed.
     pub fn activity(&self, kind: &str, message: impl Into<String>) {
         self.broadcast(Event::Activity {

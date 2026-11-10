@@ -42,6 +42,10 @@ export interface PolicyValues {
   maxEjectionPercent: string;
   retryPercent: string;
   retryMinPerSec: string;
+  tlsEnabled: boolean;
+  tlsVerify: boolean;
+  tlsServerName: string;
+  tlsCa: string;
 }
 
 /** The server's defaults, so a new group works with no further input. */
@@ -65,6 +69,10 @@ export function defaultPolicyValues(): PolicyValues {
     maxEjectionPercent: "50",
     retryPercent: "20",
     retryMinPerSec: "10",
+    tlsEnabled: false,
+    tlsVerify: true,
+    tlsServerName: "",
+    tlsCa: "",
   };
 }
 
@@ -90,6 +98,10 @@ export function policyValuesFrom(policy: UpstreamPolicy): PolicyValues {
     maxEjectionPercent: String(policy.passive.maxEjectionPercent),
     retryPercent: String(policy.retryBudget.percent),
     retryMinPerSec: String(policy.retryBudget.minPerSec),
+    tlsEnabled: policy.tls.enabled,
+    tlsVerify: policy.tls.verify,
+    tlsServerName: policy.tls.serverName,
+    tlsCa: policy.tls.ca,
   };
 }
 
@@ -171,6 +183,22 @@ function validatePassive(values: PolicyValues, errors: FieldErrors): UpstreamPol
   };
 }
 
+const SERVER_NAME = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+/** The upstream TLS part: an override name, when given, must be a plain DNS name. */
+function validateUpstreamTls(values: PolicyValues, errors: FieldErrors): UpstreamPolicy["tls"] {
+  const serverName = values.tlsServerName.trim();
+  if (serverName !== "" && (serverName.length > 253 || !SERVER_NAME.test(serverName))) {
+    errors["tls.serverName"] = "Enter a host name such as backend.internal (no port, scheme or spaces)";
+  }
+  return {
+    enabled: values.tlsEnabled,
+    verify: values.tlsVerify,
+    serverName,
+    ca: values.tlsCa,
+  };
+}
+
 /** Checks the policy values and builds the policy part of the request. */
 export function validatePolicy(values: PolicyValues): Validated<UpstreamPolicy> {
   const errors: FieldErrors = {};
@@ -191,6 +219,7 @@ export function validatePolicy(values: PolicyValues): Validated<UpstreamPolicy> 
       percent: inRange(errors, "retryBudget.percent", values.retryPercent, 0, 100),
       minPerSec: inRange(errors, "retryBudget.minPerSec", values.retryMinPerSec, 0, 1000),
     },
+    tls: validateUpstreamTls(values, errors),
   };
   return Object.keys(errors).length > 0 ? { errors } : { errors, value: policy };
 }

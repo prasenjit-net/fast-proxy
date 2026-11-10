@@ -1,6 +1,8 @@
 # M3 Plan: TLS termination
 
-Status: **draft v0.3 (2026-11-10), proposed.** v0.3 follows three decisions by the
+Status: **v0.4 (2026-11-10), in progress.** The **(confirm)** items were accepted as
+recommended when the owner asked to start implementing (recorded in ADRs 0009-0014).
+v0.3 followed three decisions by the
 owner: (1) **all certificates live in SQLite** (uploaded, auto-generated
 development certificates, and later ACME-issued ones); (2) **TLS is switched on
 for the whole process** by configuration or a command-line flag, which enables
@@ -401,6 +403,35 @@ GET    /api/tls                      process state: enabled, listen, http2, minV
 
 The WebSocket gains a `certState` event (changed, expiring, unreadable).
 
+### 5.4 Defaults (G3)
+
+The single source for validation and the UI.
+
+| Setting | Default | Bounds / values |
+|---|---|---|
+| `data_plane.tls.enabled` | `false` | bool; `--tls` / `--no-tls` override |
+| `data_plane.tls.listen` | `0.0.0.0:8443` | not equal to a plain listener or the admin address |
+| `data_plane.tls.public_port` | HTTPS listen port | 1-65535; omitted from redirects at 443 |
+| `data_plane.tls.min_version` | `"1.2"` | `"1.2"`, `"1.3"` |
+| `data_plane.tls.http2` | `true` | bool |
+| `data_plane.tls.reject_unknown_sni` | `false` | bool |
+| `data_plane.tls.handshake_timeout` | `10s` | above zero |
+| `data_plane.tls.max_concurrent_handshakes` | `256` | at least 1 |
+| `data_plane.master_key_file` | `<state_dir>/master.key` | readable, or creatable |
+| `data_plane.config_poll_interval` | `5s` | `0s` disables |
+| `https.enabled` | `false` | bool |
+| `https.redirect` | `off` | `off`, `301`, `308` (`308` when switched on without a value); needs `https.enabled` |
+| `https.hsts.enabled` | `false` | needs `https.enabled` |
+| `https.hsts.maxAgeSecs` | `31536000` | 0-63,072,000 |
+| `https.hsts.includeSubdomains` | `false` | bool |
+| `tls.enabled` (upstream) | `false` | bool |
+| `tls.verify` | `true` | bool |
+| `tls.serverName` | empty (endpoint host) | empty or a valid DNS name |
+| `tls.ca` | empty (OS trust store) | empty or an uploaded bundle name |
+| Certificates | at most 256 | name 1-63 chars, unique; chain at most 10 certificates; 256 KiB of PEM |
+| CA bundles | at most 16 | name 1-63 chars, unique; 256 KiB of PEM |
+| Expiry warning / dev regeneration | 14 days / 30 days | fixed |
+
 ## 6. Tasks
 
 Task IDs are referenced by the dependency table in section 7. Workstream letters:
@@ -411,7 +442,7 @@ from M2.
 
 ### Workstream G: Groundwork
 
-- [ ] **G1 (S) Decisions and ADRs.** Get the **(confirm)** items in section 3
+- [x] **G1 (S) Decisions and ADRs.** Get the **(confirm)** items in section 3
   resolved. Write `docs/adr/`: 0009 TLS stack and the enablement model (F1, F4,
   F12, F19, F20), 0010 certificates: first-class, referenced, stored sealed in
   SQLite, history, API safety, limits (F2, F5, F6, F11, F24-F28), 0011 certificates
@@ -419,7 +450,9 @@ from M2.
   redirect, HSTS and the 421 rules (F13, F14), 0013 upstream TLS (F3, F15-F17), and a
   short note recording the ACME constraints of F29 for M4.
   *Done when:* the ADRs are merged and no **(confirm)** item is open.
-- [ ] **G2 (M) Spike: rustls + ring + hyper h2 + AES-GCM + snapshot-carried
+  *Landed (PR1):* ADRs 0009-0014. The spike findings section of ADR 0009 is filled
+  in by G2, which has not been run yet.
+- [x] **G2 (M) Spike: rustls + ring + hyper h2 + AES-GCM + snapshot-carried
   certificates on all three platforms.** A throwaway test that (a) builds and links
   `rustls` with `ring` on Linux, macOS and Windows CI, (b) serves a request over TLS
   through `tokio-rustls` into hyper's auto builder and gets HTTP/2 and HTTP/1.1 by
@@ -432,22 +465,22 @@ from M2.
   connections to one SQLite file see each other's committed revision version.
   Record findings (build time and size cost, any Windows problem) in ADR 0009.
   *Done when:* the findings are in ADR 0009 and F1 is confirmed or changed.
-- [ ] **G3 (S) Defaults table.** Turn F4-F14 and F28 into the documented defaults
+- [x] **G3 (S) Defaults table** (section 5.4). Turn F4-F14 and F28 into the documented defaults
   (section 5 and the config docs): the single source for validation and the UI.
 
 ### Workstream MD: Model
 
-- [ ] **MD1 (M) Subsystem HTTPS policy.** `HttpsPolicy { enabled, certificate_id,
+- [x] **MD1 (M) Subsystem HTTPS policy.** `HttpsPolicy { enabled, certificate_id,
   redirect, hsts }`, `CertificateId`, `RedirectMode` (off, 301, 308), `Hsts {
   enabled, max_age, include_subdomains }` with bounds, and the rule that redirect
   and HSTS settings need `enabled`.
   *Done when:* table-driven tests accept and reject each case with a
   field-specific message (`https.hsts.maxAgeSecs`, `https.redirect`).
-- [ ] **MD2 (M) Upstream TLS settings.** `UpstreamTls { enabled, verify,
+- [x] **MD2 (M) Upstream TLS settings.** `UpstreamTls { enabled, verify,
   server_name, ca }` with a validated server name and CA name; the group policy
   gains it.
   *Done when:* tests cover every bound and the defaults match G3.
-- [ ] **MD3 (M) Certificate metadata, limits and `covers`.** `CertificateName`,
+- [x] **MD3 (M) Certificate metadata, limits and `covers`.** `CertificateName`,
   `CertificateSource`, the metadata record (names, subject, issuer, validity,
   fingerprint), the limits of F28, and the pure `covers(san, pattern)` rule of F11,
   all without PEM or key types.
@@ -457,12 +490,12 @@ from M2.
 
 ### Workstream S: Store
 
-- [ ] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2 (new subsystem and
+- [x] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2 (new subsystem and
   group columns, and the `certificate`, `ca_bundle` and `vault` tables); bump
   `SCHEMA_VERSION` to 3.
   *Done when:* a fresh database opens and a version-2 file is rejected with the
   existing clear error.
-- [ ] **S2 (M) Subsystem and upstream columns.** Repository create/update/load
+- [x] **S2 (M) Subsystem and upstream columns.** Repository create/update/load
   carry the HTTPS policy (including the certificate reference) and the TLS
   settings; load revalidates (corruption is `Internal`); the revision JSON carries
   both plus the certificate's name; rollback restores them, and a rollback that
@@ -470,19 +503,19 @@ from M2.
   *Done when:* a test edits both, rolls back to each prior revision and compares
   `load_all()` to the stored configuration, and the deleted-reference case is
   covered.
-- [ ] **S3 (M) Certificate and CA bundle repositories.** Insert, replace, rename,
+- [x] **S3 (M) Certificate and CA bundle repositories.** Insert, replace, rename,
   delete (409 while used), list and load for both tables, plus the vault row; keys
   are stored and returned as opaque ciphertext and nonce; limits enforced; unique
   names are a `Conflict`.
   *Done when:* success and failure tests cover uniqueness, the used-certificate
   refusal, cascade and limits, and a test proves no function in the crate decrypts.
-- [ ] **S4 (S) Summary-only revisions.** A way to append a **summary-only** revision
+- [x] **S4 (S) Summary-only revisions.** A way to append a **summary-only** revision
   (the configuration unchanged) from a certificate write; `restore` leaves the
   certificate tables alone.
   *Done when:* a test uploads and deletes certificates, rolls back across them,
   and shows the certificates untouched and every change present in the history
   with no PEM in any revision row.
-- [ ] **S5 (S) The storage boundary.** The `CertificateSource` read trait
+- [x] **S5 (S) The storage boundary.** The `CertificateSource` read trait
   (`load_all`, `version`) with the SQLite implementation, and a documented
   portability checklist for the certificate SQL (types, no SQLite-only features).
   *Done when:* the config service reads certificates only through the trait, and a
@@ -490,12 +523,12 @@ from M2.
 
 ### Workstream F: Config file and command line
 
-- [ ] **F1 (S) TLS config and flags.** `TlsConfig` (`enabled`, `listen`,
+- [x] **F1 (S) TLS config and flags.** `TlsConfig` (`enabled`, `listen`,
   `public_port`, `min_version`, `http2`, `reject_unknown_sni`, `handshake_timeout`,
   `max_concurrent_handshakes`), `master_key_file`, `config_poll_interval`, and the
   CLI flags `--tls`, `--no-tls` (conflicting with each other) and `--https-listen`
   overriding the file; `deny_unknown_fields` still rejects anything else.
-- [ ] **F2 (S) Validation.** Every rule in 5.1, with errors that name the file and
+- [x] **F2 (S) Validation.** Every rule in 5.1, with errors that name the file and
   key (and never print key material); the flags override the file before
   validation; TLS on with no certificate is allowed.
   *Done when:* each rule has an accepted and a rejected test, the flag precedence is
@@ -503,14 +536,14 @@ from M2.
 
 ### Workstream T: The TLS crate (new)
 
-- [ ] **T1 (M) PEM loading and validation.** Parse a chain and a key from memory
+- [x] **T1 (M) PEM loading and validation.** Parse a chain and a key from memory
   (PKCS#8, PKCS#1, SEC1), reject an encrypted key, check the key matches the leaf,
   extract SAN names, subject, issuer, validity and the fingerprint, and classify
   expired and expiring certificates.
   *Done when:* tests (using rcgen-made certificates) cover good, expired,
   not-yet-valid, mismatched key, garbage, empty input, an encrypted key, a chain
   in the wrong order, and no usable DNS name; no error message contains PEM text.
-- [ ] **T2 (M) Key vault.** Load the master key (environment, else file, creating
+- [x] **T2 (M) Key vault.** Load the master key (environment, else file, creating
   the file with random bytes and the right permissions when a key must be sealed),
   seal and open with AES-256-GCM binding `(id, name)`, the vault check value,
   zeroing of key buffers.
@@ -518,12 +551,12 @@ from M2.
   to another row, a wrong master key (detected by the check), the file created
   once and reused, nothing created when nothing needs sealing, and the permission
   warning on Unix.
-- [ ] **T3 (M) Self-signed generator.** `rcgen` certificate for a list of host
+- [x] **T3 (M) Self-signed generator.** `rcgen` certificate for a list of host
   names and wildcard patterns (a subsystem's hosts), returning material for the
   service to store; and the in-memory ephemeral "unknown host" certificate.
   *Done when:* tests cover the SANs (exact and wildcard), the validity, that the
   result passes T1, and that the ephemeral certificate is never persisted.
-- [ ] **T4 (L) `CertHandle` and `CertCache`.** The handle (id, name, version, parsed
+- [x] **T4 (L) `CertHandle` and `CertCache`.** The handle (id, name, version, parsed
   rustls certified key, metadata); the cache keyed by id and version that, given
   the stored rows, **reuses unchanged entries, parses new or changed ones, drops
   removed ones and marks unreadable ones**; hit, miss and unreadable counters.
@@ -531,19 +564,19 @@ from M2.
   equality), a changed row producing a new handle while the old one stays usable,
   a removed row, an unreadable row not poisoning the others, a wrong master key
   marking all unreadable, and a rebuild with 256 certificates under a time budget.
-- [ ] **T5 (M) Server configuration.** Build the rustls `ServerConfig`: minimum
+- [x] **T5 (M) Server configuration.** Build the rustls `ServerConfig`: minimum
   version, ALPN from `http2`, a resolver supplied by the data plane, session
   tickets on and early data off, `ring` provider.
   *Done when:* a handshake test per case: TLS 1.2 and 1.3 accepted, a client
   limited to 1.2 refused when the minimum is 1.3, h2 and http/1.1 negotiated,
   h2 not offered when disabled.
-- [ ] **T6 (M) Client configurations.** `ClientConfig` per `(verify, ca)`: the OS
+- [x] **T6 (M) Client configurations.** `ClientConfig` per `(verify, ca)`: the OS
   trust store, an uploaded CA bundle, or no verification (with the warning);
   built once and cached, and rebuilt when a bundle is replaced; the server name
   chosen from the override or the endpoint host.
   *Done when:* tests cover trusted, untrusted, named CA, wrong name, an IP
   endpoint with and without an override, verification off, and a replaced bundle.
-- [ ] **T7 (S) Metrics and status.** `fastproxy_tls_handshakes_total{listener,
+- [x] **T7 (S) Metrics and status.** `fastproxy_tls_handshakes_total{listener,
   result,version}`, `fastproxy_tls_cert_expiry_seconds{cert,source}`,
   `fastproxy_tls_cert_unreadable{cert}`, `fastproxy_cert_cache_total{result}`,
   `fastproxy_config_sync_total{result}`, a status snapshot for the admin plane;
@@ -552,7 +585,33 @@ from M2.
 
 ### Workstream CS: Config service
 
-- [ ] **CS1 (L) Certificate and HTTPS writes.** Through the single writer: seal and
+_Landed in PR9: D6 (the upstream client over TLS), H1 (TLS health probes) and A7 (the
+group API's `tls` object). The compile step builds each TLS group's client
+configuration and the snapshot carries it, so a replaced CA bundle reaches new
+connections and probers with the same atomic swap. `ConfigService::replace_ca_bundle`
+exists for that; the API has no PUT for bundles yet (upload and delete only, as
+planned)._
+
+_Landed in PR8: D5 (the plain-HTTP redirect and HSTS; the redirect decision lives in
+`fast-proxy-routing` so the data plane and the admin resolver share it) and A8 (the
+resolver shows HTTPS service, the redirect and the upstream scheme; `GET /api/status`
+adds the TLS state and the soonest certificate expiry; the `certState` event came
+with PR5)._
+
+_Landed in PR7: D2 (HTTP/2 with limits, GOAWAY drain, the process `http2` switch and
+four config knobs), D3 (the 421 rules), D4 (the scheme from the connection; the plan's
+`Forwarded` header is not implemented since the proxy only ever set `X-Forwarded-*`),
+D7 (`proto` and `tls` access-log fields) and D8 (handshake bound, timeout and flood
+tests). Since D2 landed, the PR4b note below about HTTP/1.1 only no longer applies._
+
+_Landed in PR4b: CS1 (without the `certState` broadcast, which arrives with the
+admin events in PR5), CS2, CS4. D1 serves HTTP/1.1 only: ALPN offers `http/1.1`
+until D2 (the process `http2` setting is wired then). The data plane already
+uses the real scheme for `X-Forwarded-Proto` (part of D4). Q7 is partly covered
+(database bytes, wrong key, key file created once and reused); its API, log and
+loopback checks come with PR5._
+
+- [x] **CS1 (L) Certificate and HTTPS writes.** Through the single writer: seal and
   store keys, apply HTTPS settings, **veto by compiling the would-be snapshot with
   the would-be certificates**, commit (summary-only revision for pure material
   changes), swap, broadcast `certState`. Covers upload, replace, rename, attach,
@@ -560,7 +619,7 @@ from M2.
   *Done when:* tests cover each operation, a veto leaving everything as it was
   (including the cache), concurrent writes serialising with other configuration
   writes, and the swap being visible to a handshake already waiting.
-- [ ] **CS2 (M) The certificate guarantee.** The reconciler of F6: enabling HTTPS
+- [x] **CS2 (M) The certificate guarantee.** The reconciler of F6: enabling HTTPS
   generates and attaches a dev certificate when none is attached, host add/remove
   regenerates a dev certificate that stops covering the hosts, detaching falls back
   to a dev certificate, startup fills gaps (only while TLS is on), the hourly sweep
@@ -569,7 +628,7 @@ from M2.
   *Done when:* tests cover each trigger, that nothing is generated with TLS off,
   that uploaded certificates are untouched, and that every write is atomic with its
   generated certificate.
-- [ ] **CS3 (L) Cluster sync.** A poll task comparing the database version with the
+- [x] **CS3 (L) Cluster sync.** A poll task comparing the database version with the
   live snapshot's every `config_poll_interval`; on a newer version it reloads
   configuration and certificates, carries runtime state and the cache, and swaps;
   the instance's own commits never trigger a reload; failures are counted and
@@ -578,7 +637,7 @@ from M2.
   subsystem edit, a certificate upload, a renewal and a deletion on one appearing on
   the other within the interval, endpoint runtime state surviving the reload, no
   reload when nothing changed, and an interval of zero doing nothing.
-- [ ] **CS4 (M) Startup.** Unlock the vault when needed, build the cache from the
+- [x] **CS4 (M) Startup.** Unlock the vault when needed, build the cache from the
   rows (skipping and reporting unreadable ones), reconcile, compile, and expose the
   vault state (`ok`, `key mismatch`, `not created`).
   *Done when:* tests cover a fresh database, a database with certificates, a wrong
@@ -586,7 +645,7 @@ from M2.
 
 ### Workstream R: Routing and compile
 
-- [ ] **R1 (L) Compile the new settings and certificates.** `CompiledSubsystem.https`
+- [x] **R1 (L) Compile the new settings and certificates.** `CompiledSubsystem.https`
   (enabled, redirect, HSTS, the certificate handle) and `CompiledUpstream.tls`; the
   host table answers "which subsystem and certificate for this SNI"; the compile
   step takes the certificate handles, the CA bundle names and the process TLS state
@@ -596,12 +655,12 @@ from M2.
   *Done when:* tests cover each rejection, the lookup for exact, wildcard and
   unknown names, a certificate handle swapped by a new compile, and that unrelated
   edits keep runtime state (as in M2).
-- [ ] **R2 (S) `build_upstream_uri`** takes the scheme from the group's TLS flag.
+- [x] **R2 (S) `build_upstream_uri`** takes the scheme from the group's TLS flag.
   *Done when:* the URI tests cover `https` with and without a port and IPv6.
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (L) TLS accept path and resolver.** When TLS is on, start the HTTPS
+- [x] **D1 (L) TLS accept path and resolver.** When TLS is on, start the HTTPS
   listener; wrap accepted connections in a handshake (timeout, concurrency bound);
   the snapshot-based resolver (SNI to subsystem to certificate, the ephemeral
   certificate for an unknown name, `reject_unknown_sni`); build the connection
@@ -613,40 +672,40 @@ from M2.
   `reject_unknown_sni`, failed handshakes counted by reason, a stalled handshake cut
   off at the timeout, and a certificate swapped by a new snapshot reaching the next
   handshake only.
-- [ ] **D2 (L) HTTP/2 to clients.** Enable h2 in the auto builder with the limits
+- [x] **D2 (L) HTTP/2 to clients.** Enable h2 in the auto builder with the limits
   in F20, GOAWAY on graceful shutdown, and the connection tracker counting h2
   connections (and not each stream) for draining.
   *Done when:* tests show multiplexed requests on one connection, a stream limit
   enforced, a header-list limit answered, a rapid-reset attempt contained, and a
   drain letting open streams finish before the connection closes.
-- [ ] **D3 (M) The 421 rules.** F14: a host of a subsystem with HTTPS disabled, and a
+- [x] **D3 (M) The 421 rules.** F14: a host of a subsystem with HTTPS disabled, and a
   host served by a different certificate than the connection's; no-SNI connections
   skip the second rule.
   *Done when:* tests cover the same name, two subsystems sharing one certificate
   (allowed), different certificates (421), HTTPS disabled (421), no SNI, an
   absolute-form URI, and a certificate replaced mid-connection.
-- [ ] **D4 (S) Scheme-aware forwarding.** `X-Forwarded-Proto` and `Forwarded`
+- [x] **D4 (S) Scheme-aware forwarding.** `X-Forwarded-Proto` and `Forwarded`
   from the connection; client-supplied values are still not trusted unless the
   peer is trusted; the upstream URI scheme follows the group.
   *Done when:* the forwarded-header tests cover http and https and trusted peers.
-- [ ] **D5 (M) Redirect and HSTS.** The redirect for plain-HTTP requests (F13), with
+- [x] **D5 (M) Redirect and HSTS.** The redirect for plain-HTTP requests (F13), with
   the `public_port` rule, only while TLS is on, and a single function the ACME
   challenge can bypass in M4; `Strict-Transport-Security` on HTTPS responses only.
   *Done when:* tests cover 308 and 301, the path and query preserved byte for
   byte, a non-default port, an unknown host (404, never a redirect), HTTPS
   disabled (no redirect), TLS off (no redirect even if configured), HSTS present
   on HTTPS and absent on HTTP, and `includeSubDomains`.
-- [ ] **D6 (L) Upstream TLS.** `UpstreamClient` keeps pools per `(connect timeout,
+- [x] **D6 (L) Upstream TLS.** `UpstreamClient` keeps pools per `(connect timeout,
   TLS settings)`; a `hyper-rustls` connector with the cached `ClientConfig`;
   passive health, retries and body replay keep working unchanged over TLS.
   *Done when:* end-to-end tests cover a TLS upstream with a trusted CA, an
   untrusted one (502 and a failure counted), a name mismatch, an uploaded CA
   bundle, an override name for an IP endpoint, a replaced bundle taking effect for
   new connections, and a retry across a TLS and a dead endpoint.
-- [ ] **D7 (S) Access log and metrics.** `proto` (`http/1.1`, `h2`) and `tls`
+- [x] **D7 (S) Access log and metrics.** `proto` (`http/1.1`, `h2`) and `tls`
   (version, or `-`) fields on data-plane lines; the exit-criteria and
   getting-started examples updated.
-- [ ] **D8 (M) Handshake and connection hygiene.** Slowloris-style stalls,
+- [x] **D8 (M) Handshake and connection hygiene.** Slowloris-style stalls,
   oversized client hellos, and a flood of failing handshakes cannot starve
   established traffic.
   *Done when:* a test holds many stalled handshakes and shows an established
@@ -654,37 +713,42 @@ from M2.
 
 ### Workstream H: Health
 
-- [ ] **H1 (S) TLS probes.** HTTP probes to a TLS group handshake with the group's
+- [x] **H1 (S) TLS probes.** HTTP probes to a TLS group handshake with the group's
   settings (verify, name, CA); the TCP probe stays plain.
   *Done when:* tests mark a TLS endpoint healthy, and unhealthy for an untrusted
   certificate and for a plain-HTTP port.
 
 ### Workstream A: Admin API
 
-- [ ] **A1 (M) Reads.** `GET /api/certificates` (with `usedBy`), `GET /api/ca-bundles`
+_Landed in PR5: A1-A6, with the `certState` WebSocket event and activity entries,
+and Q7 (its log-line check is by construction: no PEM or key is ever formatted
+into a log, and every secret type has a redacted `Debug`; there is no log
+capture test). A7 and A8 follow with upstream TLS and the redirect work._
+
+- [x] **A1 (M) Reads.** `GET /api/certificates` (with `usedBy`), `GET /api/ca-bundles`
   and `GET /api/tls` (5.3): metadata only; never a key, a ciphertext or a PEM of
   a private key.
-- [ ] **A2 (L) Certificate writes.** `POST`, `PUT`, `DELETE` on certificates and
+- [x] **A2 (L) Certificate writes.** `POST`, `PUT`, `DELETE` on certificates and
   `POST /api/certificates/self-signed`, through the config service; field errors
   (`certPem`, `keyPem`, `name`) that never echo PEM; the warning for a certificate
   expiring soon; 409 for a certificate in use.
-- [ ] **A3 (M) Subsystem certificate shortcuts.** `POST` and `DELETE
+- [x] **A3 (M) Subsystem certificate shortcuts.** `POST` and `DELETE
   /api/subsystems/{id}/certificate` (upload and attach in one step; detach), with
   the coverage rule (400 naming `https.certificateId` or `certPem`) and the
   uncovered-hosts warning.
-- [ ] **A4 (M) CA bundles.** `POST` and `DELETE /api/ca-bundles` (409 while an
+- [x] **A4 (M) CA bundles.** `POST` and `DELETE /api/ca-bundles` (409 while an
   upstream names the bundle).
-- [ ] **A5 (M) Key safety.** The loopback-peer rule for requests that carry a
+- [x] **A5 (M) Key safety.** The loopback-peer rule for requests that carry a
   private key (403 otherwise), PEM body size caps, and a test that no response,
   log line or event ever contains key material.
-- [ ] **A6 (M) Subsystem HTTPS settings** in the subsystem API (`https` object,
+- [x] **A6 (M) Subsystem HTTPS settings** in the subsystem API (`https` object,
   including `enabled`, `certificateId`, `redirect`, `hsts`, the read-only
   `effective` and `certificate`), validated with nested field names
   (`https.hsts.maxAgeSecs`); redirect and HSTS without `enabled` are a 400;
   enabling generates a dev certificate when none is attached.
-- [ ] **A7 (M) Upstream TLS settings** in the group API (`tls` object); an unknown
+- [x] **A7 (M) Upstream TLS settings** in the group API (`tls` object); an unknown
   CA name is a 400 naming `tls.ca`.
-- [ ] **A8 (S) Resolver, status and events.** The resolver shows the scheme the
+- [x] **A8 (S) Resolver, status and events.** The resolver shows the scheme the
   proxy will use to the upstream, whether a request on plain HTTP would be
   redirected, and whether the host is served over HTTPS; `GET /api/status` adds the
   process TLS state and the soonest certificate expiry; the `certState` WebSocket
@@ -696,9 +760,13 @@ rule), and a test proves each write is visible to the data plane without a resta
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (S) API client, types and validation** for the new resources and fields
+_Landed in PR10: U1-U8 and C2. **C1, your click-through of the M2 UI in a real
+browser, has not been done** (it needs you); the UI here is verified by Vitest and
+the production build only, not by looking at it in a browser._
+
+- [x] **U1 (S) API client, types and validation** for the new resources and fields
   (cheap PEM sanity checks: the text contains the expected `BEGIN` lines).
-- [ ] **U2 (L) Subsystem HTTPS section.** An enable switch (explaining, and
+- [x] **U2 (L) Subsystem HTTPS section.** An enable switch (explaining, and
   disabled-looking with the reason, while TLS is off for the process); a
   **certificate card** (name, source badge, issuer, expiry with days left, hosts it
   does not cover) with actions: **upload a certificate and key** for this subsystem
@@ -707,34 +775,34 @@ rule), and a test proves each write is visible to the data plane without a resta
   detach; redirect (off, 308, 301) and HSTS controls with confirmations that say
   what will happen (HSTS in particular: browsers remember it for the max age, so a
   wrong setting is hard to undo); a placeholder where M4 adds the ACME switch.
-- [ ] **U3 (M) Certificates page.** All certificates with source badge, expiry,
+- [x] **U3 (M) Certificates page.** All certificates with source badge, expiry,
   state and which subsystems use them; upload, replace, rename and delete (the
   server's 409 shown); "generate self-signed"; the process TLS state, the vault
   state, and a banner while only dev certificates exist.
-- [ ] **U4 (M) CA bundles section** on the same page: upload, list, delete (the
+- [x] **U4 (M) CA bundles section** on the same page: upload, list, delete (the
   server's 409 shown).
-- [ ] **U5 (M) Upstream TLS fields.** Enable, verify (with a warning badge when
+- [x] **U5 (M) Upstream TLS fields.** Enable, verify (with a warning badge when
   off), server name, CA bundle chosen from the uploaded ones.
-- [ ] **U6 (S) Dashboard.** A certificate card: the soonest expiry, a warning under
+- [x] **U6 (S) Dashboard.** A certificate card: the soonest expiry, a warning under
   14 days or after expiry, the dev-certificate warning, and the TLS-off notice;
   live updates from `certState`.
-- [ ] **U7 (S) Revisions viewer and resolver** show HTTPS and TLS settings (and, as
+- [x] **U7 (S) Revisions viewer and resolver** show HTTPS and TLS settings (and, as
   carry-over C2, the group policy that M2 left out); certificate changes appear in
   the history as summary entries.
-- [ ] **U8 (S) Tests and build.** Vitest tests for the forms (validation shown,
+- [x] **U8 (S) Tests and build.** Vitest tests for the forms (validation shown,
   submit sends the right body, the key never rendered or kept), the confirmations,
   the certificate card and table, and live updates; `npm test` and
   `npm run build` pass.
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (M) Test PKI and TLS clients.** A test helper (rcgen, dev-dependency
+- [x] **Q1 (M) Test PKI and TLS clients.** A test helper (rcgen, dev-dependency
   only) that makes a CA, leaf certificates with chosen names and validity, as PEM
   strings (uploaded through the API in end-to-end tests, so no files are involved);
   TLS clients for tests (HTTP/1.1 and HTTP/2, a chosen SNI, a chosen maximum
   version, trusting a chosen CA). No fixtures committed, no Unix-only commands, so
   tests run on Windows.
-- [ ] **Q2 (L) Exit-criteria end-to-end tests** (`tests/tls.rs`), the real binary:
+- [x] **Q2 (L) Exit-criteria end-to-end tests** (`tests/tls.rs`), the real binary:
   TLS off by default and the flag and config switch turning the listener on;
   enabling HTTPS on a subsystem producing a dev certificate that the next handshake
   serves; uploading a real certificate for a subsystem and the next handshake
@@ -745,36 +813,36 @@ rule), and a test proves each write is visible to the data plane without a resta
   live (and inert with TLS off); the 421 rule; a TLS upstream with an uploaded CA,
   trusted and not; TLS health checks; everything surviving a restart. Each must be
   shown to be able to fail.
-- [ ] **Q3 (M) Live replacement under load.** Clients keep making new HTTPS
+- [x] **Q3 (M) Live replacement under load.** Clients keep making new HTTPS
   connections and requests while certificates are uploaded, replaced and deleted
   repeatedly and subsystems toggle HTTPS (including invalid uploads): zero failed
   handshakes for names that stay enabled, every handshake gets a certificate that
   was valid at some point during it, and established connections keep working.
-- [ ] **Q4 (M) HTTP/2 behaviour tests** beyond D2's: large bodies and flow control
+- [x] **Q4 (M) HTTP/2 behaviour tests** beyond D2's: large bodies and flow control
   with a slow backend, many streams under retries, cancellation of one stream
   leaving the others alone, and the in-flight counts returning to zero.
-- [ ] **Q5 (S) Benchmark.** Re-run `docs/benchmarks.md` for plain HTTP with TLS off
+- [x] **Q5 (S) Benchmark.** Re-run `docs/benchmarks.md` for plain HTTP with TLS off
   (compare with M2) and with TLS on, and add HTTPS with keep-alive on HTTP/1.1 and
   HTTP/2, new-connection handshake rate with and without session resumption, the
   cost of a certificate write and of a cache rebuild with 256 certificates, and a
   TLS upstream; record the numbers.
-- [ ] **Q6 (S) Gates.** fmt, clippy, tests and UI build green on Linux, macOS and
+- [x] **Q6 (S) Gates.** fmt, clippy, tests and UI build green on Linux, macOS and
   Windows (the M2 lessons apply: wait for events, not durations; a refused
   connection is slow on Windows; one write per raw request).
-- [ ] **Q7 (M) Key protection tests.** The database file (read as bytes, including
+- [x] **Q7 (M) Key protection tests.** The database file (read as bytes, including
   the WAL) contains no `PRIVATE KEY` text and none of the key bytes after
   uploads, replacements, deletions and dev-certificate generation; a wrong or
   missing master key is reported clearly and the proxy still starts serving plain
   HTTP and the certificates it can read; the master key file is created once,
   only when needed, and reused; no API response, log line, metric, event or
   revision contains key material; the loopback rule holds for a non-loopback peer.
-- [ ] **Q8 (S) Security review.** A checklist run before release: keys never
+- [x] **Q8 (S) Security review.** A checklist run before release: keys never
   logged or served, errors never leak paths or PEM, the ephemeral certificate never
   served for a host that has a usable certificate, HSTS only over HTTPS, the
   redirect never builds a `Location` from anything but a matched host, handshake
   and h2 limits in force, `verify = false` visible everywhere, size and count
   limits in force. Findings recorded.
-- [ ] **Q9 (M) Cluster behaviour tests.** Two instances (two config services, and
+- [x] **Q9 (M) Cluster behaviour tests.** Two instances (two config services, and
   once two real processes) on one database: a renewal, an upload, an HTTPS toggle
   and a deletion on one reach the other within the poll interval; the cache reuses
   unchanged certificates on the receiving side; endpoint runtime state survives a
@@ -784,7 +852,7 @@ rule), and a test proves each write is visible to the data plane without a resta
 
 ### Workstream W: Documentation
 
-- [ ] **W1 (M) README and getting-started.** A TLS walkthrough: turning TLS on
+- [x] **W1 (M) README and getting-started.** A TLS walkthrough: turning TLS on
   (`--tls`), enabling HTTPS on a subsystem and seeing the dev certificate, uploading
   a generated certificate with `curl`, SNI with two subsystems, HTTP/2 with
   `curl --http2`, replacing a certificate live, redirect and HSTS, a TLS upstream
@@ -792,27 +860,27 @@ rule), and a test proves each write is visible to the data plane without a resta
   key** section (the database and `master.key` are backed up separately; losing the
   key means re-uploading); and a short **running several instances** section
   (shared database, the same master key, the poll interval, what stays local).
-- [ ] **W2 (S) AGENTS.md.** The new crate and rules: certificate material and keys
+- [x] **W2 (S) AGENTS.md.** The new crate and rules: certificate material and keys
   never appear in `Config`, revisions, logs, errors, metrics or API responses;
   certificate writes go through the config service like every other write; the
   `store` crate never decrypts; routing carries certificates in the snapshot, so a
   certificate or HTTPS change is one atomic swap; the self-signed certificate is
   generated only for subsystems that enable HTTPS.
-- [ ] **W3 (S) ROADMAP.md.** Tick M3, record decisions F1-F29 in the decision log,
+- [x] **W3 (S) ROADMAP.md.** Tick M3, record decisions F1-F29 in the decision log,
   update the risks table and the config example (certificates are in the database,
   not the file; ACME settings stay in the file), link this plan.
-- [ ] **W4 (S) Outcome.** A closing section in this file like M2's section 11.
+- [x] **W4 (S) Outcome.** A closing section in this file like M2's section 11.
 
 ### Workstream C: Carry-over from M2
 
 - [ ] **C1 (S) Owner click-through of the M2 UI** (the old C3) in a real browser,
   desktop and phone width, light and dark, **before** U2-U5 build on it.
-- [ ] **C2 (S) Revision viewer shows group policies** (the old U6 gap); done with
+- [x] **C2 (S) Revision viewer shows group policies** (the old U6 gap); done with
   U7 above.
 - [ ] **C3 (M) Find the unexplained flaky test.** One full-suite run failed once
   in M2 and did not reproduce. Run the suite in a loop and under load in CI
   (a scheduled job or a one-off branch) to identify it, and fix or document it.
-- [ ] **C4 (S) Decide upstream HTTP/2** with data: measure what multiplexing to
+- [x] **C4 (S) Decide upstream HTTP/2** with data: measure what multiplexing to
   upstreams would buy on the M3 benchmark and record the decision (F3).
 - [ ] **C5 (S) Merge cadence.** M2's stack was merged only at the end; for M3 merge
   each PR to `main` as it passes CI so the stack stays short (see section 7).
@@ -910,6 +978,11 @@ Suggested slicing into pull requests, each leaving `main` green and releasable.
 10. **PR10** U1-U8 (UI), after the owner's C1 click-through.
 11. **PR11** Q2-Q6, Q8, W1-W4, C2-C4, release `v0.4.0`.
 
+**Split of PR4 (decided while implementing):** PR4a is T5, R1, R2, F1-F2 (the
+server configuration, the compile step carrying HTTPS settings and certificates,
+the config section and flags); PR4b is CS1, CS2, CS4, D1, the `tests/tls.rs`
+basics and Q7 (the write path, startup and the accept path). Both stay stacked.
+
 PRs 2 and 3 can proceed in parallel after PR1; PR4 needs PR2 and PR3; PRs 5 to 9
 need PR4 and can be taken in a different order (PR6 needs PR5's write paths only
 for its tests).
@@ -975,20 +1048,117 @@ for its tests).
 
 ## 10. Definition of done for M3
 
-- [ ] Every task above is checked, or explicitly moved with a note.
-- [ ] Exit criteria (section 1) demonstrated by the end-to-end tests in Q2, Q3, Q7
+- [x] Every task above is checked, or explicitly moved with a note (C1 and C5 are
+  explained in section 11).
+- [x] Exit criteria (section 1) demonstrated by the end-to-end tests in Q2, Q3, Q7
   and Q9 and a manual run: start with `--tls`, enable HTTPS on a subsystem (a dev
   certificate appears), upload a real or generated certificate in the UI and see
   the next handshake serve it, serve HTTP/2, replace the certificate live, enable
   the redirect and HSTS, put a TLS backend behind an upstream with an uploaded CA,
   and watch a second instance on the same database pick a change up.
-- [ ] CI green on all three platforms; no new clippy warnings.
-- [ ] Overall test coverage above 60%, number recorded (AGENTS.md rule); aim to
-  stay near M2's 97.7%.
-- [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md and getting-started updated, including the
+  (The tests do all of it; the getting-started walkthrough, run by hand, covers the
+  single-instance steps. The UI part of a manual run is C1, still the owner's.)
+- [x] CI green on all three platforms; no new clippy warnings (checked on each PR).
+- [x] Overall test coverage above 60%, number recorded (AGENTS.md rule); aim to
+  stay near M2's 97.7%. (97.27% of lines.)
+- [ ] Nothing committed without the owner's go-ahead after manual review. (The
+  stack of pull requests was opened at the owner's request and stays unmerged
+  until they review it.)
+- [x] README, AGENTS.md, ROADMAP.md and getting-started updated, including the
   backup and master key guidance and the running-several-instances notes.
-- [ ] Benchmark re-run and recorded; plain-HTTP overhead within budget.
-- [ ] Key protection verified (Q7) and the security review (Q8) done, findings
+- [x] Benchmark re-run and recorded; plain-HTTP overhead within budget.
+- [x] Key protection verified (Q7) and the security review (Q8) done, findings
   recorded.
-- [ ] Release `v0.4.0` prepared through the existing release workflow.
+- [ ] Release `v0.4.0` prepared through the existing release workflow. (Not done: it
+  is run by the owner after the merge, and the version files would first need to
+  be set to 0.3.0 for a minor bump to give v0.4.0; see section 11.)
+
+## 11. Outcome (2026-11-10)
+
+M3 is complete: TLS termination with per-subsystem certificates managed live,
+HTTP/2 to clients, redirect and HSTS, TLS to upstreams and several instances on
+one database. It was delivered as eleven stacked pull requests (#29 to #41):
+decisions and ADRs, the model and store, the TLS crate, the config and compile
+step, the write path with the accept path, the admin API, the cluster sync,
+HTTP/2 with the 421 rules, redirect and HSTS, upstream TLS, the UI, and this
+wrap-up.
+
+**Exit criteria (section 1), by evidence:**
+
+1. TLS is a process-wide switch, off by default: `tests/tls.rs` (the real binary
+   with the file switch, `--tls` and `--no-tls`).
+2. Each subsystem opts in, with its own certificate by SNI over HTTP/1.1 and
+   HTTP/2 on one port, and 421 for a subsystem without HTTPS: `tls.rs`,
+   `tls_http2.rs`, `tls_exit_criteria.rs`.
+3. A certificate is guaranteed before the first request (development certificate
+   in the same write, startup fills gaps, host changes regenerate): the
+   config-service tests and `tls_exit_criteria.rs`.
+4. Certificates are managed live and recycled everywhere, an invalid upload
+   changes nothing, another instance follows within seconds: `tls_exit_criteria.rs`,
+   `tls_live_replacement.rs` (25 rounds of replacement under six handshaking
+   clients, zero failures) and `cluster.rs` (two processes).
+5. Private keys are protected: tests read the database file and WAL for key bytes,
+   check every response, event, metric and revision, and the loopback rule; the
+   security review is in [security-review-m3.md](security-review-m3.md).
+6. The TLS policy (minimum version) is enforced: `tls_exit_criteria.rs`, `tls.rs`.
+7. Redirect and HSTS are per subsystem, live, and inert with TLS off:
+   `tls_redirect.rs`, `tls_exit_criteria.rs`.
+8. A host served by a different certificate than the connection's gets 421:
+   `tls_http2.rs`, `tls_exit_criteria.rs`.
+9. Upstream TLS with an uploaded CA, a name override, a replaced bundle and TLS
+   health checks, and an untrusted certificate refused: `tls_upstream.rs`,
+   `tls_exit_criteria.rs`.
+10. Observable: handshake, certificate and cache metrics, the protocol in the
+    access log, a certificate card per subsystem, a certificates page and a
+    dashboard card (UI tests).
+11. No regression: plain HTTP with TLS off is within 2% of M2, and with TLS on
+    within 3% ([benchmarks.md](benchmarks.md)); the M1 and M2 suites pass.
+
+**Decisions that held and what changed.** F1 to F29 held. Differences:
+
+- The plan's `Forwarded` header was never added (the proxy has only ever set
+  `X-Forwarded-*`); `X-Forwarded-Proto` now reflects the real scheme.
+- PR4 was split in two (configuration and compile, then the write path and accept
+  path) to keep each reviewable.
+- The wildcard host check in the redirect needed a stricter name check than the
+  host table's (a wildcard matches any suffix); `dns_host` does that.
+- The security review found F16's metric for unverified upstream groups missing;
+  `fastproxy_upstream_tls{verify}` was added.
+- Upstream HTTP/2 stays out (C4): pooled HTTP/1.1 connections cost 1% to 3%, and
+  HTTP/2 is slower than HTTP/1.1 on loopback (see ADR 0013 and the benchmarks).
+- Session resumption was not benchmarked separately: the load generator has no
+  switch for it.
+
+**Honest notes.**
+
+- **C1 (the owner's click-through of the UI in a real browser) has not been done.**
+  The UI is covered by tests and the production build only.
+- **C3 (the unexplained flaky test):** one `reload_under_load` run failed once
+  under coverage instrumentation in PR5 and then passed on every rerun. The whole
+  suite was then run eight times in a row under heavy CPU load and no test failed
+  (see PR 11); the cause was not found, so the flake is neither fixed nor ruled
+  out. If it returns, the failing assertion is the "a request that began after ...
+  was taken out still reached it" check in `tests/reload_under_load.rs`.
+- **C5 (merge cadence):** the plan said to merge each PR as it passed CI. This
+  stack was kept open, each PR based on the previous one, at the owner's request,
+  so it is merged in order at the end.
+- Running the getting-started TLS walkthrough for real found a bug that the tests
+  had missed: a self-signed certificate made with `openssl req -x509` is marked
+  `CA:TRUE` by default and the upload check rejected it as "a chain in the wrong
+  order". The check now reports that only when the key does not match the first
+  certificate (a test makes such a certificate); the walkthrough runs as written.
+- A bug of mine in PR2 (the store's `repository/tls_tests.rs` module was never
+  declared, so 15 tests did not run until PR9) is described in PR 39.
+- **The release.** `v0.4.0` is produced by the *Prepare Release* workflow, run from
+  `main` by the owner after the stack is merged (it needs the `RELEASE_BOT_TOKEN`
+  secret). It bumps the version in `Cargo.toml` and `ui/package*.json` and opens a
+  release PR; publishing happens when that merges. The versions are still `0.1.0`
+  and no tag exists, so a `minor` bump gives `v0.2.0`, not `v0.4.0`; to get
+  `v0.4.0` the version files would first have to be set to `0.3.0`. That, and
+  running the workflow, are left to the owner.
+
+**Numbers.** Tests: 804 Rust tests (all platforms in CI) and 326 Vitest tests. Coverage: 95.88% of regions and 97.27% of lines (M2: 97.7% of lines). The benchmark numbers
+are in [benchmarks.md](benchmarks.md): plain HTTP unchanged (TLS off within 2% of
+M2, TLS on within 3%), HTTPS keep-alive 3% to 5% below plain HTTP over HTTP/1.1,
+about 6,600 full handshakes per second on the shared machine, a certificate write
+in 0.4 ms and a 256-certificate cache rebuild in 2.4 ms.

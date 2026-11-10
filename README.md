@@ -44,6 +44,21 @@ change is recorded so it can be rolled back.
   through, and `X-Forwarded-*`, hop-by-hop headers and request ids are handled
   (client-supplied forwarding headers are not trusted unless the peer is listed
   in `trusted_proxies`).
+- **TLS termination.** With `--tls` (or `[data_plane.tls] enabled = true`) an HTTPS
+  listener starts next to the plain ones. Each subsystem opts in to HTTPS and gets
+  **its own certificate by SNI**, over HTTP/1.1 or HTTP/2 negotiated on the one
+  port. Certificates are uploaded, replaced and deleted **live** in the admin UI or
+  API (no restart, no dropped connection), stored in the database with their
+  private keys encrypted, and a subsystem that enables HTTPS without one gets a
+  self-signed development certificate at once. A subsystem can redirect plain HTTP
+  to HTTPS and send HSTS. A host whose certificate does not match the connection
+  gets 421.
+- **TLS to upstreams.** An upstream group can talk TLS to its endpoints, verified
+  against an uploaded CA bundle (or the OS trust store), with an optional server
+  name for IP endpoints; health checks use the same TLS settings.
+- **Several instances, one database.** Instances sharing a database converge on
+  the same configuration and certificates within a few seconds (see
+  [Running several instances](#running-several-instances)).
 - **Graceful shutdown.** Ctrl-C stops accepting, closes idle connections, and
   lets in-flight requests and open WebSockets finish for up to
   `data_plane.shutdown_grace`.
@@ -137,7 +152,7 @@ and the decision records in [docs/adr/](docs/adr/).
 | Prometheus metrics, access log, live traffic stats, admin UI | Done | M1 |
 | Upstream groups with several endpoints, five load-balancing algorithms | Done | M2 |
 | Active and passive health checking, safe retries, drain and disable | Done | M2 |
-| TLS termination (rustls, SNI, hot reload, HTTP/2) | Planned | M3 |
+| TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
 | ACME automatic certificates | Planned | M4 |
 | Maintenance mode, admin authentication, audit log | Planned | M5 |
 | Request sampling of unusual requests | Planned | M6 |
@@ -155,6 +170,8 @@ fast-proxy [OPTIONS]
       --log-level <LOG_LEVEL>       Override [logging].level (trace, debug, info, warn, error)
       --access-log <PATH>           Override [logging].access_log file path
       --no-access-log               Disable the access log file entirely
+      --tls / --no-tls              Turn TLS on or off, overriding [data_plane.tls].enabled
+      --https-listen <ADDR>         Override [data_plane.tls].listen (the HTTPS address)
 ```
 
 ## Configuration (`config.toml`)
@@ -166,6 +183,16 @@ fast-proxy [OPTIONS]
 | `data_plane.trusted_proxies` | `[]` | CIDRs whose `X-Forwarded-*` headers are trusted and appended to |
 | `data_plane.shutdown_grace` | `30s` | Time in-flight requests get to finish on shutdown |
 | `data_plane.listener` | one `http` listener on `0.0.0.0:8000` | Array of tables with `name` and `listen`; names and addresses must be unique |
+| `data_plane.master_key_file` | `<state_dir>/master.key` | The key that encrypts stored private keys; created the first time one must be stored. `FAST_PROXY_MASTER_KEY` (base64 of 32 bytes) overrides it |
+| `data_plane.config_poll_interval` | `5s` | How often to look for changes made by another instance; `0s` turns the sync off |
+| `data_plane.tls.enabled` | `false` | The process-wide TLS switch (`--tls` / `--no-tls`) |
+| `data_plane.tls.listen` | `0.0.0.0:8443` | The HTTPS listener (`--https-listen`); use 443 in production; must not clash with another listener |
+| `data_plane.tls.public_port` | the listen port | The port redirects to HTTPS name (NAT, containers) |
+| `data_plane.tls.min_version` | `"1.2"` | Lowest TLS version: `"1.2"` or `"1.3"` |
+| `data_plane.tls.http2` | `true` | Offer HTTP/2 through ALPN |
+| `data_plane.tls.reject_unknown_sni` | `false` | Fail the handshake for an unknown name instead of presenting a placeholder certificate |
+| `data_plane.tls.handshake_timeout`, `max_concurrent_handshakes` | `10s`, `256` | Bounds on handshakes so a flood cannot starve established traffic |
+| `data_plane.tls.http2_max_concurrent_streams`, `http2_max_header_list_size`, `http2_keep_alive_interval`, `http2_keep_alive_timeout` | `128`, `65536`, `30s`, `20s` | HTTP/2 limits |
 | `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener (no authentication yet, keep it on loopback) |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
@@ -175,8 +202,8 @@ fast-proxy [OPTIONS]
 | `ui.repo_url` | *(unset)* | Sidebar "Repository" link |
 
 If the config file is missing, built-in defaults are used (with a warning).
-Unknown keys are rejected, so a typo (or a `tls` key, which arrives in M3)
-fails at startup instead of being ignored. Every listener is bound before any
+Unknown keys are rejected, so a typo (or a certificate or key path, which never
+belong in this file) fails at startup instead of being ignored. Every listener is bound before any
 traffic is served, so a bad address or a port in use aborts startup with a clear
 message.
 
@@ -205,7 +232,16 @@ message.
 | GET | `/api/revisions/{version}` | The full configuration as of that revision |
 | POST | `/api/revisions/{version}/rollback` | Re-apply a revision as a new one |
 | POST | `/api/resolve` | Dry-run `{host, path}` against the live config: subsystem, route, exact upstream URL, or why nothing matched |
+| GET | `/api/tls` | The process TLS switch, listener, minimum version and the key vault state (`ok`, `key mismatch`, `not created`) |
+| GET, POST | `/api/certificates` | List (metadata only: names, validity, state, `usedBy`; **never a key**) / upload `{name, certPem, keyPem}` |
+| PUT, DELETE | `/api/certificates/{id}` | Rename and/or replace the chain and key (a renewal may leave the key out) / delete (409 while a subsystem uses it) |
+| POST | `/api/certificates/self-signed` | Generate a self-signed certificate `{name, names}` |
+| POST, DELETE | `/api/subsystems/{id}/certificate` | Upload a certificate and attach it in one step / detach (a development certificate takes over while HTTPS is on) |
+| GET, POST | `/api/ca-bundles` | List / upload `{name, pem}` CA bundles that upstream groups name to verify TLS backends |
+| DELETE | `/api/ca-bundles/{id}` | Delete (409 while an upstream group names it) |
 | GET | `/ws` | WebSocket: server-push events |
+
+A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) are accepted **only from a loopback peer** until admin authentication exists.
 
 Config responses are `{ "data": ..., "version": N }`, where `version` is the config
 revision the response reflects (for a write, the one it created); deletes return
@@ -231,8 +267,48 @@ WebSocket events are JSON discriminated by `type`:
 { "type": "traffic",  "data": { "total": { "requestsPerSec": 12.5, "errorRate": 0.02, "...": "..." }, "subsystems": ["..."] } }
 { "type": "configChanged", "version": 7, "summary": "route created: /api in shop", "timestampMs": 0 }
 { "type": "activity", "kind": "config", "message": "route created: /api in shop", "timestampMs": 0 }
+{ "type": "certState", "change": "uploaded", "certificate": "shop", "timestampMs": 0 }
 { "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```
+
+## TLS
+
+TLS is **off by default** (no listener, no cost). Switch it on for the process with
+`--tls` or `[data_plane.tls] enabled = true`; that starts one HTTPS listener
+(default `0.0.0.0:8443`) beside the plain ones. Everything else is live and per
+subsystem, in the admin UI or API:
+
+- A subsystem opts in with `https.enabled`. It then has a certificate before its
+  first request: the one you uploaded and attached, or a self-signed development
+  certificate (`dev-<name>`) generated for its host names, which follows host
+  changes and is regenerated before it expires. An uploaded certificate is never
+  replaced automatically. Uploading checks that the key matches the certificate,
+  that it is not expired and (when attaching) that it covers at least one of the
+  subsystem's hosts.
+- The certificate is chosen by SNI. A name nobody owns, or a subsystem without
+  HTTPS, gets a throwaway placeholder certificate and then a 404 or 421
+  (`reject_unknown_sni` fails the handshake instead).
+- `https.redirect` (`308` or `301`) sends plain-HTTP requests to HTTPS and
+  `https.hsts` adds `Strict-Transport-Security`; both apply only while TLS is on
+  for the process.
+- An upstream group's `tls` object makes the proxy talk TLS to its endpoints,
+  verified against a named, uploaded CA bundle (or the OS trust store).
+
+Walkthrough: [docs/getting-started.md](docs/getting-started.md) section 16.
+
+### Running several instances
+
+Several instances can share one database (a local SQLite file; a network database
+is a later project) and the same **master key** (set `FAST_PROXY_MASTER_KEY`, or
+copy the same `master.key`). Each polls the database every
+`data_plane.config_poll_interval` (5 s) and, when another instance wrote, reloads
+the configuration and certificates and swaps them in: a change made through one
+instance is live on the others within a few seconds, and a renewal is safe in the
+window because both certificates are valid. What stays **local to each instance**:
+endpoint health and ejection, in-flight counts and TLS session tickets (so
+resumption works within one instance). An instance started with a different
+master key reports `key mismatch`, serves plain HTTP and the certificates it can
+read, and never serves the ones it cannot.
 
 ## Observability
 
@@ -246,13 +322,20 @@ WebSocket events are JSON discriminated by `type`:
   `fastproxy_endpoint_ejections_total` and `fastproxy_health_checks_total`; per
   group `fastproxy_upstream_retries_total`, `fastproxy_retry_budget_exhausted_total`
   and `fastproxy_upstream_panic_total`; and `fastproxy_requests_cancelled_total`.
+  TLS adds `fastproxy_tls_handshakes_total` (by listener, result and version),
+  `fastproxy_tls_cert_expiry_seconds{cert,source}` and
+  `fastproxy_tls_cert_unreadable{cert}` (labels are certificate names you chose),
+  `fastproxy_cert_cache_total`, `fastproxy_config_sync_total`, and
+  `fastproxy_upstream_tls{subsystem,upstream,verify}` (a group with
+  `verify="false"` stands out).
   Label values come only from your configuration (names and endpoint
   addresses); unmatched traffic is `_unmatched`/`_none`. Series of removed
   endpoints are deleted.
 - **Access log**, one line per request on both planes, to the console (tracing
   target `access`) and optionally a file. Proxied requests record subsystem,
   route, upstream (the endpoint that answered), attempts, request id, upstream and
-  total time, and bytes sent. A request whose client left first is logged as 499. The file
+  total time, bytes sent, the client protocol (`proto`: `http/1.1` or `h2`) and the
+  TLS version (`tls`, `-` on plain HTTP). A request whose client left first is logged as 499. The file
   is written off the request path; the console line is the expensive one (see
   [docs/benchmarks.md](docs/benchmarks.md): about a quarter of throughput), so
   filter it with `--log-level "info,access=off"` when throughput matters.
@@ -267,6 +350,19 @@ WebSocket events are JSON discriminated by `type`:
   It binds to `127.0.0.1` by default and logs a warning if you bind it
   elsewhere. Anyone who can reach it can reconfigure the proxy, so do not
   expose it to a network you do not trust.
+- **Private keys are write-only.** No endpoint, log line, metric, event, error or
+  revision ever contains one; they are stored encrypted (AES-256-GCM) under a master
+  key that lives outside the database, and requests that carry a key are accepted
+  only from the machine the proxy runs on until authentication exists. See
+  [docs/security-review-m3.md](docs/security-review-m3.md).
+- **Back up the master key separately from the database.** The database alone does
+  not expose the keys, and cannot be used without the master key: if the key is
+  lost the stored private keys are unreadable and the certificates must be
+  uploaded again (development certificates regenerate by themselves). Keep the
+  `master.key` file (or `FAST_PROXY_MASTER_KEY`) somewhere other than the
+  database's backups.
+- HSTS is remembered by browsers for its whole lifetime: turn it on only when HTTPS
+  works for every host of the subsystem.
 - Client-supplied `X-Forwarded-*` headers are overwritten unless the peer is in
   `data_plane.trusted_proxies`.
 - Config errors never echo file paths or storage details to API clients; the
@@ -275,19 +371,22 @@ WebSocket events are JSON discriminated by `type`:
 ## Project structure
 
 ```
-├── docs/                     ROADMAP.md · M1-PLAN.md · M2-PLAN.md · M3-PLAN.md · getting-started.md · benchmarks.md · adr/
+├── docs/                     ROADMAP.md · M1-PLAN.md · M2-PLAN.md · M3-PLAN.md · getting-started.md · benchmarks.md · security-review-m3.md · adr/
+├── scripts/                  bench-m2.sh · bench-m3.sh (the benchmark runs behind docs/benchmarks.md)
 ├── config.toml               process settings (listeners, admin, logging) + UI
 ├── src/
 │   ├── main.rs               CLI entry + logging
 │   ├── cli.rs                flags and how they override the config file
 │   ├── config/               TOML config model and validation
 │   └── startup.rs            assembles store, config service, data plane, admin plane
-├── tests/                    end-to-end tests that run the real binary (M1 and M2 exit criteria, reload under load)
+├── tests/                    end-to-end tests (the real binary: M1-M3 exit criteria, reload under load, two processes on one database; in process: TLS, HTTP/2, redirect, upstream TLS, live certificate replacement)
 ├── crates/
 │   ├── fast-proxy-model/     validated domain types, group policies and the Config tree (no I/O)
 │   ├── fast-proxy-balancing/ endpoint runtime state, selection algorithms, passive health (no I/O)
 │   ├── fast-proxy-routing/   Config -> Snapshot compiler (carries runtime state), matchers (no I/O)
-│   ├── fast-proxy-store/     SQLite storage, transactional writes, revisions, rollback
+│   ├── fast-proxy-tls/       certificates: PEM validation, the key vault (AES-256-GCM), self-signed generator, certificate cache, rustls configurations
+│   ├── fast-proxy-test-pki/  test support only: an in-memory CA and TLS test clients
+│   ├── fast-proxy-store/     SQLite storage (certificates are opaque ciphertext here), transactional writes, revisions, rollback
 │   ├── fast-proxy-config-service/  the only writer: validate, persist, swap snapshot
 │   ├── fast-proxy-dataplane/ hyper listeners, request pipeline, endpoint selection, retries
 │   ├── fast-proxy-health/    active health probes, reconciled with the live configuration
@@ -304,9 +403,9 @@ WebSocket events are JSON discriminated by `type`:
         └── styles/           index.css (Tailwind v4 entry + theme tokens)
 ```
 
-Dependencies point one way: `model` <- `store`, `balancing`; `balancing` <-
-`routing`; `routing` + `balancing` + `telemetry` <- `dataplane`, `health`;
-`store` + `routing` + `balancing` + `telemetry` <- `config-service`;
+Dependencies point one way: `model` <- `tls`, `store`, `balancing`; `tls` <- `routing`; `balancing` <-
+`routing`; `routing` + `balancing` + `telemetry` + `tls` <- `dataplane`, `health`;
+`store` + `routing` + `balancing` + `telemetry` + `tls` <- `config-service`;
 `config-service` <- `health`, `admin`; everything <- the binary. The data plane
 never depends on the store.
 
@@ -349,6 +448,11 @@ cargo llvm-cov --workspace --summary-only   # coverage (needs cargo-llvm-cov)
   killing one under load with no client errors, automatic return after recovery
   (passive and active), drain and disable (surviving a restart), and fail open
   versus fail closed.
+- `tests/tls.rs`, `tls_http2.rs`, `tls_redirect.rs`, `tls_upstream.rs` and
+  `tls_live_replacement.rs` run the real data plane and config service in one
+  process with real TLS clients; `tls_exit_criteria.rs` and `cluster.rs` run the
+  real binary (two processes on one database for the latter). Certificates come from an in-memory CA and are
+  sent as PEM strings, so no files are involved.
 - `tests/reload_under_load.rs` also changes endpoints (drain, disable, add,
   remove) under load and checks that no request starts on an endpoint after the
   write that took it out returned.

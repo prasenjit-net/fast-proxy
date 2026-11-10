@@ -1,4 +1,6 @@
-use crate::{FailurePolicy, FieldError, HealthCheck, LbPolicy, PassiveHealth, RetryBudget};
+use crate::{
+    FailurePolicy, FieldError, HealthCheck, LbPolicy, PassiveHealth, RetryBudget, UpstreamTls,
+};
 
 /// Everything configurable about how a group chooses and protects endpoints.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -8,6 +10,7 @@ pub struct GroupPolicy {
     pub health: HealthCheck,
     pub passive: PassiveHealth,
     pub retry_budget: RetryBudget,
+    pub tls: UpstreamTls,
 }
 
 impl GroupPolicy {
@@ -15,7 +18,8 @@ impl GroupPolicy {
     pub fn validate(&self) -> Result<(), FieldError> {
         self.health.validate()?;
         self.passive.validate()?;
-        self.retry_budget.validate()
+        self.retry_budget.validate()?;
+        self.tls.validate()
     }
 }
 

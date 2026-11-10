@@ -2,11 +2,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
-use fast_proxy_model::{Config, RoutePrefix, SubsystemConfig, UpstreamGroupId};
+use fast_proxy_model::{
+    Config, RoutePrefix, SubsystemConfig, UpstreamGroupConfig, UpstreamGroupId,
+};
+use fast_proxy_tls::UpstreamTrust;
 
 use crate::compiled_upstream::GroupFault;
 use crate::snapshot::{CompiledRoute, CompiledSubsystem};
-use crate::{CompileError, CompiledUpstream, HostTable, RouteTable, Snapshot};
+use crate::{
+    CompileError, CompiledHttps, CompiledUpstream, HostTable, RouteTable, Snapshot, TlsInputs,
+};
 
 /// Compiles `config` into a snapshot labelled `version`. Pure and
 /// deterministic given `previous`; fails on any violated cross-table rule.
@@ -19,6 +24,21 @@ pub fn compile(
     version: u64,
     config: &Config,
     previous: &RuntimeRegistry,
+) -> Result<Snapshot, CompileError> {
+    compile_with_tls(version, config, previous, &TlsInputs::off())
+}
+
+/// Like [`compile`], carrying the TLS state into the snapshot: each subsystem
+/// gets its HTTPS settings and certificate handle, and the compile fails when
+/// an upstream names a CA bundle that does not exist or, while TLS is on, a
+/// subsystem with HTTPS enabled has no certificate or references a missing one.
+/// A certificate that exists but cannot be read is not an error: the
+/// subsystem's handshakes fall back to the placeholder certificate.
+pub fn compile_with_tls(
+    version: u64,
+    config: &Config,
+    previous: &RuntimeRegistry,
+    tls: &TlsInputs,
 ) -> Result<Snapshot, CompileError> {
     let registry = previous.rebuilt_for(
         config
@@ -50,11 +70,12 @@ pub fn compile(
             }
             host_entries.push((pattern, subsystem.id));
         }
-        subsystems.insert(subsystem.id, compile_subsystem(subsystem, &registry)?);
+        subsystems.insert(subsystem.id, compile_subsystem(subsystem, &registry, tls)?);
     }
 
     Ok(Snapshot {
         version,
+        tls_enabled: tls.enabled,
         hosts: HostTable::build(host_entries),
         subsystems,
     })
@@ -63,9 +84,11 @@ pub fn compile(
 fn compile_subsystem(
     subsystem: &SubsystemConfig,
     registry: &RuntimeRegistry,
+    tls: &TlsInputs,
 ) -> Result<CompiledSubsystem, CompileError> {
     let name = subsystem.name.as_str();
-    let groups = compile_groups(subsystem, registry)?;
+    let https = compile_https(subsystem, tls)?;
+    let groups = compile_groups(subsystem, registry, tls)?;
 
     let mut seen_prefixes = HashSet::new();
     let mut routes: Vec<(RoutePrefix, CompiledRoute)> = Vec::new();
@@ -105,9 +128,85 @@ fn compile_subsystem(
     Ok(CompiledSubsystem {
         name: subsystem.name.clone(),
         enabled: subsystem.enabled,
+        https,
         routes: RouteTable::build(routes),
         upstreams: groups,
     })
+}
+
+/// Resolves the subsystem's certificate. Checked only while TLS is on: with it
+/// off the settings are inert.
+fn compile_https(
+    subsystem: &SubsystemConfig,
+    tls: &TlsInputs,
+) -> Result<CompiledHttps, CompileError> {
+    let policy = &subsystem.https;
+    if !tls.enabled || !policy.enabled {
+        return Ok(CompiledHttps::new(policy, None));
+    }
+    let subsystem_name = subsystem.name.as_str().to_string();
+    let Some(id) = policy.certificate_id else {
+        return Err(CompileError::HttpsWithoutCertificate {
+            subsystem: subsystem_name,
+        });
+    };
+    if tls.certificates.entry(id).is_none() {
+        return Err(CompileError::UnknownCertificate {
+            subsystem: subsystem_name,
+            id: id.0,
+        });
+    }
+    Ok(CompiledHttps::new(
+        policy,
+        tls.certificates.handle(id).cloned(),
+    ))
+}
+
+/// The client TLS configuration of a group with upstream TLS on. Fails when the
+/// group names a CA bundle that does not exist (whether or not TLS is on, so a
+/// dangling name never survives a rollback) or one that cannot be used.
+fn client_tls_for(
+    subsystem: &str,
+    group: &UpstreamGroupConfig,
+    tls: &TlsInputs,
+) -> Result<Option<Arc<rustls::ClientConfig>>, CompileError> {
+    let settings = &group.policy.tls;
+    let bundle = if settings.ca.is_empty() {
+        None
+    } else {
+        match tls.ca_bundles.get(&settings.ca) {
+            Some(bundle) => Some(bundle.clone()),
+            None => {
+                return Err(CompileError::UnknownCaBundle {
+                    subsystem: subsystem.to_string(),
+                    upstream: group.name.clone(),
+                    name: settings.ca.clone(),
+                })
+            }
+        }
+    };
+    if !settings.enabled {
+        return Ok(None);
+    }
+    if !settings.verify {
+        tracing::warn!(
+            subsystem,
+            upstream = %group.name,
+            "upstream TLS verification is turned off for this group"
+        );
+    }
+    let trust = UpstreamTrust {
+        verify: settings.verify,
+        ca: bundle,
+    };
+    tls.client_configs
+        .get(&trust)
+        .map(Some)
+        .map_err(|err| CompileError::InvalidUpstream {
+            subsystem: subsystem.to_string(),
+            upstream: group.name.clone(),
+            reason: err.to_string(),
+        })
 }
 
 /// Compiles a subsystem's upstream groups, enforcing unique names and each
@@ -115,6 +214,7 @@ fn compile_subsystem(
 fn compile_groups(
     subsystem: &SubsystemConfig,
     registry: &RuntimeRegistry,
+    tls: &TlsInputs,
 ) -> Result<HashMap<UpstreamGroupId, Arc<CompiledUpstream>>, CompileError> {
     let name = subsystem.name.as_str();
     let mut by_id = HashMap::new();
@@ -126,7 +226,8 @@ fn compile_groups(
                 name: group.name.clone(),
             });
         }
-        let compiled = CompiledUpstream::build(group, registry).map_err(|fault| {
+        let client_tls = client_tls_for(name, group, tls)?;
+        let compiled = CompiledUpstream::build(group, registry, client_tls).map_err(|fault| {
             let (subsystem, upstream) = (name.to_string(), group.name.clone());
             match fault {
                 GroupFault::EndpointCount(count) => CompileError::EndpointCount {
@@ -152,7 +253,7 @@ fn compile_groups(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::time::Duration;
 
     use crate::Lookup;
@@ -204,6 +305,7 @@ mod tests {
             name: SubsystemName::parse(name).unwrap(),
             enabled: true,
             description: String::new(),
+            https: fast_proxy_model::HttpsPolicy::default(),
             hosts: hosts
                 .iter()
                 .map(|h| HostPattern::parse(h).unwrap())

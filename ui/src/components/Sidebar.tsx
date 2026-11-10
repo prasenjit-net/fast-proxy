@@ -6,6 +6,7 @@ import {
   IconDashboard,
   IconExternal,
   IconLayers,
+  IconLock,
   IconSearch,
   IconSliders,
   IconX,
@@ -14,7 +15,7 @@ import { isNavActive } from "../lib/navigation";
 import Logo from "./Logo";
 
 interface NavItem {
-  to: "/" | "/subsystems" | "/revisions" | "/resolver" | "/settings";
+  to: "/" | "/subsystems" | "/certificates" | "/revisions" | "/resolver" | "/settings";
   label: string;
   icon: ReactElement;
 }
@@ -22,6 +23,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <IconDashboard size={20} /> },
   { to: "/subsystems", label: "Subsystems", icon: <IconLayers size={20} /> },
+  { to: "/certificates", label: "Certificates", icon: <IconLock size={20} /> },
   { to: "/revisions", label: "Revisions", icon: <IconClock size={20} /> },
   { to: "/resolver", label: "Resolver", icon: <IconSearch size={20} /> },
   { to: "/settings", label: "Settings", icon: <IconSliders size={20} /> },

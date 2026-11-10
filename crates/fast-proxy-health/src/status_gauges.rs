@@ -29,8 +29,16 @@ pub async fn run_status_gauges(
 fn sample(snapshot: &Snapshot, metrics: &Metrics) {
     let now = monotonic_ms();
     let mut live = std::collections::HashSet::new();
+    let mut tls_groups = Vec::new();
     for subsystem in snapshot.subsystems.values() {
         for upstream in subsystem.upstreams.values() {
+            if upstream.policy.tls.enabled {
+                tls_groups.push((
+                    subsystem.name.as_str().to_string(),
+                    upstream.name.clone(),
+                    upstream.policy.tls.verify,
+                ));
+            }
             for (endpoint, candidate) in upstream.endpoints.iter().zip(&upstream.candidates) {
                 let addr = endpoint.addr.to_string();
                 let labels = EndpointLabels {
@@ -50,4 +58,5 @@ fn sample(snapshot: &Snapshot, metrics: &Metrics) {
         }
     }
     metrics.retain_upstream_series(&live);
+    metrics.set_upstream_tls_groups(&tls_groups);
 }

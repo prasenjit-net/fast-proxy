@@ -48,13 +48,33 @@ function ResolutionView({ resolution, version }: { resolution: Resolution; versi
             </Link>
           </Row>
         ) : null}
+        {resolution.https ? (
+          <>
+            <Row label="HTTPS">
+              {resolution.https.servedOverHttps
+                ? "served over HTTPS"
+                : "not served over HTTPS (HTTPS is off for this subsystem, or TLS is off for the proxy)"}
+            </Row>
+            <Row label="Plain HTTP">
+              {resolution.https.plainHttpRedirect ? (
+                <>
+                  redirected with {resolution.https.plainHttpRedirect.status} to{" "}
+                  <code className="font-semibold">{resolution.https.plainHttpRedirect.location}</code>
+                </>
+              ) : (
+                "served as usual (no redirect)"
+              )}
+            </Row>
+          </>
+        ) : null}
         {route ? (
           <>
             <Row label="Route">
               <code>{route.prefix}</code>
             </Row>
             <Row label="Upstream">
-              {route.upstreamName} (<code>{route.algorithm}</code>)
+              {route.upstreamName} (<code>{route.algorithm}</code>), reached over{" "}
+              <code>{route.upstreamScheme}</code>
             </Row>
             <Row label="Rewrite">
               {[

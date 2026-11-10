@@ -128,7 +128,7 @@ describe("Layout navigation", () => {
     const labels = within(nav)
       .getAllByRole("link")
       .map((link) => link.textContent);
-    expect(labels).toEqual(["Dashboard", "Subsystems", "Revisions", "Resolver", "Settings"]);
+    expect(labels).toEqual(["Dashboard", "Subsystems", "Certificates", "Revisions", "Resolver", "Settings"]);
     expect(within(nav).getByRole("link", { name: "Subsystems" })).toHaveAttribute("href", "/subsystems");
     expect(within(nav).getByRole("link", { name: "Dashboard" }).className).toMatch(/text-accent/);
     expect(within(nav).getByRole("link", { name: "Settings" }).className).not.toMatch(/text-accent/);

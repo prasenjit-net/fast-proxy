@@ -37,7 +37,9 @@ const matched: Resolution = {
     stripPrefix: true,
     upstreamPrefix: "/v2",
     preserveHost: false,
+    upstreamScheme: "http",
   },
+  https: { servedOverHttps: false, plainHttpRedirect: null },
 };
 
 const unmatched = (reason: NonNullable<Resolution["reason"]>, withSubsystem = false): Resolution => ({
@@ -45,6 +47,7 @@ const unmatched = (reason: NonNullable<Resolution["reason"]>, withSubsystem = fa
   reason,
   subsystem: withSubsystem ? { id: 1, name: "shop" } : null,
   route: null,
+  https: null,
 });
 
 function renderResolver() {
@@ -83,6 +86,35 @@ describe("ResolverPage", () => {
       host: "shop.example.com",
       path: "/api/users?page=2",
     });
+  });
+
+  it("shows how HTTPS applies: service, the plain-HTTP redirect and the scheme to the upstream", async () => {
+    const withHttps: Resolution = {
+      ...matched,
+      route: matched.route && { ...matched.route, upstreamScheme: "https" },
+      https: {
+        servedOverHttps: true,
+        plainHttpRedirect: { status: 308, location: "https://shop.example.com/api/users?page=2" },
+      },
+    };
+    mockApi({ "POST /api/resolve": { body: envelope(withHttps, 6) } });
+    renderResolver();
+    await screen.findByLabelText("Host");
+    await resolve("shop.example.com", "/api/users?page=2");
+
+    expect(await screen.findByText("served over HTTPS")).toBeInTheDocument();
+    expect(screen.getByText(/redirected with 308 to/)).toBeInTheDocument();
+    expect(screen.getByText("https://shop.example.com/api/users?page=2")).toBeInTheDocument();
+    expect(screen.getByText("https", { selector: "code" })).toBeInTheDocument();
+  });
+
+  it("says a host is not served over HTTPS and has no redirect when that is so", async () => {
+    mockApi({ "POST /api/resolve": { body: envelope(matched, 6) } });
+    renderResolver();
+    await screen.findByLabelText("Host");
+    await resolve("shop.example.com");
+    expect(await screen.findByText(/not served over HTTPS/)).toBeInTheDocument();
+    expect(screen.getByText("served as usual (no redirect)")).toBeInTheDocument();
   });
 
   it.each([

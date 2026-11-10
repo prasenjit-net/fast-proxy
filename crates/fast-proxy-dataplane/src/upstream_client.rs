@@ -12,6 +12,7 @@ use fast_proxy_telemetry::{
 };
 use http::{Request, Response, StatusCode};
 use hyper::body::Incoming;
+use hyper_rustls::{FixedServerNameResolver, HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
@@ -26,7 +27,42 @@ use crate::trusted_proxies::TrustedProxies;
 use crate::upstream_errors::{kind_for, outcome_of_error, outcome_of_status};
 use crate::{FixedResponse, Forward, Forwarded, ResponseBody, Target};
 
-type HttpClient = Client<HttpConnector, ReplayBody>;
+type HttpClient = Client<HttpsConnector<HttpConnector>, ReplayBody>;
+
+/// What distinguishes one pooled client from another: the connect timeout (it
+/// belongs to the connector), the TLS configuration of the group (a replaced CA
+/// bundle is a new configuration, so it gets a fresh pool) and the server name
+/// override.
+#[derive(Clone)]
+struct ClientKey {
+    connect_timeout: Duration,
+    tls: Option<Arc<rustls::ClientConfig>>,
+    server_name: String,
+}
+
+impl ClientKey {
+    fn tls_identity(&self) -> usize {
+        self.tls.as_ref().map_or(0, |tls| Arc::as_ptr(tls) as usize)
+    }
+}
+
+impl PartialEq for ClientKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.connect_timeout == other.connect_timeout
+            && self.tls_identity() == other.tls_identity()
+            && self.server_name == other.server_name
+    }
+}
+
+impl Eq for ClientKey {}
+
+impl std::hash::Hash for ClientKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.connect_timeout.hash(state);
+        self.tls_identity().hash(state);
+        self.server_name.hash(state);
+    }
+}
 
 /// How long an unused upstream connection stays pooled.
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -43,7 +79,7 @@ pub struct UpstreamClient {
     trusted_proxies: TrustedProxies,
     metrics: Arc<Metrics>,
     events: EndpointEvents,
-    clients: Mutex<HashMap<Duration, HttpClient>>,
+    clients: Mutex<HashMap<ClientKey, HttpClient>>,
 }
 
 impl UpstreamClient {
@@ -60,12 +96,33 @@ impl UpstreamClient {
         }
     }
 
-    fn client_for(&self, connect_timeout: Duration) -> HttpClient {
+    /// The pooled client for a route's connect timeout and its group's TLS
+    /// settings. Clients whose TLS configuration nothing else holds any more
+    /// (a replaced CA bundle) are dropped, so old pools do not pile up.
+    fn client_for(
+        &self,
+        connect_timeout: Duration,
+        tls: Option<&Arc<rustls::ClientConfig>>,
+        server_name: &str,
+    ) -> HttpClient {
+        let key = ClientKey {
+            connect_timeout,
+            tls: tls.cloned(),
+            server_name: server_name.to_string(),
+        };
         let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
-        clients
-            .entry(connect_timeout)
-            .or_insert_with(|| build_client(connect_timeout))
-            .clone()
+        if let Some(client) = clients.get(&key) {
+            return client.clone();
+        }
+        clients.retain(|existing, _| {
+            existing
+                .tls
+                .as_ref()
+                .is_none_or(|config| Arc::strong_count(config) > 1)
+        });
+        let client = build_client(&key);
+        clients.insert(key, client.clone());
+        client
     }
 
     /// Counts an upstream failure and builds the matching 502/504 response.
@@ -239,10 +296,38 @@ struct FailedAttempt<'a> {
     policy: &'a fast_proxy_model::RetryPolicy,
 }
 
-fn build_client(connect_timeout: Duration) -> HttpClient {
-    let mut connector = HttpConnector::new();
-    connector.set_connect_timeout(Some(connect_timeout));
-    connector.set_nodelay(true);
+/// The client configuration of a plain-HTTP group: never used for a handshake
+/// (its URIs are `http`), but the connector type needs one.
+fn plain_http_tls() -> rustls::ClientConfig {
+    rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map(|builder| {
+            builder
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth()
+        })
+        .unwrap_or_else(|_| unreachable!("the ring provider supports the default TLS versions"))
+}
+
+fn build_client(key: &ClientKey) -> HttpClient {
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+    http.set_connect_timeout(Some(key.connect_timeout));
+    http.set_nodelay(true);
+    let config = key
+        .tls
+        .as_ref()
+        .map_or_else(plain_http_tls, |config| (**config).clone());
+    let builder = HttpsConnectorBuilder::new()
+        .with_tls_config(config)
+        .https_or_http();
+    let connector = match rustls::pki_types::ServerName::try_from(key.server_name.clone()) {
+        Ok(name) if !key.server_name.is_empty() => builder
+            .with_server_name_resolver(FixedServerNameResolver::new(name))
+            .enable_http1()
+            .wrap_connector(http),
+        _ => builder.enable_http1().wrap_connector(http),
+    };
     Client::builder(TokioExecutor::new())
         .pool_idle_timeout(POOL_IDLE_TIMEOUT)
         .pool_timer(TokioTimer::new())
@@ -296,6 +381,11 @@ impl Forward for UpstreamClient {
         let client_upgrade = upgrading.then(|| hyper::upgrade::on(&mut request));
 
         let (mut head, body) = request.into_parts();
+        headers::ensure_host(&mut head);
+        // Upstream connections speak HTTP/1.1, whatever the client used.
+        if head.version == http::Version::HTTP_2 {
+            head.version = http::Version::HTTP_11;
+        }
         if upgrading {
             headers::strip_hop_by_hop_keeping_upgrade(&mut head.headers);
         } else {
@@ -306,13 +396,17 @@ impl Forward for UpstreamClient {
             &ClientInfo {
                 ip: target.client_addr.ip(),
                 trusted: self.trusted_proxies.contains(target.client_addr.ip()),
-                scheme: "http",
+                scheme: context.as_ref().map_or("http", |context| context.scheme),
             },
         );
         headers::apply_request_id(&mut head.headers, target.request_id);
 
         let owner = BodyOwner::new(body);
-        let client = self.client_for(route.connect_timeout);
+        let client = self.client_for(
+            route.connect_timeout,
+            upstream.client_tls.as_ref(),
+            &upstream.policy.tls.server_name,
+        );
         // A tunnel cannot be replayed, so an upgrade gets exactly one attempt.
         let policy = if upgrading {
             fast_proxy_model::RetryPolicy {
@@ -424,9 +518,9 @@ mod tests {
             Arc::new(Metrics::new()),
             EndpointEvents::new(),
         );
-        client.client_for(Duration::from_secs(1));
-        client.client_for(Duration::from_secs(1));
-        client.client_for(Duration::from_secs(2));
+        client.client_for(Duration::from_secs(1), None, "");
+        client.client_for(Duration::from_secs(1), None, "");
+        client.client_for(Duration::from_secs(2), None, "");
         assert_eq!(client.clients.lock().unwrap().len(), 2);
     }
 }

@@ -5,6 +5,8 @@ sends traffic through the proxy, then (from section 15) puts several backends
 behind one upstream, kills one, and drains another. It follows the M1 and M2
 exit criteria and uses `curl` so every step is explicit.
 
+This walkthrough also covers TLS (section 16).
+
 **Prefer clicking?** Everything below can also be done in the admin UI at
 http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`):
 
@@ -185,11 +187,12 @@ names and endpoint addresses); traffic for an unknown host is counted as `subsys
 and requests with no route as `route="_none"`. An access-log line looks like:
 
 ```
-127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 attempts=1 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
+127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 attempts=1 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 proto=http/1.1 tls=- total_ms=3.2
 ```
 
 `upstream` is the endpoint that answered (the last one tried) and `attempts` how
-many were tried: 2 means the first failed and a retry succeeded. A request whose
+many were tried: 2 means the first failed and a retry succeeded. `proto` is the client protocol (`http/1.1` or `h2`) and `tls` the negotiated TLS
+version on the HTTPS listener (`-` on plain HTTP). A request whose
 client left before the response is logged with status `499` and counted in
 `fastproxy_requests_cancelled_total`.
 
@@ -289,8 +292,96 @@ or answers `503` if you set `"failurePolicy": "fail_closed"`. A draining or
 disabled endpoint is never used, even then. Routes can tune retries with
 `"retry": {"maxAttempts": 2, "idempotentOn5xx": true, "onTimeout": false}`.
 
+## 16. TLS
+
+Everything below uses `curl`, the admin API on `127.0.0.1:9000` and `openssl` to
+make a test certificate. (The admin UI does the same: a subsystem's page has an
+**HTTPS** section and there is a **Certificates** page.)
+
+**Turn TLS on** for the process. It is off by default; this starts an HTTPS
+listener on 8443 next to the plain one on 8000:
+
+```sh
+cargo run -- --tls          # or [data_plane.tls] enabled = true in config.toml
+curl -s $A/tls              # enabled: true, listen "0.0.0.0:8443", vault "ok" or "not created"
+```
+
+**Enable HTTPS on a subsystem** and see its development certificate. A subsystem
+without a certificate gets a self-signed one for its host names, generated in the
+same write:
+
+```sh
+curl -s -X PUT -H "$J" -d '{"name":"shop","https":{"enabled":true}}' $A/subsystems/1
+curl -sk --resolve shop.example.com:8443:127.0.0.1 https://shop.example.com:8443/index.html   # hello from shop
+curl -s $A/certificates     # dev-shop, source "self_signed", usedBy [1]; no key is ever shown
+```
+
+(`-k` because a development certificate is not trusted by anyone.) Browsers warn
+for the same reason: upload a real certificate for production.
+
+**Upload a certificate and key** for the subsystem. Here a throwaway one made with
+`openssl`; the key must be unencrypted (it is encrypted at rest here) and
+requests that carry a key are accepted only from this machine:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=shop.example.com" \
+  -addext "subjectAltName=DNS:shop.example.com" -keyout /tmp/shop.key -out /tmp/shop.crt 2>/dev/null
+python3 - <<'PY' | curl -s -H "$J" -d @- $A/subsystems/1/certificate
+import json; print(json.dumps({"name": "shop", "certPem": open("/tmp/shop.crt").read(), "keyPem": open("/tmp/shop.key").read()}))
+PY
+curl -s --cacert /tmp/shop.crt --resolve shop.example.com:8443:127.0.0.1 https://shop.example.com:8443/index.html
+```
+
+The upload is rejected, and nothing changes, if the key does not match, the
+certificate is expired, or it covers none of the subsystem's hosts (the error names
+the field, for example `keyPem`, and never echoes the PEM). The next handshake
+after a **replace** (`PUT $A/certificates/ID` with a new `certPem` and `keyPem`)
+serves the new certificate, with no restart and without touching connections that
+are already open.
+
+**SNI and HTTP/2.** Each subsystem is served with its own certificate, chosen by
+the name the client sends; a name nobody owns gets a throwaway placeholder and a
+404. HTTP/1.1 and HTTP/2 share the port:
+
+```sh
+curl -s --http2 --cacert /tmp/shop.crt --resolve shop.example.com:8443:127.0.0.1 -w '%{http_version}\n' -o /dev/null https://shop.example.com:8443/
+# 2
+```
+
+A request whose `Host` belongs to a subsystem served by a **different**
+certificate than the connection's gets **421 Misdirected Request** (hosts that
+share a certificate are fine).
+
+**Redirect and HSTS** are per subsystem and live. They act only while TLS is on:
+
+```sh
+curl -s -X PUT -H "$J" -d '{"name":"shop","https":{"enabled":true,"certificateId":CERT_ID,"redirect":"308","hsts":{"enabled":true,"maxAgeSecs":300}}}' $A/subsystems/1
+curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/cart?x=1 | head -3   # 308, location: https://shop.example.com:8443/cart?x=1
+```
+
+Browsers remember HSTS for `maxAgeSecs`, so start with a short one.
+
+**TLS to an upstream.** Upload the CA that signed the backend's certificate, then
+mark the group TLS (`serverName` is needed when the endpoint is an IP address):
+
+```sh
+curl -s -H "$J" -d "{\"name\":\"internal\",\"pem\":$(python3 -c 'import json;print(json.dumps(open("/tmp/ca.pem").read()))')}" $A/ca-bundles
+curl -s -X PUT -H "$J" -d '{"name":"backend","tls":{"enabled":true,"serverName":"backend.internal","ca":"internal"}}' $A/subsystems/1/upstreams/UPSTREAM_ID
+```
+
+A certificate the proxy does not trust is refused (a 502, counted as a connect
+failure) and the group's health checks use the same TLS settings, so the endpoint
+shows as unhealthy too. `"verify": false` skips verification: it is allowed, logged
+as a warning, shown in the UI and marked in the `fastproxy_upstream_tls` metric.
+
+**The master key.** The first time a private key is stored the proxy creates
+`state/master.key` and encrypts every stored key with it. The database alone does
+not contain the keys, so **back the key up separately from the database**; if it
+is lost the keys are unreadable and certificates must be uploaded again. To run
+several instances on one database give them all the same key
+(`FAST_PROXY_MASTER_KEY`): a change on one reaches the others within a few seconds.
+
 ## Not available yet
 
-Authentication for the admin plane, TLS to clients and upstreams, ACME certificates,
-maintenance mode, rate limits and request sampling are later milestones (see
-[ROADMAP.md](ROADMAP.md)).
+Authentication for the admin plane, ACME certificates, maintenance mode, rate
+limits and request sampling are later milestones (see [ROADMAP.md](ROADMAP.md)).

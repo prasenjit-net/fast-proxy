@@ -7,7 +7,7 @@ use fast_proxy_model::{
 };
 use rusqlite::Connection;
 
-use super::policy_columns;
+use super::{https_columns, policy_columns};
 use crate::StoreError;
 
 /// Reads the whole configuration, ordered by id so the result is deterministic.
@@ -27,23 +27,27 @@ fn corrupt(what: &str, err: impl std::fmt::Display) -> StoreError {
 }
 
 fn load_subsystems(conn: &Connection) -> Result<Vec<SubsystemConfig>, StoreError> {
-    let mut statement =
-        conn.prepare("SELECT id, name, enabled, description FROM subsystem ORDER BY id")?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, name, enabled, description, {} FROM subsystem ORDER BY id",
+        https_columns::SELECT_LIST
+    ))?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, bool>(2)?,
             row.get::<_, String>(3)?,
+            https_columns::read(row, 4)?,
         ))
     })?;
     rows.map(|row| {
-        let (id, name, enabled, description) = row?;
+        let (id, name, enabled, description, https) = row?;
         Ok(SubsystemConfig {
             id: SubsystemId(id),
             name: SubsystemName::parse(&name).map_err(|err| corrupt("subsystem name", err))?,
             enabled,
             description,
+            https: https?,
             hosts: Vec::new(),
             upstream_groups: Vec::new(),
             routes: Vec::new(),

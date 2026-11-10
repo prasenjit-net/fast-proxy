@@ -3,13 +3,14 @@
 //! serde, and re-validates everything on the way back in.
 
 use fast_proxy_model::{
-    parse_timeout_ms, parse_weight, Config, EndpointAddr, EndpointConfig, EndpointId,
-    EndpointState, FailurePolicy, FieldError, GroupPolicy, HashKey, HealthCheck, HealthKind,
-    HostPattern, LbAlgorithm, LbPolicy, PassiveHealth, RetryBudget, RetryPolicy, RouteConfig,
-    RouteId, RoutePrefix, SubsystemConfig, SubsystemId, SubsystemName, UpstreamGroupConfig,
-    UpstreamGroupId, UpstreamPrefix,
+    parse_timeout_ms, parse_weight, CertificateId, Config, EndpointAddr, EndpointConfig,
+    EndpointId, EndpointState, FailurePolicy, FieldError, GroupPolicy, HashKey, HealthCheck,
+    HealthKind, HostPattern, Hsts, HttpsPolicy, LbAlgorithm, LbPolicy, PassiveHealth, RedirectMode,
+    RetryBudget, RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemId,
+    SubsystemName, UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix, UpstreamTls,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::StoreError;
@@ -25,9 +26,23 @@ struct SubsystemJson {
     name: String,
     enabled: bool,
     description: String,
+    https: HttpsJson,
     hosts: Vec<String>,
     upstream_groups: Vec<GroupJson>,
     routes: Vec<RouteJson>,
+}
+
+/// The HTTPS settings. The certificate's name is recorded beside its id so a
+/// rollback to a deleted certificate can name it; the id may have been reused.
+#[derive(Serialize, Deserialize)]
+struct HttpsJson {
+    enabled: bool,
+    certificate_id: Option<i64>,
+    certificate_name: Option<String>,
+    redirect: String,
+    hsts_enabled: bool,
+    hsts_max_age_secs: u32,
+    hsts_include_subdomains: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +80,10 @@ struct PolicyJson {
     passive_max_percent: u32,
     retry_budget_percent: u32,
     retry_budget_min_per_sec: u32,
+    tls_enabled: bool,
+    tls_verify: bool,
+    tls_server_name: String,
+    tls_ca: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -88,10 +107,18 @@ struct RouteJson {
     enabled: bool,
 }
 
-/// Serializes a configuration for storage in a revision.
-pub fn to_json(config: &Config) -> Result<String, StoreError> {
+/// Serializes a configuration for storage in a revision. `certificate_names`
+/// maps certificate ids to their names for the references recorded.
+pub fn to_json(
+    config: &Config,
+    certificate_names: &HashMap<i64, String>,
+) -> Result<String, StoreError> {
     let dto = ConfigJson {
-        subsystems: config.subsystems.iter().map(subsystem_json).collect(),
+        subsystems: config
+            .subsystems
+            .iter()
+            .map(|subsystem| subsystem_json(subsystem, certificate_names))
+            .collect(),
     };
     serde_json::to_string(&dto).map_err(|err| StoreError::Internal(err.to_string()))
 }
@@ -111,16 +138,37 @@ pub fn from_json(json: &str) -> Result<Config, StoreError> {
     Ok(Config { subsystems })
 }
 
+/// The certificates a stored revision references, as `(id, name)`.
+pub fn referenced_certificates(json: &str) -> Result<Vec<(CertificateId, String)>, StoreError> {
+    let dto: ConfigJson = serde_json::from_str(json)
+        .map_err(|err| StoreError::Internal(format!("stored revision is unreadable: {err}")))?;
+    Ok(dto
+        .subsystems
+        .into_iter()
+        .filter_map(|subsystem| {
+            let https = subsystem.https;
+            Some((
+                CertificateId(https.certificate_id?),
+                https.certificate_name?,
+            ))
+        })
+        .collect())
+}
+
 fn millis(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-fn subsystem_json(subsystem: &SubsystemConfig) -> SubsystemJson {
+fn subsystem_json(
+    subsystem: &SubsystemConfig,
+    certificate_names: &HashMap<i64, String>,
+) -> SubsystemJson {
     SubsystemJson {
         id: subsystem.id.0,
         name: subsystem.name.as_str().to_string(),
         enabled: subsystem.enabled,
         description: subsystem.description.clone(),
+        https: https_json(&subsystem.https, certificate_names),
         hosts: subsystem
             .hosts
             .iter()
@@ -176,6 +224,7 @@ fn subsystem_from_json(
         name: SubsystemName::parse(&json.name)?,
         enabled: json.enabled,
         description: json.description,
+        https: https_from_json(&json.https)?,
         hosts: json
             .hosts
             .iter()
@@ -231,6 +280,35 @@ fn subsystem_from_json(
     })
 }
 
+fn https_json(https: &HttpsPolicy, certificate_names: &HashMap<i64, String>) -> HttpsJson {
+    HttpsJson {
+        enabled: https.enabled,
+        certificate_id: https.certificate_id.map(|id| id.0),
+        certificate_name: https
+            .certificate_id
+            .and_then(|id| certificate_names.get(&id.0).cloned()),
+        redirect: https.redirect.as_str().to_string(),
+        hsts_enabled: https.hsts.enabled,
+        hsts_max_age_secs: https.hsts.max_age_secs,
+        hsts_include_subdomains: https.hsts.include_subdomains,
+    }
+}
+
+fn https_from_json(json: &HttpsJson) -> Result<HttpsPolicy, FieldError> {
+    let https = HttpsPolicy {
+        enabled: json.enabled,
+        certificate_id: json.certificate_id.map(CertificateId),
+        redirect: RedirectMode::parse(&json.redirect)?,
+        hsts: Hsts {
+            enabled: json.hsts_enabled,
+            max_age_secs: json.hsts_max_age_secs,
+            include_subdomains: json.hsts_include_subdomains,
+        },
+    };
+    https.validate()?;
+    Ok(https)
+}
+
 fn policy_json(policy: &GroupPolicy) -> PolicyJson {
     PolicyJson {
         lb_algorithm: policy.lb.algorithm.as_str().to_string(),
@@ -250,6 +328,10 @@ fn policy_json(policy: &GroupPolicy) -> PolicyJson {
         passive_max_percent: policy.passive.max_ejection_percent,
         retry_budget_percent: policy.retry_budget.percent,
         retry_budget_min_per_sec: policy.retry_budget.min_per_sec,
+        tls_enabled: policy.tls.enabled,
+        tls_verify: policy.tls.verify,
+        tls_server_name: policy.tls.server_name.clone(),
+        tls_ca: policy.tls.ca.clone(),
     }
 }
 
@@ -279,6 +361,12 @@ fn policy_from_json(json: &PolicyJson) -> Result<GroupPolicy, FieldError> {
         retry_budget: RetryBudget {
             percent: json.retry_budget_percent,
             min_per_sec: json.retry_budget_min_per_sec,
+        },
+        tls: UpstreamTls {
+            enabled: json.tls_enabled,
+            verify: json.tls_verify,
+            server_name: json.tls_server_name.clone(),
+            ca: json.tls_ca.clone(),
         },
     };
     policy.validate()?;

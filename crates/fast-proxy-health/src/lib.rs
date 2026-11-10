@@ -17,5 +17,5 @@ mod test_support;
 mod tests;
 
 pub use engine::HealthEngine;
-pub use probe::{run_probe, ProbeSpec};
+pub use probe::{run_probe, ProbeSpec, ProbeTls};
 pub use status_gauges::run_status_gauges;

@@ -25,6 +25,10 @@ impl Plane {
 /// What only a proxied (data plane) request has.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataPlaneFields {
+    /// The client protocol: `http/1.1`, `http/1.0` or `h2`.
+    pub proto: String,
+    /// The negotiated TLS version (for example `TLSv1_3`) on the HTTPS listener.
+    pub tls: Option<String>,
     /// The matched subsystem's name, or `_unmatched`.
     pub subsystem: String,
     /// The matched route's prefix, or `_none`.
@@ -65,8 +69,8 @@ impl AccessRecord<'_> {
     ///
     /// Data plane lines add `subsystem`, `route`, `upstream` (the endpoint
     /// that served the request, or the last one tried), `attempts`,
-    /// `request_id`, `upstream_ms`, and `bytes_out`; fields that do not
-    /// apply are `-`.
+    /// `request_id`, `upstream_ms`, `bytes_out`, `proto` (`http/1.1`, `h2`) and
+    /// `tls` (the TLS version, `-` on plain HTTP); fields that do not apply are `-`.
     fn format_line(&self, at: DateTime<Utc>) -> String {
         let timestamp = at.format("%Y-%m-%dT%H:%M:%S%.3fZ");
         let uri = escape_log_field(self.uri);
@@ -84,13 +88,15 @@ impl AccessRecord<'_> {
                 .upstream_time
                 .map_or_else(|| "-".to_string(), |time| format!("{:.1}", ms(time)));
             line.push_str(&format!(
-                " subsystem={} route={} upstream={} attempts={} request_id={} upstream_ms={upstream_ms} bytes_out={}",
+                " subsystem={} route={} upstream={} attempts={} request_id={} upstream_ms={upstream_ms} bytes_out={} proto={} tls={}",
                 escape_log_field(&data.subsystem),
                 escape_log_field(&data.route),
                 escape_log_field(upstream),
                 data.attempts,
                 escape_log_field(&data.request_id),
-                data.bytes_out
+                data.bytes_out,
+                escape_log_field(&data.proto),
+                escape_log_field(data.tls.as_deref().unwrap_or("-"))
             ));
         }
         line.push_str(&format!(" total_ms={:.1}", ms(self.elapsed)));
@@ -217,6 +223,8 @@ mod tests {
 
     fn data_fields() -> DataPlaneFields {
         DataPlaneFields {
+            proto: "http/1.1".into(),
+            tls: None,
             subsystem: "shop".into(),
             route: "/api".into(),
             upstream: Some("127.0.0.1:3000".into()),
@@ -279,8 +287,26 @@ mod tests {
             line,
             "127.0.0.1:52123 - [2026-08-03T10:15:42.000Z] \"GET /api/users?page=2 HTTP/1.1\" 200 \
              plane=data subsystem=shop route=/api upstream=127.0.0.1:3000 attempts=1 request_id=abc123 \
-             upstream_ms=1.2 bytes_out=456 total_ms=0.4"
+             upstream_ms=1.2 bytes_out=456 proto=http/1.1 tls=- total_ms=0.4"
         );
+    }
+
+    #[test]
+    fn https_lines_name_the_protocol_and_the_tls_version() {
+        let fields = DataPlaneFields {
+            proto: "h2".into(),
+            tls: Some("TLSv1_3".into()),
+            ..data_fields()
+        };
+        let record = AccessRecord {
+            plane: Plane::Data,
+            data_plane: Some(&fields),
+            ..admin_record("/")
+        };
+        let line = record.format_line(at());
+        let parsed = fields_of(&line);
+        assert_eq!(parsed["proto"], "h2");
+        assert_eq!(parsed["tls"], "TLSv1_3");
     }
 
     #[test]

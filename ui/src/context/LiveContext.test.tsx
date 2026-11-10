@@ -152,4 +152,24 @@ describe("LiveProvider", () => {
     expect(predicate({ queryKey: ["subsystems"] })).toBe(false);
     expect(predicate({ queryKey: ["config"] })).toBe(false);
   });
+
+  it("refetches certificate data, the TLS state and the status card on a certState event", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    renderLive(client);
+    act(() => FakeSocket.last.open());
+    act(() =>
+      FakeSocket.last.receive({ type: "certState", change: "uploaded", certificate: "shop", timestampMs: 5 }),
+    );
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    const { predicate } = invalidate.mock.calls[0][0] as unknown as {
+      predicate: (query: { queryKey: unknown[] }) => boolean;
+    };
+    for (const key of ["certificates", "tls", "status", "subsystem", "ca-bundles"]) {
+      expect(predicate({ queryKey: [key] }), key).toBe(true);
+    }
+    for (const key of ["config", "subsystems", "revisions"]) {
+      expect(predicate({ queryKey: [key] }), key).toBe(false);
+    }
+  });
 });

@@ -17,10 +17,41 @@ trusted_proxies = []
 # How long in-flight requests may finish after a shutdown signal.
 shutdown_grace = "30s"
 
-# One entry per plain-HTTP listener. TLS arrives in a later milestone.
+# The master key file that seals private keys stored in the database (created
+# the first time a key must be sealed). FAST_PROXY_MASTER_KEY (base64 of 32
+# bytes) overrides it; all instances sharing one database need the same key.
+# Back it up separately from the database. Default: <state_dir>/master.key
+# master_key_file = "./state/master.key"
+# How often to look for changes made by another instance. "0s" turns it off.
+config_poll_interval = "5s"
+
+# One entry per plain-HTTP listener.
 [[data_plane.listener]]
 name = "http"
 listen = "0.0.0.0:8000"
+
+# TLS termination. Off by default. When on, an HTTPS listener starts next to the
+# plain ones and each subsystem opts in to HTTPS in the admin UI/API. No
+# certificate or key lives in this file: certificates are uploaded (or
+# generated for development) in the admin UI and stored in the database.
+# `--tls` / `--no-tls` / `--https-listen` override the first two keys.
+[data_plane.tls]
+enabled = false
+listen = "0.0.0.0:8443"
+# The port redirects point at (NAT, containers). Default: the port of `listen`.
+# public_port = 443
+# Lowest TLS version accepted: "1.2" or "1.3".
+min_version = "1.2"
+http2 = true
+# Fail the handshake for an unknown name instead of presenting a placeholder.
+reject_unknown_sni = false
+handshake_timeout = "10s"
+max_concurrent_handshakes = 256
+# HTTP/2 limits (applied when a client negotiates h2).
+http2_max_concurrent_streams = 128
+http2_max_header_list_size = 65536
+http2_keep_alive_interval = "30s"
+http2_keep_alive_timeout = "20s"
 
 [admin]
 # The admin plane (UI, REST API, /metrics) has no authentication yet.

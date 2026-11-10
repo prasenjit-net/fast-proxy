@@ -115,6 +115,17 @@ export interface RetryBudget {
   minPerSec: number;
 }
 
+/** How the proxy talks TLS to a group's endpoints. */
+export interface UpstreamTls {
+  enabled: boolean;
+  /** Verify the endpoint's certificate; off is allowed but risky. */
+  verify: boolean;
+  /** Overrides the name used for SNI and the certificate check. */
+  serverName: string;
+  /** The name of an uploaded CA bundle; empty means the OS trust store. */
+  ca: string;
+}
+
 /** How a group spreads load and protects its endpoints. */
 export interface UpstreamPolicy {
   lb: LbPolicy;
@@ -122,6 +133,7 @@ export interface UpstreamPolicy {
   health: HealthPolicy;
   passive: PassivePolicy;
   retryBudget: RetryBudget;
+  tls: UpstreamTls;
 }
 
 export interface Upstream extends UpstreamPolicy {
@@ -157,6 +169,7 @@ export interface SubsystemDetail {
   description: string;
   createdAtMs: number;
   updatedAtMs: number;
+  https: HttpsSettings;
   hosts: Host[];
   upstreams: Upstream[];
   /** In match order: longest prefix first. */
@@ -167,6 +180,8 @@ export interface SubsystemInput {
   name: string;
   enabled: boolean;
   description: string;
+  /** Left out, the stored HTTPS settings are kept. */
+  https?: HttpsInput;
 }
 
 /** The body of `PUT` on an upstream: its name and policy (endpoints are separate). */
@@ -208,6 +223,7 @@ export interface SubsystemView {
   name: string;
   enabled: boolean;
   description: string;
+  https: HttpsSettings;
   hosts: string[];
   upstreams: Upstream[];
   routes: Route[];
@@ -239,6 +255,14 @@ export interface Resolution {
     stripPrefix: boolean;
     upstreamPrefix: string;
     preserveHost: boolean;
+    /** `https` when the group has TLS on: how the proxy reaches its endpoints. */
+    upstreamScheme: "http" | "https";
+  } | null;
+  /** How HTTPS applies to the matched subsystem; null for an unknown host. */
+  https: {
+    servedOverHttps: boolean;
+    /** What a plain-HTTP request for this host would be redirected to. */
+    plainHttpRedirect: { status: number; location: string } | null;
   } | null;
 }
 
@@ -282,11 +306,122 @@ export interface UpstreamStatus {
   endpoints: EndpointStatus[];
 }
 
+/** The soonest-expiring readable certificate. */
+export interface SoonestExpiry {
+  name: string;
+  notAfterMs: number;
+  secondsLeft: number;
+}
+
+/** The process TLS state and the health of the certificates, from `/api/status`. */
+export interface StatusTls {
+  enabled: boolean;
+  listen: string | null;
+  vault: VaultState;
+  certificates: number;
+  unreadable: number;
+  soonestExpiry: SoonestExpiry | null;
+}
+
 export interface Status {
+  tls: StatusTls;
   listeners: { name: string; addr: string }[];
   database: string;
   subsystems: { total: number; enabled: number };
   upstreams: UpstreamHealth;
   startedAtMs: number;
   uptimeSecs: number;
+}
+
+// ---- TLS: HTTPS settings, certificates, CA bundles -------------------------
+
+export type RedirectMode = "off" | "301" | "308";
+
+export interface HstsSettings {
+  enabled: boolean;
+  maxAgeSecs: number;
+  includeSubdomains: boolean;
+}
+
+/** The certificate attached to a subsystem, as shown beside its settings. */
+export interface AttachedCertificate {
+  name: string;
+  source: CertificateSource;
+  notAfterMs: number;
+  /** Host patterns of the subsystem the certificate does not cover. */
+  uncoveredHosts: string[];
+}
+
+/** A subsystem's HTTPS settings as the server reports them. */
+export interface HttpsSettings {
+  enabled: boolean;
+  certificateId: number | null;
+  redirect: RedirectMode;
+  hsts: HstsSettings;
+  /** HTTPS is enabled here and TLS is on for the process; otherwise inert. */
+  effective: boolean;
+  certificate: AttachedCertificate | null;
+}
+
+/** What is sent to change a subsystem's HTTPS settings. */
+export interface HttpsInput {
+  enabled: boolean;
+  certificateId: number | null;
+  redirect: RedirectMode;
+  hsts: HstsSettings;
+}
+
+export type CertificateSource = "uploaded" | "self_signed" | "acme";
+export type CertificateState = "ok" | "expiring" | "expired" | "unreadable";
+export type VaultState = "ok" | "key mismatch" | "not created";
+
+/** A certificate's public facts. Private keys are write-only: the server never returns one. */
+export interface Certificate {
+  id: number;
+  name: string;
+  source: CertificateSource;
+  names: string[];
+  subject: string;
+  issuer: string;
+  notBeforeMs: number;
+  notAfterMs: number;
+  secondsLeft: number;
+  state: CertificateState;
+  fingerprint: string;
+  /** Ids of the subsystems using it. */
+  usedBy: number[];
+  updatedAtMs: number;
+  /** Findings of the write that produced this response, such as expiring soon. */
+  warnings?: string[];
+}
+
+/** The body of an upload: the key is sent once and never kept. */
+export interface CertificateUpload {
+  name: string;
+  certPem: string;
+  keyPem: string;
+}
+
+/** Changes to a stored certificate; absent fields keep the stored value. */
+export interface CertificateChange {
+  name?: string;
+  certPem?: string;
+  keyPem?: string;
+}
+
+export interface CaBundle {
+  id: number;
+  name: string;
+  certCount: number;
+  certificates: { subject: string; notAfterMs: number }[];
+  updatedAtMs: number;
+}
+
+/** `GET /api/tls`: the process-wide TLS switch and whether stored keys are readable. */
+export interface TlsStatus {
+  enabled: boolean;
+  listen: string | null;
+  http2: boolean;
+  minVersion: string;
+  vault: VaultState;
 }

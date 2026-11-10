@@ -1,12 +1,17 @@
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
-use fast_proxy_routing::{compile, Snapshot, SnapshotHolder};
-use fast_proxy_store::{Connection, Database, Mutation, Store, StoreError};
-use fast_proxy_telemetry::{Metrics, ReloadOutcome};
+use fast_proxy_routing::{compile_with_tls, Snapshot, SnapshotHolder};
+use fast_proxy_store::repository::{certificates, load, vault};
+use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
+use fast_proxy_telemetry::{Metrics, ReloadOutcome, SyncResult};
+use fast_proxy_tls::certificate_readings;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::dev_certificates;
 use crate::metric_series::live_endpoints;
+use crate::tls_state::{Prepared, TlsSettings, TlsState, VaultStatus};
 use crate::StartError;
 
 /// Broadcast after every applied change.
@@ -32,6 +37,7 @@ pub struct ConfigService {
     writer: Mutex<()>,
     changes: broadcast::Sender<ConfigChanged>,
     metrics: Arc<Metrics>,
+    pub(crate) tls: Arc<TlsState>,
 }
 
 impl ConfigService {
@@ -42,25 +48,203 @@ impl ConfigService {
     }
 
     /// Like [`ConfigService::start`], reporting the config version and every
-    /// accepted or rejected change to `metrics`.
+    /// accepted or rejected change to `metrics`. TLS is off.
     pub async fn start_with_metrics(
         store: Store,
         metrics: Arc<Metrics>,
     ) -> Result<Self, StartError> {
-        let (config, version) = store
-            .run(|db| Ok((db.load_all()?, db.current_version()?)))
+        Self::start_with_tls(store, metrics, TlsSettings::default()).await
+    }
+
+    /// Like [`ConfigService::start_with_metrics`], with the process TLS
+    /// settings. Unlocks the vault when a key is needed, parses the stored
+    /// certificates (an unreadable one is reported, never fatal), and fills any
+    /// certificate gap while TLS is on.
+    pub async fn start_with_tls(
+        store: Store,
+        metrics: Arc<Metrics>,
+        settings: TlsSettings,
+    ) -> Result<Self, StartError> {
+        let tls_enabled = settings.enabled;
+        let (config, version, has_certificates, check) = store
+            .run(|db| {
+                db.read(|conn| {
+                    Ok((
+                        load::load_all(conn)?,
+                        revision::current_version(conn)?,
+                        !certificates::list(conn)?.is_empty(),
+                        vault::get(conn)?,
+                    ))
+                })
+            })
             .await?;
+        let tls = Arc::new(TlsState::open(settings, has_certificates, check.as_ref())?);
+        let prepared = store
+            .run({
+                let tls = tls.clone();
+                move |db| db.read(|conn| tls.build(conn))
+            })
+            .await?;
+        let snapshot = compile_with_tls(
+            version,
+            &config,
+            &RuntimeRegistry::new(),
+            &tls.inputs(&prepared, false),
+        )?;
         let holder = Arc::new(SnapshotHolder::new());
-        holder.swap(compile(version, &config, &RuntimeRegistry::new())?);
+        holder.swap(snapshot);
         metrics.set_config_version(version);
+        publish_certificates(&metrics, &prepared);
+        tls.install(prepared.cache);
         let (changes, _) = broadcast::channel(64);
-        Ok(Self {
+        let service = Self {
             store,
             holder,
             writer: Mutex::new(()),
             changes,
             metrics,
+            tls,
+        };
+        if tls_enabled {
+            service.go_live_with_tls().await?;
+        }
+        Ok(service)
+    }
+
+    /// Switches the first snapshot from inert to TLS-on: a write that fills
+    /// certificate gaps when there are any, else a recompile with no write.
+    async fn go_live_with_tls(&self) -> Result<(), StartError> {
+        let needs_certificates = self
+            .store
+            .run(|db| {
+                {
+                    db.read(|conn| {
+                        let config = TlsState::config(conn)?;
+                        let rows = certificates::list(conn)?;
+                        Ok(!dev_certificates::plan(&config, &rows, now_ms()).is_empty())
+                    })
+                }
+            })
+            .await?;
+        if needs_certificates {
+            self.apply(|_| {
+                Ok(Mutation {
+                    value: (),
+                    summary: "startup: development certificates generated".into(),
+                })
+            })
+            .await?;
+            return Ok(());
+        }
+        let previous = self.holder.load().runtime_registry();
+        let prepared = self
+            .store
+            .run({
+                let tls = self.tls.clone();
+                move |db| db.read(|conn| tls.build(conn))
+            })
+            .await?;
+        let (config, version) = self
+            .store
+            .run(|db| Ok((db.load_all()?, db.current_version()?)))
+            .await?;
+        let inputs = self.tls.inputs(&prepared, true);
+        self.holder
+            .swap(compile_with_tls(version, &config, &previous, &inputs)?);
+        self.tls.install(prepared.cache);
+        Ok(())
+    }
+
+    /// Looks once for a change made by another instance (or process) sharing the
+    /// database: when the stored revision is ahead of the live snapshot, the
+    /// configuration and certificates are reloaded and swapped in, carrying the
+    /// endpoint runtime state and the unchanged certificates over. Takes the
+    /// writer lock, so it never interleaves with a local write; a local commit
+    /// leaves the two versions equal, so it never triggers a reload.
+    pub async fn sync_once(&self) -> SyncResult {
+        let result = self.sync_under_lock().await;
+        self.metrics.config_sync(result);
+        result
+    }
+
+    async fn sync_under_lock(&self) -> SyncResult {
+        let _writer = self.writer.lock().await;
+        let live = self.holder.load().version;
+        match self.store.run(|db| db.current_version()).await {
+            Ok(stored) if stored <= live => return SyncResult::Unchanged,
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!("cluster sync cannot read the database version: {err}");
+                return SyncResult::Failed;
+            }
+        }
+        match self.reload_from_database().await {
+            Ok(summary) => {
+                let _ = self.changes.send(summary);
+                SyncResult::Reloaded
+            }
+            Err(err) => {
+                tracing::warn!("cluster sync could not apply a newer configuration: {err}");
+                SyncResult::Failed
+            }
+        }
+    }
+
+    /// Loads the stored state, compiles it against the live runtime state and
+    /// swaps it in. The caller holds the writer lock.
+    async fn reload_from_database(&self) -> Result<ConfigChanged, StartError> {
+        let previous = self.holder.load().runtime_registry();
+        let tls = self.tls.clone();
+        let (config, version, prepared) = self
+            .store
+            .run(move |db| {
+                db.read(|conn| {
+                    tls.refresh_vault(conn)?;
+                    Ok((
+                        load::load_all(conn)?,
+                        revision::current_version(conn)?,
+                        tls.build(conn)?,
+                    ))
+                })
+            })
+            .await?;
+        let inputs = self.tls.inputs(&prepared, self.tls.settings.enabled);
+        let snapshot = compile_with_tls(version, &config, &previous, &inputs)?;
+        self.metrics
+            .retain_upstream_series(&live_endpoints(&snapshot));
+        self.metrics.set_config_version(version);
+        publish_certificates(&self.metrics, &prepared);
+        self.tls.install(prepared.cache);
+        self.holder.swap(snapshot);
+        Ok(ConfigChanged {
+            version,
+            summary: "configuration synchronized from the database".into(),
         })
+    }
+
+    /// Polls for changes made by other instances every `interval` until
+    /// `shutdown` is cancelled. A zero interval turns the sync off: the future
+    /// resolves at once.
+    pub async fn run_sync(
+        self: Arc<Self>,
+        interval: std::time::Duration,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) {
+        if interval.is_zero() {
+            return;
+        }
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = tokio::time::sleep(interval) => {}
+            }
+            self.sync_once().await;
+        }
+    }
+
+    /// Whether stored private keys can be read.
+    pub fn vault_status(&self) -> VaultStatus {
+        self.tls.status()
     }
 
     /// The live snapshot holder, shared with the data plane.
@@ -117,9 +301,10 @@ impl ConfigService {
         // the live snapshot into the new one; the writer lock keeps the live
         // snapshot from changing under us.
         let previous = self.holder.load().runtime_registry();
-        let (written, compiled, summary) = self
+        let tls = self.tls.clone();
+        let (written, compiled, summary, prepared) = self
             .store
-            .run(move |db| persist_and_compile(db, mutate, &previous))
+            .run(move |db| persist_and_compile(db, mutate, &previous, &tls))
             .await?;
         let mut snapshot = compiled.ok_or_else(|| {
             StoreError::Internal("a committed change produced no snapshot".into())
@@ -127,6 +312,8 @@ impl ConfigService {
         snapshot.version = written.version;
         self.metrics
             .retain_upstream_series(&live_endpoints(&snapshot));
+        publish_certificates(&self.metrics, &prepared);
+        self.tls.install(prepared.cache);
         self.holder.swap(snapshot);
         // send() only fails when nobody is subscribed, which is fine.
         let _ = self.changes.send(ConfigChanged {
@@ -152,29 +339,65 @@ impl ConfigService {
     }
 }
 
-type PersistOutcome<T> = (fast_proxy_store::Written<T>, Option<Snapshot>, String);
+type PersistOutcome<T> = (
+    fast_proxy_store::Written<T>,
+    Option<Snapshot>,
+    String,
+    Prepared,
+);
 
-/// Runs on the store thread: mutate, compile as the veto, commit.
+fn publish_certificates(metrics: &Metrics, prepared: &Prepared) {
+    metrics.cert_cache_rebuilt(
+        prepared.stats.hits,
+        prepared.stats.misses,
+        prepared.stats.unreadable,
+    );
+    metrics.set_certificate_readings(&certificate_readings(&prepared.cache, now_ms()));
+}
+
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
+}
+
+/// Runs on the store thread: mutate, fill certificate gaps, compile as the
+/// veto (with the would-be certificates), commit.
 fn persist_and_compile<T>(
     db: &mut Database,
     mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
     previous: &RuntimeRegistry,
+    tls: &TlsState,
 ) -> Result<PersistOutcome<T>, StoreError> {
     let mut compiled = None;
     let mut summary = String::new();
+    let prepared: RefCell<Option<Prepared>> = RefCell::new(None);
     let written = db.write(
         |conn| {
             let mutation = mutate(conn)?;
             summary = mutation.summary.clone();
+            *prepared.borrow_mut() = Some(tls.prepare(conn, now_ms())?);
             Ok(mutation)
         },
-        |config| match compile(0, config, previous) {
-            Ok(snapshot) => {
-                compiled = Some(snapshot);
-                Ok(())
+        |config| {
+            let borrowed = prepared.borrow();
+            let Some(ready) = borrowed.as_ref() else {
+                return Err("certificates were not prepared".to_string());
+            };
+            let inputs = tls.inputs(ready, tls.settings.enabled);
+            match compile_with_tls(0, config, previous, &inputs) {
+                Ok(snapshot) => {
+                    compiled = Some(snapshot);
+                    Ok(())
+                }
+                Err(err) => Err(err.to_string()),
             }
-            Err(err) => Err(err.to_string()),
         },
     )?;
-    Ok((written, compiled, summary))
+    let prepared = prepared.into_inner().ok_or_else(|| {
+        StoreError::Internal("a committed change prepared no certificates".into())
+    })?;
+    Ok((written, compiled, summary, prepared))
 }

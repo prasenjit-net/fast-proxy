@@ -1,11 +1,55 @@
--- Schema v2. The project is not deployed, so changes edit this file directly
+-- Schema v3. The project is not deployed, so changes edit this file directly
 -- (no migrations); SCHEMA_VERSION in database.rs must be bumped with it.
+
+-- Certificate material. Private keys are stored only as AES-256-GCM ciphertext
+-- (sealed by the tls crate); this crate never decrypts. The SQL stays portable
+-- (BLOB to BYTEA, millisecond BIGINT times, JSON as text) so a PostgreSQL
+-- implementation needs type changes only.
+CREATE TABLE certificate (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  source      TEXT NOT NULL,
+  chain_pem   TEXT NOT NULL,
+  key_enc     BLOB NOT NULL,
+  key_nonce   BLOB NOT NULL,
+  names       TEXT NOT NULL,
+  subject     TEXT NOT NULL,
+  issuer      TEXT NOT NULL,
+  not_before  INTEGER NOT NULL,
+  not_after   INTEGER NOT NULL,
+  fingerprint TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE TABLE ca_bundle (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  pem         TEXT NOT NULL,
+  cert_count  INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+-- One row proving the master key is the right one.
+CREATE TABLE vault (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  check_nonce BLOB NOT NULL,
+  check_blob  BLOB NOT NULL
+);
 
 CREATE TABLE subsystem (
   id          INTEGER PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
   enabled     INTEGER NOT NULL DEFAULT 1,
   description TEXT NOT NULL DEFAULT '',
+  https_enabled           INTEGER NOT NULL DEFAULT 0,
+  -- NO ACTION: a certificate a subsystem uses cannot be deleted.
+  https_certificate_id    INTEGER REFERENCES certificate(id),
+  https_redirect          TEXT    NOT NULL DEFAULT 'off',
+  hsts_enabled            INTEGER NOT NULL DEFAULT 0,
+  hsts_max_age_secs       INTEGER NOT NULL DEFAULT 31536000,
+  hsts_include_subdomains INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
 );
@@ -37,6 +81,10 @@ CREATE TABLE upstream_group (
   passive_max_percent  INTEGER NOT NULL DEFAULT 50,
   retry_budget_percent INTEGER NOT NULL DEFAULT 20,
   retry_budget_min_per_sec INTEGER NOT NULL DEFAULT 10,
+  tls_enabled          INTEGER NOT NULL DEFAULT 0,
+  tls_verify           INTEGER NOT NULL DEFAULT 1,
+  tls_server_name      TEXT    NOT NULL DEFAULT '',
+  tls_ca               TEXT    NOT NULL DEFAULT '',
   UNIQUE (subsystem_id, name)
 );
 

@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { envelope, route, revisionPage, upstream } from "../test/fixtures";
+import { envelope, httpsSettings, route, revisionPage, upstream } from "../test/fixtures";
 import { apiError, mockApi } from "../test/mockApi";
 import { renderPage } from "../test/renderPage";
 import RevisionsPage from "./Revisions";
@@ -74,6 +74,7 @@ describe("RevisionsPage", () => {
             name: "shop",
             enabled: true,
             description: "",
+            https: httpsSettings(),
             hosts: ["shop.example.com"],
             upstreams: [upstream()],
             routes: [route({ prefix: "/api" })],

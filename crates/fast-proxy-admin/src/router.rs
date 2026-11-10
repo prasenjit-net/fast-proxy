@@ -1,11 +1,16 @@
 //! Route table for the admin plane.
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 use crate::state::SharedState;
 use crate::{access_middleware, api, static_assets, ws};
+
+/// The most a request carrying certificate material may weigh: a 256 KiB chain,
+/// a 256 KiB key and JSON around them.
+const KEY_BODY_LIMIT: usize = 600 * 1024;
 
 /// Builds the admin router: REST API, `/ws`, and the SPA fallback.
 pub fn router(state: SharedState) -> Router {
@@ -61,6 +66,34 @@ pub fn router(state: SharedState) -> Router {
             "/api/subsystems/{id}/routes/{route_id}",
             put(api::update_route).delete(api::delete_route),
         )
+        .route(
+            "/api/subsystems/{id}/certificate",
+            post(api::upload_subsystem_certificate)
+                .delete(api::detach_subsystem_certificate)
+                .layer(DefaultBodyLimit::max(KEY_BODY_LIMIT)),
+        )
+        .route(
+            "/api/certificates",
+            get(api::list_certificates)
+                .post(api::upload_certificate)
+                .layer(DefaultBodyLimit::max(KEY_BODY_LIMIT)),
+        )
+        .route(
+            "/api/certificates/self-signed",
+            post(api::generate_self_signed),
+        )
+        .route(
+            "/api/certificates/{id}",
+            put(api::replace_certificate)
+                .delete(api::delete_certificate)
+                .layer(DefaultBodyLimit::max(KEY_BODY_LIMIT)),
+        )
+        .route(
+            "/api/ca-bundles",
+            get(api::list_ca_bundles).post(api::upload_ca_bundle),
+        )
+        .route("/api/ca-bundles/{id}", delete(api::delete_ca_bundle))
+        .route("/api/tls", get(api::tls_status))
         .route("/api/revisions", get(api::list_revisions))
         .route("/api/revisions/{version}", get(api::get_revision))
         .route(

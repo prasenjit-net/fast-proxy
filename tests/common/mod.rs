@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 pub mod flaky;
 pub mod groups;
 pub mod load;
+pub mod tls_stack;
 
 use serde_json::{json, Value};
 
@@ -94,9 +95,15 @@ pub fn write_config(
 }
 
 pub fn spawn(config: &Path) -> Child {
+    spawn_with_args(config, &[])
+}
+
+/// Spawns the proxy with extra command-line flags after `--config`.
+pub fn spawn_with_args(config: &Path, args: &[&str]) -> Child {
     Command::new(env!("CARGO_BIN_EXE_fast-proxy"))
         .arg("--config")
         .arg(config)
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -148,12 +155,24 @@ pub fn try_start(
     extra_config: &str,
     tail: &str,
 ) -> Result<Proxy, String> {
+    try_start_with_args(dir, data_port, admin_port, (extra_config, tail), &[])
+}
+
+/// Like [`try_start`], also passing command-line `args`; `config` is the extra
+/// `[data_plane]` lines and the tail sections.
+pub fn try_start_with_args(
+    dir: &Path,
+    data_port: u16,
+    admin_port: u16,
+    (extra_config, tail): (&str, &str),
+    args: &[&str],
+) -> Result<Proxy, String> {
     let config = write_config(dir, data_port, admin_port, extra_config);
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str(tail);
     std::fs::write(&config, text).unwrap();
     let mut proxy = Proxy {
-        child: spawn(&config),
+        child: spawn_with_args(&config, args),
         data: ([127, 0, 0, 1], data_port).into(),
         admin: ([127, 0, 0, 1], admin_port).into(),
     };

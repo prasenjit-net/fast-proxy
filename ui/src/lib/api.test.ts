@@ -141,10 +141,12 @@ describe("endpoint calls", () => {
     },
     passive: { consecutiveFailures: 3, baseEjectionMs: 10000, maxEjectionMs: 300000, maxEjectionPercent: 50 },
     retryBudget: { percent: 20, minPerSec: 10 },
+    tls: { enabled: false, verify: true, serverName: "", ca: "" },
   };
   const created = { ...settings, endpoints: [{ addr: "127.0.0.1:3000", weight: 1 }] };
   const endpoint = { addr: "127.0.0.1:3001", weight: 2 };
   const subsystem = { name: "shop", enabled: true, description: "" };
+  const upload = { name: "shop", certPem: "cert", keyPem: "key" };
 
   const calls: [string, () => Promise<unknown>, string, string, unknown][] = [
     ["subsystems", () => api.subsystems(), "GET", "/api/subsystems", undefined],
@@ -176,6 +178,23 @@ describe("endpoint calls", () => {
     ["revision", () => api.revision(12), "GET", "/api/revisions/12", undefined],
     ["rollback", () => api.rollback(12), "POST", "/api/revisions/12/rollback", {}],
     ["resolve", () => api.resolve("a.com", "/x?y=1"), "POST", "/api/resolve", { host: "a.com", path: "/x?y=1" }],
+    ["certificates", () => api.certificates(), "GET", "/api/certificates", undefined],
+    ["uploadCertificate", () => api.uploadCertificate(upload), "POST", "/api/certificates", upload],
+    [
+      "generateSelfSigned",
+      () => api.generateSelfSigned("dev", ["a.example.com"]),
+      "POST",
+      "/api/certificates/self-signed",
+      { name: "dev", names: ["a.example.com"] },
+    ],
+    ["changeCertificate", () => api.changeCertificate(3, { name: "x" }), "PUT", "/api/certificates/3", { name: "x" }],
+    ["deleteCertificate", () => api.deleteCertificate(3), "DELETE", "/api/certificates/3", undefined],
+    ["uploadSubsystemCertificate", () => api.uploadSubsystemCertificate(4, upload), "POST", "/api/subsystems/4/certificate", upload],
+    ["detachSubsystemCertificate", () => api.detachSubsystemCertificate(4), "DELETE", "/api/subsystems/4/certificate", undefined],
+    ["caBundles", () => api.caBundles(), "GET", "/api/ca-bundles", undefined],
+    ["uploadCaBundle", () => api.uploadCaBundle("corp", "pem"), "POST", "/api/ca-bundles", { name: "corp", pem: "pem" }],
+    ["deleteCaBundle", () => api.deleteCaBundle(2), "DELETE", "/api/ca-bundles/2", undefined],
+    ["tls", () => api.tls(), "GET", "/api/tls", undefined],
     ["status", () => api.status(), "GET", "/api/status", undefined],
     ["traffic", () => api.traffic(), "GET", "/api/traffic", undefined],
   ];

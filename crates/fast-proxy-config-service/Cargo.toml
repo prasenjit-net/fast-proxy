@@ -10,9 +10,14 @@ fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }
+fast-proxy-tls = { path = "../fast-proxy-tls" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = "0.7"
+tracing = { workspace = true }
 
 [dev-dependencies]
+fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
+base64 = "0.22"
 tempfile = { workspace = true }

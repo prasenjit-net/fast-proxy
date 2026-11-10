@@ -2,13 +2,17 @@
 //! `&Connection` (a `Transaction` derefs to one), so the same code serves
 //! reads and the transactional write path.
 
+pub mod ca_bundles;
+pub mod certificates;
 pub mod endpoints;
 pub mod hosts;
+mod https_columns;
 pub mod load;
 mod policy_columns;
 pub mod routes;
 pub mod subsystems;
 pub mod upstreams;
+pub mod vault;
 
 use fast_proxy_model::SubsystemId;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -43,3 +47,6 @@ fn touch(conn: &Connection, id: SubsystemId) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tls_tests;

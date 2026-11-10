@@ -6,7 +6,8 @@ use fast_proxy_model::EndpointAddr;
 use crate::CompiledRoute;
 
 /// Builds the URI to request from the chosen `endpoint`: its address, the
-/// rewritten path, and the original query string byte for byte.
+/// rewritten path, and the original query string byte for byte. The scheme
+/// is `https` when the route's upstream group has TLS on.
 ///
 /// With `strip_prefix` the path the route matched on is replaced by the
 /// route's `upstream_prefix`; without it the whole original path is kept
@@ -34,8 +35,13 @@ pub fn build_upstream_uri(
 
     let authority: Authority = endpoint.to_string().parse().ok()?;
     let path_and_query: PathAndQuery = rewritten.parse().ok()?;
+    let scheme = if route.upstream.policy.tls.enabled {
+        Scheme::HTTPS
+    } else {
+        Scheme::HTTP
+    };
     Uri::builder()
-        .scheme(Scheme::HTTP)
+        .scheme(scheme)
         .authority(authority)
         .path_and_query(path_and_query)
         .build()
@@ -87,6 +93,7 @@ mod tests {
                         }],
                     },
                     &RuntimeRegistry::new().rebuilt_for([(EndpointId(1), &endpoint())]),
+                    None,
                 )
                 .unwrap(),
             ),
@@ -152,6 +159,31 @@ mod tests {
         assert_eq!(
             rewrite(false, "", "/a%2Fb/%2e%2e/c", 0),
             "http://127.0.0.1:3000/a%2Fb/%2e%2e/c"
+        );
+    }
+
+    #[test]
+    fn a_tls_group_gets_an_https_scheme_with_and_without_a_port() {
+        let mut tls_route = route(false, "");
+        let mut group = Arc::try_unwrap(tls_route.upstream).unwrap();
+        group.policy.tls.enabled = true;
+        tls_route.upstream = Arc::new(group);
+        let uri: Uri = "/x?q=1".parse().unwrap();
+        let with_port = build_upstream_uri(&tls_route, &endpoint(), &uri, 0).unwrap();
+        assert_eq!(with_port.to_string(), "https://127.0.0.1:3000/x?q=1");
+        let ipv6 = EndpointAddr::parse("[::1]:8443").unwrap();
+        assert_eq!(
+            build_upstream_uri(&tls_route, &ipv6, &uri, 0)
+                .unwrap()
+                .to_string(),
+            "https://[::1]:8443/x?q=1"
+        );
+        let default_port = EndpointAddr::parse("backend.internal:443").unwrap();
+        assert_eq!(
+            build_upstream_uri(&tls_route, &default_port, &uri, 0)
+                .unwrap()
+                .to_string(),
+            "https://backend.internal:443/x?q=1"
         );
     }
 

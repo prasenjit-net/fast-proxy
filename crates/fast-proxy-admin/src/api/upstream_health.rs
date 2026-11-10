@@ -84,6 +84,7 @@ mod tests {
                 name: SubsystemName::parse("shop").unwrap(),
                 enabled: true,
                 description: String::new(),
+                https: fast_proxy_model::HttpsPolicy::default(),
                 hosts: vec![HostPattern::parse("shop.example.com").unwrap()],
                 upstream_groups: vec![UpstreamGroupConfig {
                     id: UpstreamGroupId(1),

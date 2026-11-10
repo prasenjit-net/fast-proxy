@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::tls_metrics::{
+    CacheResult, CertificateReading, HandshakeResult, SyncResult, TlsMetrics,
+};
 use crate::upstream_metrics::{EndpointLabels, RetryReason, UpstreamMetrics, UpstreamOutcome};
 use prometheus::{
     Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
@@ -90,6 +93,7 @@ pub struct Metrics {
     config_reloads: IntCounterVec,
     cancelled: IntCounterVec,
     upstream: UpstreamMetrics,
+    tls: TlsMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -127,8 +131,10 @@ impl Metrics {
             .register(Box::new(duration.clone()))
             .expect(REGISTRATION);
         let upstream = UpstreamMetrics::new(&registry);
+        let tls = TlsMetrics::new(&registry);
         Self {
             upstream,
+            tls,
             cancelled: counter_vec(
                 &registry,
                 "fastproxy_requests_cancelled_total",
@@ -239,6 +245,36 @@ impl Metrics {
         live: &std::collections::HashSet<(String, String, String)>,
     ) {
         self.upstream.retain(live);
+    }
+
+    /// Counts one TLS handshake on `listener`; `version` is the negotiated
+    /// protocol (`TLSv1.3`) or `-` when none was negotiated.
+    pub fn tls_handshake(&self, listener: &str, result: HandshakeResult, version: &str) {
+        self.tls.handshake(listener, result, version);
+    }
+
+    /// Adds the outcome counts of one certificate cache rebuild.
+    pub fn cert_cache_rebuilt(&self, hits: u64, misses: u64, unreadable: u64) {
+        self.tls.cache(CacheResult::Hit, hits);
+        self.tls.cache(CacheResult::Miss, misses);
+        self.tls.cache(CacheResult::Unreadable, unreadable);
+    }
+
+    /// Counts one cluster sync poll.
+    pub fn config_sync(&self, result: SyncResult) {
+        self.tls.sync(result);
+    }
+
+    /// Publishes the per-certificate expiry and unreadable gauges, replacing
+    /// every earlier series so deleted certificates disappear.
+    pub fn set_certificate_readings(&self, readings: &[CertificateReading]) {
+        self.tls.set_certificates(readings);
+    }
+
+    /// Publishes which upstream groups use TLS and whether they verify
+    /// certificates, replacing the earlier series.
+    pub fn set_upstream_tls_groups(&self, groups: &[(String, String, bool)]) {
+        self.tls.set_upstream_tls(groups);
     }
 
     /// Counts a request as active until the returned guard drops.

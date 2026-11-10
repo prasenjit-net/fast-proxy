@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use super::TlsConfig;
+
 /// The `[data_plane]` section: listeners and process-level proxy settings.
 /// Subsystems, hosts, and routes are not here; they live in the database.
 #[derive(Debug, Clone, Deserialize)]
@@ -20,6 +22,15 @@ pub struct DataPlaneConfig {
     pub shutdown_grace: Duration,
     #[serde(default = "default_listeners")]
     pub listener: Vec<ListenerConfig>,
+    /// The master key file for sealing private keys; defaults to
+    /// `<state_dir>/master.key`. `FAST_PROXY_MASTER_KEY` overrides it.
+    pub master_key_file: Option<PathBuf>,
+    /// How often to check the database for changes made by another instance;
+    /// `0s` turns the cluster sync off.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub config_poll_interval: Duration,
+    /// TLS termination.
+    pub tls: TlsConfig,
 }
 
 /// One `[[data_plane.listener]]` entry.
@@ -39,6 +50,15 @@ impl DataPlaneConfig {
     }
 }
 
+impl DataPlaneConfig {
+    /// The master key file, applying the `<state_dir>` default.
+    pub fn master_key_path(&self) -> PathBuf {
+        self.master_key_file
+            .clone()
+            .unwrap_or_else(|| self.state_dir.join("master.key"))
+    }
+}
+
 impl Default for DataPlaneConfig {
     fn default() -> Self {
         Self {
@@ -47,6 +67,9 @@ impl Default for DataPlaneConfig {
             trusted_proxies: Vec::new(),
             shutdown_grace: Duration::from_secs(30),
             listener: default_listeners(),
+            master_key_file: None,
+            config_poll_interval: Duration::from_secs(5),
+            tls: TlsConfig::default(),
         }
     }
 }

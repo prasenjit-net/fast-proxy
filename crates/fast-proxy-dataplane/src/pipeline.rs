@@ -2,13 +2,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use fast_proxy_routing::{CompiledRoute, CompiledSubsystem, Lookup, Snapshot, SnapshotHolder};
+use fast_proxy_routing::{
+    redirect_target, CompiledRoute, CompiledSubsystem, Lookup, Snapshot, SnapshotHolder,
+};
 use fast_proxy_telemetry::{DataPlaneFields, Metrics, NO_ROUTE, UNMATCHED_SUBSYSTEM};
 use http::{header, Request, Response};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
+use crate::connections::{ConnectionContext, TlsConnection};
 use crate::pending_request::PendingRequest;
+use crate::redirect::{hsts_value, render_redirect};
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
 use crate::responses::accepts_json;
 use crate::selection::select_endpoint;
@@ -21,6 +25,12 @@ enum Resolved<'snapshot> {
         fixed: FixedResponse,
         /// The subsystem the host resolved to, if any (for labels and logs).
         subsystem: Option<&'snapshot CompiledSubsystem>,
+    },
+    /// A plain-HTTP request for a subsystem that sends clients to HTTPS.
+    Redirect {
+        status: http::StatusCode,
+        location: String,
+        subsystem: &'snapshot CompiledSubsystem,
     },
     Forward {
         subsystem: &'snapshot CompiledSubsystem,
@@ -37,6 +47,8 @@ pub struct RequestPipeline<F> {
     snapshots: Arc<SnapshotHolder>,
     forwarder: F,
     observability: Observability,
+    /// The port plain-HTTP redirects point at; 443 unless told otherwise.
+    https_port: u16,
 }
 
 impl<F: Forward> RequestPipeline<F> {
@@ -45,7 +57,15 @@ impl<F: Forward> RequestPipeline<F> {
             snapshots,
             forwarder,
             observability,
+            https_port: 443,
         }
+    }
+
+    /// Sets the port a redirect to HTTPS names (the public port of the HTTPS
+    /// listener); it is left out of the URL when it is 443.
+    pub fn with_https_port(mut self, port: u16) -> Self {
+        self.https_port = port;
+        self
     }
 
     /// The metrics every request reports to.
@@ -70,7 +90,13 @@ impl<F: Forward> RequestPipeline<F> {
             format!("{:?}", request.version()),
         );
 
+        let tls = request
+            .extensions()
+            .get::<ConnectionContext>()
+            .and_then(|context| context.tls.clone());
         let fields = DataPlaneFields {
+            proto: protocol_of(request.version()).to_string(),
+            tls: tls.as_ref().map(|tls| tls.version.clone()),
             subsystem: UNMATCHED_SUBSYSTEM.to_string(),
             route: NO_ROUTE.to_string(),
             upstream: None,
@@ -92,18 +118,30 @@ impl<F: Forward> RequestPipeline<F> {
         // Keeps the chosen endpoint's in-flight count up until the response
         // body has been fully sent (or the client went away).
         let mut in_flight = None;
-        let response = match resolve(&snapshot, &request) {
+        let mut hsts_from = None;
+        let mut response = match resolve(&snapshot, &request, tls.as_deref(), self.https_port) {
             Resolved::Respond { fixed, subsystem } => {
                 if let Some(subsystem) = subsystem {
                     pending.fields_mut().subsystem = subsystem.name.as_str().to_string();
+                    hsts_from = Some(subsystem);
                 }
                 fixed.render(&request_id, wants_json)
+            }
+            Resolved::Redirect {
+                status,
+                location,
+                subsystem,
+            } => {
+                pending.fields_mut().subsystem = subsystem.name.as_str().to_string();
+                render_redirect(status, &location, &request_id)
+                    .unwrap_or_else(|| FixedResponse::UnknownHost.render(&request_id, wants_json))
             }
             Resolved::Forward {
                 subsystem,
                 route,
                 consumed_prefix_len,
             } => {
+                hsts_from = Some(subsystem);
                 let known = pending.fields_mut();
                 known.subsystem = subsystem.name.as_str().to_string();
                 known.route = route.prefix.clone();
@@ -155,6 +193,15 @@ impl<F: Forward> RequestPipeline<F> {
             }
         };
 
+        // HSTS is only ever sent over HTTPS (RFC 6797).
+        if tls.is_some() {
+            if let Some(value) = hsts_from.and_then(|subsystem| hsts_value(&snapshot, subsystem)) {
+                response
+                    .headers_mut()
+                    .insert(header::STRICT_TRANSPORT_SECURITY, value);
+            }
+        }
+
         let (summary, active) = pending.complete(response.status().as_u16());
         let (parts, body) = response.into_parts();
         let tracked = TrackedBody::new(
@@ -167,12 +214,69 @@ impl<F: Forward> RequestPipeline<F> {
     }
 }
 
+/// The access log's protocol name for a request.
+fn protocol_of(version: http::Version) -> &'static str {
+    match version {
+        http::Version::HTTP_2 => "h2",
+        http::Version::HTTP_10 => "http/1.0",
+        _ => "http/1.1",
+    }
+}
+
+/// Whether a request on an HTTPS connection may not be served by it (421): its
+/// subsystem is not served over HTTPS at all, or its certificate differs from
+/// the one the handshake presented for the client's SNI. Hosts sharing one
+/// certificate pass, which keeps HTTP/2 connection coalescing working; a client
+/// that sent no SNI skips the second rule.
+fn is_misdirected(subsystem: &CompiledSubsystem, tls: &TlsConnection) -> bool {
+    if !subsystem.https.enabled {
+        return true;
+    }
+    tls.sni.is_some() && tls.certificate_id != subsystem.https.certificate_id
+}
+
 fn resolve<'snapshot>(
     snapshot: &'snapshot Snapshot,
     request: &Request<Incoming>,
+    tls: Option<&TlsConnection>,
+    https_port: u16,
 ) -> Resolved<'snapshot> {
     let path = request.uri().path();
-    match snapshot.lookup(host_of(request), path) {
+    let host = host_of(request);
+    let lookup = snapshot.lookup(host, path);
+    // On a plain-HTTP listener, a matched subsystem may send clients to HTTPS
+    // before anything is routed.
+    if tls.is_none() {
+        if let Lookup::SubsystemDisabled { subsystem, .. }
+        | Lookup::NoRoute { subsystem, .. }
+        | Lookup::Matched { subsystem, .. } = &lookup
+        {
+            if let Some((status, location)) =
+                redirect_target(snapshot, subsystem, host, request.uri(), https_port)
+            {
+                return Resolved::Redirect {
+                    status,
+                    location,
+                    subsystem,
+                };
+            }
+        }
+    }
+    if let (
+        Some(tls),
+        Lookup::SubsystemDisabled { subsystem, .. }
+        | Lookup::NoRoute { subsystem, .. }
+        | Lookup::Matched { subsystem, .. },
+    ) = (tls, &lookup)
+    {
+        if is_misdirected(subsystem, tls) {
+            return Resolved::Respond {
+                fixed: FixedResponse::MisdirectedRequest,
+                subsystem: Some(subsystem),
+            };
+        }
+    }
+    match lookup {
         Lookup::UnknownHost => Resolved::Respond {
             fixed: FixedResponse::UnknownHost,
             subsystem: None,

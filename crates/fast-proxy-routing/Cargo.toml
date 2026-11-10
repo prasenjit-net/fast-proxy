@@ -8,9 +8,13 @@ publish = false
 [dependencies]
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
+fast-proxy-tls = { path = "../fast-proxy-tls" }
 arc-swap = "1"
 http = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
+fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 proptest = "1"
