@@ -9,6 +9,7 @@ mod connections;
 mod forward;
 mod headers;
 mod listener;
+mod pending_request;
 mod pipeline;
 mod protocol_switch;
 mod replay_body;

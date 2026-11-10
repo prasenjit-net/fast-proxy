@@ -88,6 +88,7 @@ pub struct Metrics {
     active_requests: IntGauge,
     config_version: IntGauge,
     config_reloads: IntCounterVec,
+    cancelled: IntCounterVec,
     upstream: UpstreamMetrics,
 }
 
@@ -128,6 +129,12 @@ impl Metrics {
         let upstream = UpstreamMetrics::new(&registry);
         Self {
             upstream,
+            cancelled: counter_vec(
+                &registry,
+                "fastproxy_requests_cancelled_total",
+                "Requests whose client left before the response head, by subsystem and route",
+                &["subsystem", "route"],
+            ),
             requests: counter_vec(
                 &registry,
                 "fastproxy_requests_total",
@@ -175,6 +182,12 @@ impl Metrics {
         self.duration
             .with_label_values(&[subsystem, route])
             .observe(elapsed.as_secs_f64());
+    }
+
+    /// Counts a request whose client closed the connection before the proxy
+    /// had a response.
+    pub fn request_cancelled(&self, subsystem: &str, route: &str) {
+        self.cancelled.with_label_values(&[subsystem, route]).inc();
     }
 
     pub fn upstream_error(&self, subsystem: &str, kind: UpstreamErrorKind) {
@@ -363,6 +376,21 @@ mod tests {
         assert_eq!(
             line(r#"route="/",status_class="4xx",subsystem="blog""#),
             Some(1.0)
+        );
+    }
+
+    #[test]
+    fn cancelled_requests_are_counted_by_subsystem_and_route() {
+        let metrics = Metrics::new();
+        metrics.request_cancelled("shop", "/api");
+        metrics.request_cancelled("shop", "/api");
+        let text = metrics.render();
+        assert_eq!(
+            value_of(
+                &text,
+                r#"fastproxy_requests_cancelled_total{route="/api",subsystem="shop"}"#
+            ),
+            Some(2.0)
         );
     }
 

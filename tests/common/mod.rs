@@ -10,6 +10,10 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod flaky;
+pub mod groups;
+pub mod load;
+
 use serde_json::{json, Value};
 
 pub fn free_port() -> u16 {

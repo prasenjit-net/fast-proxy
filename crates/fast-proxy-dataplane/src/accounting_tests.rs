@@ -188,3 +188,56 @@ async fn the_test_backend_can_be_killed_failed_and_revived_on_demand() {
     backend.revive().await;
     assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 200);
 }
+
+#[tokio::test]
+async fn a_request_whose_client_leaves_before_the_response_is_counted_and_logged_as_499() {
+    let hung = TestUpstream::start(Behavior::HoldUntilDropped).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("access.log");
+    let proxy = Harness::proxying_with_log(config_for(&[&hung]), &[], Some(&path)).await;
+
+    let mut client = TcpStream::connect(proxy.addr).await.unwrap();
+    client
+        .write_all(format!("GET /slow HTTP/1.1\r\nHost: {HOST}\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let arrived = hung.clone();
+    assert!(eventually(move || arrived.request_count() == 1).await);
+    drop(client);
+
+    let metrics = proxy.metrics.clone();
+    let counted = r#"fastproxy_requests_cancelled_total{route="/",subsystem="shop"} 1"#;
+    assert!(
+        eventually(move || metrics.render().contains(counted)).await,
+        "counted as cancelled"
+    );
+    assert!(
+        proxy.metrics.render().contains(
+            r#"fastproxy_requests_total{route="/",status_class="4xx",subsystem="shop"} 1"#
+        ),
+        "and as a 4xx request"
+    );
+    proxy.access_log.flush().await;
+    let log = std::fs::read_to_string(&path).unwrap();
+    let line = log.lines().next().unwrap();
+    assert!(line.contains("\"GET /slow HTTP/1.1\" 499 "), "{line}");
+    assert!(
+        line.contains(&format!("upstream={} attempts=1 ", hung.addr)),
+        "the log shows where it was waiting: {line}"
+    );
+}
+
+#[tokio::test]
+async fn requests_that_complete_are_never_reported_as_cancelled() {
+    let backend = TestUpstream::start(OK).await;
+    let proxy = Harness::proxying(config_for(&[&backend]), &[]).await;
+    for _ in 0..3 {
+        assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 200);
+    }
+    let unmatched = get(proxy.addr, "unknown.example.com", "/", "").await;
+    assert_eq!(unmatched.status, 404);
+    assert!(!proxy
+        .metrics
+        .render()
+        .contains("fastproxy_requests_cancelled_total{"));
+}

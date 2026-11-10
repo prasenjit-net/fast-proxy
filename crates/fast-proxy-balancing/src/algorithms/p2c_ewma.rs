@@ -1,9 +1,5 @@
 use crate::{Candidate, Rng};
 
-/// Latency assumed for an endpoint with no samples yet (1 ms), so a fresh
-/// endpoint is neither starved nor flooded.
-const COLD_START_US: u64 = 1_000;
-
 /// Power of two choices: two random distinct usable endpoints, the one with
 /// the lower `ewma * (in_flight + 1) / weight` wins.
 pub(crate) fn pick(
@@ -32,16 +28,27 @@ pub(crate) fn pick(
     }
 }
 
+/// Latency used for an endpoint pair when neither has a sample yet (1 ms);
+/// only the ratio matters, so the value is arbitrary.
+const NO_SAMPLES_US: u64 = 1_000;
+
+/// The latencies to compare two endpoints by. An endpoint with no sample yet
+/// is given its rival's, so only load decides between them: a fresh endpoint
+/// is neither starved by a faster rival nor flooded before its first sample.
+fn latencies(a: &Candidate, b: &Candidate) -> (u64, u64) {
+    match (a.runtime.ewma_us(), b.runtime.ewma_us()) {
+        (0, 0) => (NO_SAMPLES_US, NO_SAMPLES_US),
+        (0, sampled) | (sampled, 0) => (sampled, sampled),
+        (first, second) => (first, second),
+    }
+}
+
 /// `a`'s score is at most `b`'s, compared by cross-multiplying the weights.
 fn score_le(a: &Candidate, b: &Candidate) -> bool {
-    let cost = |c: &Candidate| {
-        let latency = match c.runtime.ewma_us() {
-            0 => COLD_START_US,
-            sampled => sampled,
-        };
-        u128::from(latency) * u128::from(c.runtime.in_flight() + 1)
-    };
-    cost(a) * u128::from(b.weight) <= cost(b) * u128::from(a.weight)
+    let (latency_a, latency_b) = latencies(a, b);
+    let cost =
+        |latency: u64, c: &Candidate| u128::from(latency) * u128::from(c.runtime.in_flight() + 1);
+    cost(latency_a, a) * u128::from(b.weight) <= cost(latency_b, b) * u128::from(a.weight)
 }
 
 #[cfg(test)]
@@ -70,11 +77,33 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_endpoint_is_not_starved() {
+    fn a_fresh_endpoint_is_not_starved_by_a_much_faster_rival() {
+        // Real loopback answers take a fraction of a millisecond; an unsampled
+        // endpoint must not be assumed slower than that.
         let endpoints = candidates(&[1, 1]);
-        endpoints[0].runtime.record_latency(1_000, 0);
+        endpoints[0].runtime.record_latency(200, 0);
         let hits = shares(&endpoints, 1000);
         assert!(hits[1] > 300, "{hits:?}");
+    }
+
+    #[test]
+    fn a_fresh_endpoint_is_not_flooded_either_once_it_holds_requests() {
+        let endpoints = candidates(&[1, 1]);
+        endpoints[0].runtime.record_latency(200, 0);
+        let _held: Vec<_> = (0..3)
+            .map(|_| std::sync::Arc::clone(&endpoints[1].runtime).track())
+            .collect();
+        assert_eq!(
+            shares(&endpoints, 200),
+            [200, 0],
+            "load shifts to the idle sampled endpoint"
+        );
+    }
+
+    #[test]
+    fn two_fresh_endpoints_share_evenly() {
+        let hits = shares(&candidates(&[1, 1]), 1000);
+        assert!(hits.iter().all(|h| (400..600).contains(h)), "{hits:?}");
     }
 
     #[test]

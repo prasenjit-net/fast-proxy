@@ -411,7 +411,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   recovery become visible in tests with a fake backend.
   *Done when:* killing a backend ejects it after the configured failures and a
   revived one returns after its ejection expires.
-- [~] **D4 (M) Failure policy and the new fixed response.** (response and fail-open/closed done in PR4; panic-pick counting waits for T1 metrics) `503 no healthy
+- [x] **D4 (M) Failure policy and the new fixed response.** (`503 no_healthy_upstream`, fail-open panic mode counted in `fastproxy_upstream_panic_total`; draining and disabled endpoints never used)
   upstream` (JSON code `no_healthy_upstream`) for fail-closed groups; panic-mode
   picks counted.
   *Done when:* tests cover all-unhealthy with each policy, and with all
@@ -457,7 +457,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   labels from config only (E14); series for removed endpoints are deleted.
   *Done when:* a scrape after known traffic asserts the counters, and removing an
   endpoint removes its series.
-- [~] **T2 (S) Status and traffic.** (`GET /api/status` has the upstream-health summary; the live traffic snapshot for the dashboard comes with U5) Add an upstream-health summary (healthy and
+- [x] **T2 (S) Status and traffic.** (`GET /api/status` has the upstream-health summary and the dashboard shows it as the Upstream health card)
   total endpoints, the unhealthy list) to `GET /api/status` and the live traffic
   snapshot for the dashboard.
 
@@ -501,50 +501,50 @@ restart.
 
 ### Workstream Q: Quality
 
-- [~] **Q1 (L) Test backends that can fail on demand.** (data plane's `TestUpstream` has kill/revive/fail_with/recover; `tests/common` gets the same with Q2) Extend the in-process
+- [x] **Q1 (L) Test backends that can fail on demand.** (the data plane's `TestUpstream` and `tests/common/flaky.rs`: kill, revive on the same port, slow, fail with a status, fail health probes only, hit counts; no Unix-only commands) Extend the in-process
   backends in `tests/common/mod.rs` and the data plane's test upstream: "kill"
   (stop listening and drop connections), revive on the same port, slow, answer
   `503` on demand, count hits. No Unix-only commands, so tests run on Windows.
-- [ ] **Q2 (L) Exit-criteria end-to-end tests** (`tests/`): three endpoints and
+- [x] **Q2 (L) Exit-criteria end-to-end tests** (`tests/`): three endpoints and
   the distribution per algorithm; kill one under load and assert the bounded
   detection time and no client errors for retryable requests; revive and assert
   automatic return; drain and disable; fail-open and fail-closed; passive and
   active detection each. Each must be shown to be able to fail (break the
   behavior, see red).
-- [ ] **Q3 (M) Reload-under-load v2.** Extend `tests/reload_under_load.rs`:
+- [x] **Q3 (M) Reload-under-load v2.** Extend `tests/reload_under_load.rs`:
   endpoints added, removed, drained and re-enabled while clients run. Assert zero
   failed requests, and the sharp rule from M1 applied to endpoints: after the
   write that disables or drains an endpoint returns, no *new* request reaches it.
-- [ ] **Q4 (M) Property and unit coverage** listed under B (distribution,
+- [x] **Q4 (M) Property and unit coverage** listed under B (distribution,
   hash remapping, eligibility, state machines); keep overall coverage above 60%
   and report it (aim to stay near M1's 97%).
-- [ ] **Q5 (S) Benchmark.** Re-run `docs/benchmarks.md` with a one-endpoint group
+- [x] **Q5 (S) Benchmark.** Re-run `docs/benchmarks.md` with a one-endpoint group
   (compare with the M1 baseline) and with 3 and 16 endpoints per algorithm;
   record the numbers and the cost of selection and retries enabled.
-- [ ] **Q6 (S) Gates.** fmt, clippy, tests and UI build green on Linux, macOS and
+- [x] **Q6 (S) Gates.** fmt, clippy, tests and UI build green on Linux, macOS and
   Windows in CI (the M1 lessons apply: one write per raw request with
   `TCP_NODELAY`, signal tests Unix-only, free-port retry).
 
 ### Workstream W: Documentation
 
-- [ ] **W1 (M) README and getting-started.** A multi-endpoint walkthrough
+- [x] **W1 (M) README and getting-started.** A multi-endpoint walkthrough
   (three Python backends, kill one, watch it leave and return; drain one); the
   config and API tables; the metrics list.
-- [ ] **W2 (S) AGENTS.md.** New crates and rules: the data plane still never
+- [x] **W2 (S) AGENTS.md.** New crates and rules: the data plane still never
   touches the store; runtime state lives in `fast-proxy-balancing` and is carried
   across swaps by endpoint id and address; state machines take `now`.
-- [ ] **W3 (S) ROADMAP.md.** Tick M2, record decisions E1-E16 in the decision
+- [x] **W3 (S) ROADMAP.md.** Tick M2, record decisions E1-E16 in the decision
   log, update the risks table, link this plan.
-- [ ] **W4 (S) Outcome.** A closing section in this file like M1's section 10.
+- [x] **W4 (S) Outcome.** A closing section in this file like M1's section 10.
 
 ### Workstream C: Carry-over from M1
 
 These are small and independent; schedule them where they fit.
 
-- [ ] **C1 (S) Requests cancelled before the response head** (the client left
+- [x] **C1 (S) Requests cancelled before the response head** (the client left
   first) are counted and logged (for example status `499`, `client_closed`),
   using the same pipeline this milestone is changing.
-- [ ] **C2 (S) Reload cost.** Measure config reload time with several thousand
+- [x] **C2 (S) Reload cost.** Measure config reload time with several thousand
   routes and endpoints (compile now also builds rings and carries runtime state);
   record it. Target: milliseconds, with no effect on in-flight latency.
 - [ ] **C3 (S) Owner click-through of the M1 UI** in a real browser (desktop and
@@ -651,12 +651,81 @@ PRs 2 and 3 can proceed in parallel after PR1; PR5 needs both plus PR4.
 
 ## 10. Definition of done for M2
 
-- [ ] Every task above is checked, or explicitly moved with a note.
-- [ ] Exit criteria (section 1) demonstrated by the end-to-end tests in Q2 and Q3
-  and a manual run: three backends, kill one, watch it leave and return in the UI.
-- [ ] CI green on all three platforms; no new clippy warnings.
-- [ ] Overall test coverage above 60%, number recorded (AGENTS.md rule).
+- [x] Every task above is checked, or explicitly moved with a note (C3 is the owner's; U6 is partly done, see section 11).
+- [x] Exit criteria (section 1) demonstrated by the end-to-end tests in Q2 and Q3
+  (`tests/upstream_groups.rs`, `tests/reload_under_load.rs`). The manual run in the
+  UI (three backends, kill one, watch it leave and return) is still the owner's, with C3.
+- [x] CI green on all three platforms; no new clippy warnings.
+- [x] Overall test coverage above 60%, number recorded (AGENTS.md rule): 97.7% of lines (96.8% of regions).
 - [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md and getting-started updated.
-- [ ] Benchmark re-run and recorded; single-endpoint overhead within budget.
+- [x] README, AGENTS.md, ROADMAP.md and getting-started updated.
+- [x] Benchmark re-run and recorded; single-endpoint overhead within budget (docs/benchmarks.md).
 - [ ] Release `v0.3.0` prepared through the existing release workflow.
+
+## 11. Outcome
+
+M2 is built. An operator creates an upstream group with several endpoints in
+the admin UI (or API), traffic is spread by the group's algorithm, a killed
+backend leaves rotation without client errors and returns by itself, endpoints
+can be drained or disabled, and all of it is visible in metrics, the access log,
+the UI and the WebSocket. It was delivered as a stack of eleven pull requests
+(decisions and ADRs; model and schema; the pure balancing crate; the compiled
+upstream groups; in-flight accounting; passive health; retries; the health
+crate; the admin API; the UI; the end-to-end tests, docs and wrap-up).
+
+### Exit criteria, and where each is shown
+
+| # | Criterion | Evidence |
+|---|---|---|
+| 1 | Three endpoints, traffic spread by the algorithm | `tests/upstream_groups.rs`: exact for round robin (10/10/10) and weighted (30/10/10), sticky for consistent hash, all served for least connections and P2C |
+| 2 | Killing one of three under load causes no sustained errors; bounded detection | `killing_one_of_three_backends_under_load...`: four clients, zero failures, the dead endpoint ejected after three failures, no further attempts on it |
+| 3 | Automatic return after recovery | passive (`a_revived_backend_returns...`) and active (`active_checks_mark_an_endpoint_unhealthy_and_healthy_again_with_no_client_traffic`, found with no client traffic at all) |
+| 4 | Drain and disable survive and behave | in-flight request finishes, no new ones arrive, state survives a restart; `reload_under_load.rs` adds the sharp rule: no request that starts after the write returns reaches the endpoint it took out |
+| 5 | All-unhealthy policy | fail open serves (counted as panic mode), fail closed answers 503, draining everything is 503 even when failing open |
+| 6 | Observable | metrics, `attempts` and the answering endpoint in the access log, `endpointState` events, the status page and dashboard card |
+| 7 | No regression | M1 exit criteria and reload-under-load still pass; a one-endpoint group matches the M1 baseline within noise (docs/benchmarks.md) |
+
+### Numbers
+
+544 Rust tests and 239 UI tests pass; line coverage is 97.7%. A single-endpoint
+group costs about 27 us at p50 (25 us in M1) and holds the M1 throughput; 3 or
+16 endpoints cost 0 to 5%. Endpoint selection takes 4 to 106 ns. Compiling a
+4,000-route, 600-endpoint configuration takes 0.6 ms and a whole change 7.5 ms.
+
+### Where the result differs from the plan
+
+- **PR boundaries moved.** Compiling groups forced the data plane to choose an
+  endpoint in PR4, so D1 and the 503 response landed there; D2, D6 and D7 followed
+  in PR5. Retries (D5) needed spike G2 first.
+- **Retries go slightly beyond E10 (ADR 0008):** idempotent requests are also
+  retried after a connection reset, not only on 502/503/504. A POST is retried
+  only after a failed connect.
+- **A fix the end-to-end tests forced:** the power-of-two-choices cold start
+  assumed an unsampled endpoint takes 1 ms, so faster measured endpoints starved
+  it (an endpoint got 0 of 60 requests). An unsampled endpoint now takes its
+  rival's latency in the comparison, so only load decides.
+- **`Forward` returns more than a response:** the answering endpoint, the attempt
+  count and the in-flight guard, so the access log and in-flight counts follow
+  the request to the endpoint that actually served it.
+- **The retry budget lives on the compiled group**, so a config change starts it
+  empty (at most ten seconds of history lost).
+- **Windows needed two test fixes** (a refused connection takes about a second to
+  be reported there); both were fixed by waiting for events, not durations.
+- **Requests cancelled before the response head** (an M1 limitation, C1) are now
+  counted (`fastproxy_requests_cancelled_total`) and logged as 499.
+
+### Known limitations carried forward
+
+- **C3 is open:** the UI has not been looked at in a real browser (desktop and
+  phone width, light and dark), including the new endpoint tables, dialogs and the
+  folded policy section. Only jsdom tests cover it.
+- **U6 is partly done:** the revision viewer lists every endpoint but not the
+  group's policy settings.
+- **The retry budget and endpoint runtime are per process and in memory;** a
+  restart starts health from scratch (new endpoints start healthy).
+- **A server-side TLS or HTTP/2 upstream, maintenance mode and admin
+  authentication** are M3 to M5 as before; the admin plane still has no
+  authentication and binds to loopback.
+- **One full-suite run failed once and did not reproduce** in nine later runs
+  (six sequential, three in parallel); which test it was is not known.
+

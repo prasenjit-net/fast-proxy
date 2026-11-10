@@ -10,10 +10,10 @@ name is a **subsystem** with its own upstreams and routes. Changes apply to live
 traffic immediately, without a restart and without dropping a request, and every
 change is recorded so it can be rolled back.
 
-> **Status: milestone 1 is feature-complete** (release `v0.2.0` is being
-> prepared). It is a working HTTP reverse proxy with live configuration. TLS,
-> load balancing, health checks, ACME and maintenance mode are the next
-> milestones; see the [roadmap](docs/ROADMAP.md). The admin plane has **no
+> **Status: milestones 1 and 2 are feature-complete.** It is a working HTTP
+> reverse proxy with live configuration, load balancing across several endpoints
+> per upstream, active and passive health checking, and safe retries. TLS, ACME
+> and maintenance mode are the next milestones; see the [roadmap](docs/ROADMAP.md). The admin plane has **no
 > authentication yet** (see [Security notes](#security-notes)).
 
 ## What it does today
@@ -29,6 +29,16 @@ change is recorded so it can be rolled back.
   the old configuration keeps serving. It survives restarts.
 - **History and rollback.** Every change is a numbered revision; any earlier
   state can be viewed and re-applied.
+- **Upstream groups.** An upstream holds up to 64 endpoints with weights, spread
+  by round robin, weighted round robin, least connections, power-of-two-choices
+  on latency, or consistent hash (client IP, header or cookie).
+- **Health and failover.** Active HTTP/TCP checks with rise/fall thresholds, and
+  passive ejection of endpoints that keep failing (with backoff, and never more
+  than half of a group). Failed attempts are retried on another endpoint under
+  per-route rules and a per-group retry budget. If nothing is healthy a group
+  fails open or answers 503, as configured.
+- **Operator control.** Drain or disable an endpoint: it gets no new requests,
+  in-flight ones finish, and the state survives a restart.
 - **A streaming proxy.** Request and response bodies stream without buffering,
   upstream connections are pooled, WebSocket and other protocol upgrades pass
   through, and `X-Forwarded-*`, hop-by-hop headers and request ids are handled
@@ -38,8 +48,9 @@ change is recorded so it can be rolled back.
   lets in-flight requests and open WebSockets finish for up to
   `data_plane.shutdown_grace`.
 - **Observability.** Prometheus metrics at `/metrics`, one access-log line per
-  request, live traffic stats and a dashboard, and a resolver that shows exactly
-  where a given host and path would be sent.
+  request, live traffic stats and a dashboard with upstream health, a live status
+  view per upstream, and a resolver that shows exactly where a given host and
+  path would be sent and which endpoints would take it.
 
 ## Quick start
 
@@ -56,12 +67,13 @@ cargo run --release
 ```
 
 Or just `make build` / `make run`. Then open the admin UI, create a subsystem,
-add its host name, an upstream (your backend's `host:port`) and a route with
-prefix `/`, and send a request with that `Host` header to port 8000.
+add its host name, an upstream (your backend's `host:port` as its first
+endpoint) and a route with prefix `/`, and send a request with that `Host` header to port 8000.
 
 **[docs/getting-started.md](docs/getting-started.md)** walks through the same
 thing with `curl`, step by step: two subsystems, live edits, the resolver,
-rollback, metrics, WebSockets, shutdown, and restart.
+rollback, metrics, WebSockets, shutdown, restart, and then several endpoints in
+one upstream: kill one, watch it leave and return, drain another.
 
 ### Development (hot reload)
 
@@ -91,9 +103,10 @@ Two planes on two listeners:
   |     v                           /metrics             | |
   |  load Snapshot (arc-swap) <--- swap -- ConfigService | |
   |     |                                (validate, save, compile, swap)
-  |  host -> subsystem -> prefix route -> upstream       |
-  |     |                                                |
-  |  pooled client  --> your backends                    |
+  |  host -> subsystem -> prefix route -> upstream group |
+  |     |   pick an endpoint (algorithm, health, state)  |
+  |  pooled client, retries --> your backends            |
+  |     ^  active probes + passive ejection feed health  |
   +------------------------------------------------------+
 ```
 
@@ -122,8 +135,8 @@ and the decision records in [docs/adr/](docs/adr/).
 | Realtime configuration with history and rollback | Done | M1 |
 | WebSocket and protocol-upgrade passthrough; graceful draining | Done | M1 |
 | Prometheus metrics, access log, live traffic stats, admin UI | Done | M1 |
-| Upstream groups with several endpoints, load balancing | Planned | M2 |
-| Upstream health monitoring (active probes, outlier ejection) | Planned | M2 |
+| Upstream groups with several endpoints, five load-balancing algorithms | Done | M2 |
+| Active and passive health checking, safe retries, drain and disable | Done | M2 |
 | TLS termination (rustls, SNI, hot reload, HTTP/2) | Planned | M3 |
 | ACME automatic certificates | Planned | M4 |
 | Maintenance mode, admin authentication, audit log | Planned | M5 |
@@ -227,16 +240,26 @@ WebSocket events are JSON discriminated by `type`:
   (by subsystem, route and status class), `fastproxy_request_duration_seconds`,
   `fastproxy_upstream_errors_total` (connect, timeout, other),
   `fastproxy_active_connections`, `fastproxy_active_requests`,
-  `fastproxy_config_version` and `fastproxy_config_reloads_total`. Label values
-  come only from your configuration; unmatched traffic is `_unmatched`/`_none`.
+  `fastproxy_config_version` and `fastproxy_config_reloads_total`; and per
+  endpoint `fastproxy_upstream_requests_total` (by outcome),
+  `fastproxy_upstream_endpoint_healthy`, `fastproxy_upstream_endpoint_in_flight`,
+  `fastproxy_endpoint_ejections_total` and `fastproxy_health_checks_total`; per
+  group `fastproxy_upstream_retries_total`, `fastproxy_retry_budget_exhausted_total`
+  and `fastproxy_upstream_panic_total`; and `fastproxy_requests_cancelled_total`.
+  Label values come only from your configuration (names and endpoint
+  addresses); unmatched traffic is `_unmatched`/`_none`. Series of removed
+  endpoints are deleted.
 - **Access log**, one line per request on both planes, to the console (tracing
   target `access`) and optionally a file. Proxied requests record subsystem,
-  route, upstream, request id, upstream and total time, and bytes sent. The file
+  route, upstream (the endpoint that answered), attempts, request id, upstream and
+  total time, and bytes sent. A request whose client left first is logged as 499. The file
   is written off the request path; the console line is the expensive one (see
   [docs/benchmarks.md](docs/benchmarks.md): about a quarter of throughput), so
   filter it with `--log-level "info,access=off"` when throughput matters.
-- **Performance baseline**: [docs/benchmarks.md](docs/benchmarks.md) (about 25 us
-  added per request at p50 on one connection) and how to reproduce it.
+- **Performance**: [docs/benchmarks.md](docs/benchmarks.md) has the baseline
+  (about 25 us added per request at p50 on one connection), the cost of endpoint
+  selection, the numbers per algorithm with 3 and 16 endpoints, config reload
+  cost, and how to reproduce all of it.
 
 ## Security notes
 
@@ -259,13 +282,15 @@ WebSocket events are JSON discriminated by `type`:
 │   ├── cli.rs                flags and how they override the config file
 │   ├── config/               TOML config model and validation
 │   └── startup.rs            assembles store, config service, data plane, admin plane
-├── tests/                    end-to-end tests that run the real binary (exit criteria, reload under load)
+├── tests/                    end-to-end tests that run the real binary (M1 and M2 exit criteria, reload under load)
 ├── crates/
-│   ├── fast-proxy-model/     validated domain types and the Config tree (no I/O)
-│   ├── fast-proxy-routing/   Config -> Snapshot compiler, host and route matchers (no I/O)
+│   ├── fast-proxy-model/     validated domain types, group policies and the Config tree (no I/O)
+│   ├── fast-proxy-balancing/ endpoint runtime state, selection algorithms, passive health (no I/O)
+│   ├── fast-proxy-routing/   Config -> Snapshot compiler (carries runtime state), matchers (no I/O)
 │   ├── fast-proxy-store/     SQLite storage, transactional writes, revisions, rollback
 │   ├── fast-proxy-config-service/  the only writer: validate, persist, swap snapshot
-│   ├── fast-proxy-dataplane/ hyper listeners, request pipeline, upstream forwarding
+│   ├── fast-proxy-dataplane/ hyper listeners, request pipeline, endpoint selection, retries
+│   ├── fast-proxy-health/    active health probes, reconciled with the live configuration
 │   ├── fast-proxy-telemetry/ Prometheus metrics and the access log
 │   └── fast-proxy-admin/     Axum admin plane: api/ · ws · events · error · embedded SPA
 └── ui/
@@ -279,9 +304,10 @@ WebSocket events are JSON discriminated by `type`:
         └── styles/           index.css (Tailwind v4 entry + theme tokens)
 ```
 
-Dependencies point one way: `model` <- `store`, `routing`; `routing` +
-`telemetry` <- `dataplane`; `store` + `routing` + `telemetry` <-
-`config-service`; those <- `admin`; everything <- the binary. The data plane
+Dependencies point one way: `model` <- `store`, `balancing`; `balancing` <-
+`routing`; `routing` + `balancing` + `telemetry` <- `dataplane`, `health`;
+`store` + `routing` + `balancing` + `telemetry` <- `config-service`;
+`config-service` <- `health`, `admin`; everything <- the binary. The data plane
 never depends on the store.
 
 ## Extending
@@ -318,6 +344,16 @@ cargo llvm-cov --workspace --summary-only   # coverage (needs cargo-llvm-cov)
 - `tests/reload_under_load.rs` hammers the proxy with keep-alive clients while
   hundreds of config writes land, and checks that no request fails and no
   request is ever routed with a stale configuration.
+- `tests/upstream_groups.rs` is the M2 exit criteria against three backends that
+  can be killed, revived, slowed and made to fail: distribution per algorithm,
+  killing one under load with no client errors, automatic return after recovery
+  (passive and active), drain and disable (surviving a restart), and fail open
+  versus fail closed.
+- `tests/reload_under_load.rs` also changes endpoints (drain, disable, add,
+  remove) under load and checks that no request starts on an endpoint after the
+  write that took it out returned.
+- Timing measurements are `#[ignore]`d tests, run in release mode (see
+  [docs/benchmarks.md](docs/benchmarks.md)).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check`
   run in CI, which also tests on Linux, macOS and Windows.
 

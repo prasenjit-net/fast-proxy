@@ -8,10 +8,11 @@ use http::{header, Request, Response};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
+use crate::pending_request::PendingRequest;
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
 use crate::responses::accepts_json;
 use crate::selection::select_endpoint;
-use crate::tracked_body::{RequestSummary, TrackedBody};
+use crate::tracked_body::TrackedBody;
 use crate::{FixedResponse, Forward, Observability, ResponseBody, Target};
 
 /// What the snapshot says should happen to a request.
@@ -69,7 +70,7 @@ impl<F: Forward> RequestPipeline<F> {
             format!("{:?}", request.version()),
         );
 
-        let mut fields = DataPlaneFields {
+        let fields = DataPlaneFields {
             subsystem: UNMATCHED_SUBSYSTEM.to_string(),
             route: NO_ROUTE.to_string(),
             upstream: None,
@@ -78,6 +79,15 @@ impl<F: Forward> RequestPipeline<F> {
             upstream_time: None,
             bytes_out: 0,
         };
+        // If the client leaves before there is a response, dropping this
+        // reports the request as cancelled (499) instead of losing it.
+        let mut pending = PendingRequest::new(
+            (started, client_addr),
+            (method, uri, version),
+            fields,
+            self.observability.clone(),
+            active,
+        );
 
         // Keeps the chosen endpoint's in-flight count up until the response
         // body has been fully sent (or the client went away).
@@ -85,7 +95,7 @@ impl<F: Forward> RequestPipeline<F> {
         let response = match resolve(&snapshot, &request) {
             Resolved::Respond { fixed, subsystem } => {
                 if let Some(subsystem) = subsystem {
-                    fields.subsystem = subsystem.name.as_str().to_string();
+                    pending.fields_mut().subsystem = subsystem.name.as_str().to_string();
                 }
                 fixed.render(&request_id, wants_json)
             }
@@ -94,8 +104,9 @@ impl<F: Forward> RequestPipeline<F> {
                 route,
                 consumed_prefix_len,
             } => {
-                fields.subsystem = subsystem.name.as_str().to_string();
-                fields.route = route.prefix.clone();
+                let known = pending.fields_mut();
+                known.subsystem = subsystem.name.as_str().to_string();
+                known.route = route.prefix.clone();
                 let upstream = &route.upstream;
                 match select_endpoint(upstream, request.headers(), client_addr.ip(), None) {
                     None => FixedResponse::NoHealthyUpstream.render(&request_id, wants_json),
@@ -107,6 +118,11 @@ impl<F: Forward> RequestPipeline<F> {
                                 .metrics
                                 .upstream_panic(subsystem.name.as_str(), &upstream.name);
                         }
+                        // Known from the start, so a request cancelled while it
+                        // waits still shows which endpoint it was sent to.
+                        let known = pending.fields_mut();
+                        known.upstream = Some(endpoint.addr.to_string());
+                        known.attempts = 1;
                         let target = Target {
                             subsystem,
                             route,
@@ -120,13 +136,14 @@ impl<F: Forward> RequestPipeline<F> {
                         };
                         let forwarding = Instant::now();
                         let forwarded = self.forwarder.forward(request, target).await;
-                        fields.upstream_time = Some(forwarding.elapsed());
-                        fields.upstream = Some(
+                        let known = pending.fields_mut();
+                        known.upstream_time = Some(forwarding.elapsed());
+                        known.upstream = Some(
                             upstream.endpoints[forwarded.endpoint_index]
                                 .addr
                                 .to_string(),
                         );
-                        fields.attempts = forwarded.attempts;
+                        known.attempts = forwarded.attempts;
                         in_flight = forwarded.in_flight;
                         let mut response = forwarded.response;
                         response
@@ -138,15 +155,7 @@ impl<F: Forward> RequestPipeline<F> {
             }
         };
 
-        let summary = RequestSummary {
-            started,
-            client: client_addr,
-            method,
-            uri,
-            version,
-            status: response.status().as_u16(),
-            fields,
-        };
+        let (summary, active) = pending.complete(response.status().as_u16());
         let (parts, body) = response.into_parts();
         let tracked = TrackedBody::new(
             body,
