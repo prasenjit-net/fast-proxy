@@ -18,6 +18,8 @@ pub use service::{Applied, ConfigChanged, ConfigService};
 pub use tls_state::{TlsSettings, VaultStatus};
 
 #[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
 mod tls_tests;

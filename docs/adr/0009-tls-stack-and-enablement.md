@@ -54,8 +54,14 @@ Verified so far (PR3, macOS; Linux and Windows are confirmed by CI on the PR):
 
 Still to verify, in the PRs that need them: (b) hyper's auto builder serving h2
 and HTTP/1.1 behind the acceptor and (c) a resolver reading an `arc-swap`
-snapshot while it is swapped (PR4), and (g) two SQLite connections seeing each
-other's committed revision version (PR6). F1 stands.
+snapshot while it is swapped, and (g) two SQLite connections seeing each
+other's committed revision version.
+
+Verified later: (c) the resolver reads the live snapshot per handshake and the
+next handshake sees a swapped certificate (PR4b); (g) two config services, and
+two real processes, on one SQLite file see each other's commits and converge
+within the poll interval (PR6). Still open: (b) hyper's auto builder serving h2
+behind the acceptor (D2). F1 stands.
 
 ## Consequences
 

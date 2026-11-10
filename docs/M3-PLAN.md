@@ -609,7 +609,7 @@ loopback checks come with PR5._
   *Done when:* tests cover each trigger, that nothing is generated with TLS off,
   that uploaded certificates are untouched, and that every write is atomic with its
   generated certificate.
-- [ ] **CS3 (L) Cluster sync.** A poll task comparing the database version with the
+- [x] **CS3 (L) Cluster sync.** A poll task comparing the database version with the
   live snapshot's every `config_poll_interval`; on a newer version it reloads
   configuration and certificates, carries runtime state and the cache, and swaps;
   the instance's own commits never trigger a reload; failures are counted and
@@ -819,7 +819,7 @@ rule), and a test proves each write is visible to the data plane without a resta
   redirect never builds a `Location` from anything but a matched host, handshake
   and h2 limits in force, `verify = false` visible everywhere, size and count
   limits in force. Findings recorded.
-- [ ] **Q9 (M) Cluster behaviour tests.** Two instances (two config services, and
+- [x] **Q9 (M) Cluster behaviour tests.** Two instances (two config services, and
   once two real processes) on one database: a renewal, an upload, an HTTPS toggle
   and a deletion on one reach the other within the poll interval; the cache reuses
   unchanged certificates on the receiving side; endpoint runtime state survives a

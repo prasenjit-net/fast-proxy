@@ -5,7 +5,7 @@ use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_routing::{compile_with_tls, Snapshot, SnapshotHolder, TlsInputs};
 use fast_proxy_store::repository::{certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
-use fast_proxy_telemetry::{Metrics, ReloadOutcome};
+use fast_proxy_telemetry::{Metrics, ReloadOutcome, SyncResult};
 use fast_proxy_tls::certificate_readings;
 use tokio::sync::{broadcast, Mutex};
 
@@ -157,6 +157,97 @@ impl ConfigService {
             .swap(compile_with_tls(version, &config, &previous, &inputs)?);
         self.tls.install(prepared.cache);
         Ok(())
+    }
+
+    /// Looks once for a change made by another instance (or process) sharing the
+    /// database: when the stored revision is ahead of the live snapshot, the
+    /// configuration and certificates are reloaded and swapped in, carrying the
+    /// endpoint runtime state and the unchanged certificates over. Takes the
+    /// writer lock, so it never interleaves with a local write; a local commit
+    /// leaves the two versions equal, so it never triggers a reload.
+    pub async fn sync_once(&self) -> SyncResult {
+        let result = self.sync_under_lock().await;
+        self.metrics.config_sync(result);
+        result
+    }
+
+    async fn sync_under_lock(&self) -> SyncResult {
+        let _writer = self.writer.lock().await;
+        let live = self.holder.load().version;
+        match self.store.run(|db| db.current_version()).await {
+            Ok(stored) if stored <= live => return SyncResult::Unchanged,
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!("cluster sync cannot read the database version: {err}");
+                return SyncResult::Failed;
+            }
+        }
+        match self.reload_from_database().await {
+            Ok(summary) => {
+                let _ = self.changes.send(summary);
+                SyncResult::Reloaded
+            }
+            Err(err) => {
+                tracing::warn!("cluster sync could not apply a newer configuration: {err}");
+                SyncResult::Failed
+            }
+        }
+    }
+
+    /// Loads the stored state, compiles it against the live runtime state and
+    /// swaps it in. The caller holds the writer lock.
+    async fn reload_from_database(&self) -> Result<ConfigChanged, StartError> {
+        let previous = self.holder.load().runtime_registry();
+        let tls = self.tls.clone();
+        let (config, version, prepared) = self
+            .store
+            .run(move |db| {
+                db.read(|conn| {
+                    tls.refresh_vault(conn)?;
+                    Ok((
+                        load::load_all(conn)?,
+                        revision::current_version(conn)?,
+                        tls.build(conn)?,
+                    ))
+                })
+            })
+            .await?;
+        let inputs = TlsInputs {
+            enabled: self.tls.settings.enabled,
+            certificates: prepared.cache.clone(),
+            ca_bundles: prepared.ca_bundles.clone(),
+        };
+        let snapshot = compile_with_tls(version, &config, &previous, &inputs)?;
+        self.metrics
+            .retain_upstream_series(&live_endpoints(&snapshot));
+        self.metrics.set_config_version(version);
+        publish_certificates(&self.metrics, &prepared);
+        self.tls.install(prepared.cache);
+        self.holder.swap(snapshot);
+        Ok(ConfigChanged {
+            version,
+            summary: "configuration synchronized from the database".into(),
+        })
+    }
+
+    /// Polls for changes made by other instances every `interval` until
+    /// `shutdown` is cancelled. A zero interval turns the sync off: the future
+    /// resolves at once.
+    pub async fn run_sync(
+        self: Arc<Self>,
+        interval: std::time::Duration,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) {
+        if interval.is_zero() {
+            return;
+        }
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = tokio::time::sleep(interval) => {}
+            }
+            self.sync_once().await;
+        }
     }
 
     /// Whether stored private keys can be read.

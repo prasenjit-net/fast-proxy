@@ -126,6 +126,13 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         endpoint_events.clone(),
     );
     tokio::spawn(health.run(config_service.subscribe(), data_stop.clone()));
+    // Changes written by another instance sharing the database are picked up
+    // here; a zero interval turns the sync off.
+    tokio::spawn(
+        config_service
+            .clone()
+            .run_sync(config.data_plane.config_poll_interval, data_stop.clone()),
+    );
     tokio::spawn(run_status_gauges(
         config_service.snapshot_holder(),
         metrics.clone(),

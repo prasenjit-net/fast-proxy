@@ -86,28 +86,41 @@ impl TlsState {
         has_certificates: bool,
         check: Option<&VaultCheck>,
     ) -> Result<Self, StoreError> {
-        let mut holder = VaultHolder {
-            vault: None,
-            status: VaultStatus::NotCreated,
+        let holder = if settings.enabled || has_certificates {
+            unlock(&settings, check)?
+        } else {
+            VaultHolder::locked()
         };
-        if settings.enabled || has_certificates {
-            if let Some(loaded) = find_key(&settings, false)? {
-                let vault = Vault::new(&loaded.key);
-                let matches = check.is_none_or(|check| vault.verify_check(&sealed_of(check)));
-                if matches {
-                    holder.vault = Some(Arc::new(vault));
-                    holder.status = VaultStatus::Ok;
-                } else {
-                    tracing::error!("the master key does not match this database; stored private keys are unreadable");
-                    holder.status = VaultStatus::KeyMismatch;
-                }
-            }
-        }
         Ok(Self {
             settings,
             vault: Mutex::new(holder),
             cache: Mutex::new(CertCache::empty()),
         })
+    }
+
+    /// Re-checks the vault against the stored check value after another
+    /// instance may have written to the database: a master key that was fine
+    /// while the database held nothing sealed can turn out not to match, and a
+    /// key that was not needed before may be needed now.
+    pub(crate) fn refresh_vault(&self, conn: &Connection) -> Result<(), StoreError> {
+        let check = vault_rows::get(conn)?;
+        let has_certificates = !certificates::list(conn)?.is_empty();
+        let mut holder = locked(&self.vault);
+        match (&holder.vault, &check) {
+            (Some(vault), Some(check)) if !vault.verify_check(&sealed_of(check)) => {
+                tracing::error!("the master key does not match this database; stored private keys are unreadable");
+                holder.vault = None;
+                holder.status = VaultStatus::KeyMismatch;
+            }
+            (None, _)
+                if holder.status == VaultStatus::NotCreated
+                    && (self.settings.enabled || has_certificates) =>
+            {
+                *holder = unlock(&self.settings, check.as_ref())?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub(crate) fn status(&self) -> VaultStatus {
@@ -197,6 +210,36 @@ impl TlsState {
     pub(crate) fn cache(&self) -> CertCache {
         locked(&self.cache).clone()
     }
+}
+
+impl VaultHolder {
+    fn locked() -> Self {
+        Self {
+            vault: None,
+            status: VaultStatus::NotCreated,
+        }
+    }
+}
+
+/// Loads the master key and checks it against the stored check value (if any).
+fn unlock(settings: &TlsSettings, check: Option<&VaultCheck>) -> Result<VaultHolder, StoreError> {
+    let Some(loaded) = find_key(settings, false)? else {
+        return Ok(VaultHolder::locked());
+    };
+    let vault = Vault::new(&loaded.key);
+    if check.is_none_or(|check| vault.verify_check(&sealed_of(check))) {
+        return Ok(VaultHolder {
+            vault: Some(Arc::new(vault)),
+            status: VaultStatus::Ok,
+        });
+    }
+    tracing::error!(
+        "the master key does not match this database; stored private keys are unreadable"
+    );
+    Ok(VaultHolder {
+        vault: None,
+        status: VaultStatus::KeyMismatch,
+    })
 }
 
 fn find_key(
