@@ -1,0 +1,14 @@
+[package]
+name = "fast-proxy-auth"
+version = "0.0.0"
+edition = "2021"
+description = "Admin authentication for fast-proxy: token format, hashing and constant-time verification, the token set, the failure throttle and WebSocket tickets (no HTTP, no database)"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+arc-swap = "1"
+base64 = "0.22"
+ring = "0.17"
+subtle = "2"
+thiserror = { workspace = true }

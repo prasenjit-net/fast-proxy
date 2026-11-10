@@ -630,6 +630,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-auth"
+version = "0.0.0"
+dependencies = [
+ "arc-swap",
+ "base64 0.22.1",
+ "fast-proxy-model",
+ "ring",
+ "subtle",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "fast-proxy-balancing"
 version = "0.0.0"
 dependencies = [

@@ -7,7 +7,9 @@ use crate::repository::load;
 use crate::{revision, StoreError};
 
 /// Bump together with `schema.sql`. Stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+/// The actor recorded for changes nobody asked for by name (the sweeper, tests).
+const SYSTEM_ACTOR: &str = "system";
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 /// The result of a successful write: the operation's value plus the
@@ -96,7 +98,16 @@ impl Database {
         revision::current_version(&self.conn)
     }
 
-    /// Applies one change atomically:
+    /// [`write_as`](Self::write_as) with the actor `system`.
+    pub fn write<T>(
+        &mut self,
+        mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
+        check: impl FnOnce(&Config) -> Result<(), String>,
+    ) -> Result<Written<T>, StoreError> {
+        self.write_as(SYSTEM_ACTOR, mutate, check)
+    }
+
+    /// Applies one change atomically, recording `actor` on its revision:
     ///
     /// 1. open a write transaction and run `mutate`,
     /// 2. load the would-be configuration and hand it to `check`,
@@ -105,8 +116,9 @@ impl Database {
     /// Any failure rolls everything back and leaves the database untouched.
     /// `check` is how callers veto a change (for example by compiling the
     /// routing snapshot) before it becomes durable.
-    pub fn write<T>(
+    pub fn write_as<T>(
         &mut self,
+        actor: &str,
         mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
         check: impl FnOnce(&Config) -> Result<(), String>,
     ) -> Result<Written<T>, StoreError> {
@@ -116,7 +128,30 @@ impl Database {
         let Mutation { value, summary } = mutate(&tx)?;
         let config = load::load_all(&tx)?;
         check(&config).map_err(|message| StoreError::invalid_field("config", &message))?;
-        let version = revision::append(&tx, &summary, &config)?;
+        let version = revision::append(&tx, actor, &summary, &config)?;
+        tx.commit()?;
+        Ok(Written {
+            value,
+            version,
+            config,
+        })
+    }
+
+    /// Applies a change to data that is not configuration (tokens, audit
+    /// settings, maintenance) as a summary-only revision: the configuration
+    /// copy is unchanged, but the version moves, which is how other instances
+    /// sharing the database notice and reload.
+    pub fn write_outside_config<T>(
+        &mut self,
+        actor: &str,
+        mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
+    ) -> Result<Written<T>, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Mutation { value, summary } = mutate(&tx)?;
+        let config = load::load_all(&tx)?;
+        let version = revision::append(&tx, actor, &summary, &config)?;
         tx.commit()?;
         Ok(Written {
             value,
@@ -163,7 +198,7 @@ mod tests {
 
     #[test]
     fn rejects_a_database_with_a_different_schema_version() {
-        for found in [1, 2, 99] {
+        for found in [1, 2, 3, 99] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("old.db");
             Connection::open(&path)

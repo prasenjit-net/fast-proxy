@@ -1,6 +1,6 @@
 # M5 Plan: Operations control (maintenance mode, admin authentication, audit log, CLI)
 
-Status: **draft v0.1 (2026-11-10), proposed; PR1 (ADRs 0015 to 0019, as proposed) written, awaiting your confirmation of the (confirm) items.** M4 (ACME) is deliberately skipped for now
+Status: **draft v0.1 (2026-11-10), proposed; PR1 (ADRs 0015 to 0019, as proposed) committed, awaiting your confirmation of the (confirm) items; PR2 (model, store, auth crate) written, awaiting review.** M4 (ACME) is deliberately skipped for now
 and will be planned later; section 11 lists what M5 must leave room for so M4 can land
 afterwards without rework.
 
@@ -349,37 +349,37 @@ carry-over.
 
 ### Workstream MD: Model
 
-- [ ] **MD1 (M) Maintenance types.** `MaintenanceScope`, `MaintenanceSettings`
+- [x] **MD1 (M) Maintenance types.** `MaintenanceScope`, `MaintenanceSettings`
   (message, optional body and content type, retry-after, bypass CIDRs and header, expiry)
   and their validation with field-specific messages (`bypass.cidrs`, `retryAfterSecs`,
   `body`); the pure `is_active(now)` and `retry_after(now)` rules.
   *Done when:* table-driven tests accept and reject every bound and the expiry and
   derived `Retry-After` rules are covered including the exact expiry millisecond.
-- [ ] **MD2 (S) Roles and actions.** `Role` (admin, viewer), `Action` (read, write, keys,
+- [x] **MD2 (S) Roles and actions.** `Role` (admin, viewer), `Action` (read, write, keys,
   tokens, audit-export), the permission table as one exhaustive function, and the
   `TokenName` rule (1 to 63 characters, unique).
   *Done when:* a test enumerates every role and action pair and asserts the table.
 
 ### Workstream S: Store
 
-- [ ] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2; bump `SCHEMA_VERSION` to 4.
+- [x] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2; bump `SCHEMA_VERSION` to 4.
   *Done when:* a fresh database opens and a version-3 file is rejected with the existing
   clear error.
-- [ ] **S2 (M) Token repository.** Create, list, find by id, revoke, mark used (coarse),
+- [x] **S2 (M) Token repository.** Create, list, find by id, revoke, mark used (coarse),
   count of usable admin tokens; hashes are opaque bytes and never returned by list
   functions meant for the API.
   *Done when:* tests cover uniqueness (409), revocation, the last-admin protection and
   that no listing function exposes `secret_hash`.
-- [ ] **S3 (M) Audit repository.** Append inside a caller's transaction, page by time and
+- [x] **S3 (M) Audit repository.** Append inside a caller's transaction, page by time and
   id, filter by actor, action, outcome and time, prune by age and count, export in
   order; the `detail` size limit.
   *Done when:* tests cover paging stability, each filter, pruning at both limits, and an
   oversized detail being refused.
-- [ ] **S4 (M) Maintenance repository.** Set (insert or replace), clear, list, load all;
+- [x] **S4 (M) Maintenance repository.** Set (insert or replace), clear, list, load all;
   the cascade on subsystem and route deletion; the unique target index.
   *Done when:* tests cover each scope, replacing a row, the cascades, and rows that no
   longer validate being `Internal`.
-- [ ] **S5 (S) Actor on revisions and summary-only writes.** `revision.actor`, listed with
+- [x] **S5 (S) Actor on revisions and summary-only writes.** `revision.actor`, listed with
   each revision; a summary-only append for token, audit-settings and maintenance changes;
   `restore` leaves tokens, audit and maintenance untouched.
   *Done when:* a test sets maintenance, creates a token, rolls back across them and shows
@@ -388,27 +388,27 @@ carry-over.
 
 ### Workstream AU: The auth crate (new)
 
-- [ ] **AU1 (M) Token format and verification.** Generate `fp_<id>.<secret>` (256 random
+- [x] **AU1 (M) Token format and verification.** Generate `fp_<id>.<secret>` (256 random
   bits, base64url), hash with SHA-256, parse, and verify in constant time; expiry and
   revocation checks take the clock as a parameter.
   *Done when:* tests cover a round trip, a wrong secret, a malformed token, a truncated
   one, expiry at the boundary, revocation, and that the verification does not branch on
-  the secret's bytes (the comparison is the `ring` constant-time function).
-- [ ] **AU2 (M) The token cache.** An immutable `TokenSet` built from rows (id to hash,
+  the secret's bytes (the comparison is `subtle`'s constant-time `ct_eq`; `ring`'s own function is deprecated).
+- [x] **AU2 (M) The token cache.** An immutable `TokenSet` built from rows (id to hash,
   role, expiry, revocation), swapped atomically, rebuilt reusing unchanged entries when
   the cluster generation moves.
   *Done when:* tests cover a rebuild after create and revoke, an expired token no longer
   authenticating without any write, and 1,000 tokens verifying in microseconds.
-- [ ] **AU3 (M) The failure throttle.** Per source address, a sliding window of failures
+- [x] **AU3 (M) The failure throttle.** Per source address, a sliding window of failures
   (10 per minute), `Retry-After` when tripped, bounded memory (an LRU of addresses), the
   clock a parameter.
   *Done when:* tests cover tripping, recovery after the window, the memory bound under a
   flood of distinct addresses, and a valid token being refused while throttled.
-- [ ] **AU4 (S) WebSocket tickets.** Single-use, 30-second tickets in a bounded in-memory
+- [x] **AU4 (S) WebSocket tickets.** Single-use, 30-second tickets in a bounded in-memory
   map carrying the role.
   *Done when:* tests cover use once, expiry, an unknown ticket, and the bound under
   abuse.
-- [ ] **AU5 (S) Bypass secrets.** The same hash and constant-time comparison for a
+- [x] **AU5 (S) Bypass secrets.** The same hash and constant-time comparison for a
   maintenance bypass header secret, and generation of a secret for the operator.
   *Done when:* tests cover match, mismatch, absent header, and that the stored form is a
   hash.

@@ -1,4 +1,4 @@
--- Schema v3. The project is not deployed, so changes edit this file directly
+-- Schema v4. The project is not deployed, so changes edit this file directly
 -- (no migrations); SCHEMA_VERSION in database.rs must be bumped with it.
 
 -- Certificate material. Private keys are stored only as AES-256-GCM ciphertext
@@ -122,5 +122,59 @@ CREATE TABLE revision (
   version    INTEGER PRIMARY KEY,
   created_at INTEGER NOT NULL,
   summary    TEXT NOT NULL,
-  config     TEXT NOT NULL
+  config     TEXT NOT NULL,
+  -- Who made the change: a token name, 'system' or 'cli'.
+  actor      TEXT NOT NULL DEFAULT 'system'
 );
+
+-- Admin tokens. The secret is never stored, only its SHA-256; this crate never
+-- hashes or verifies. Tokens, audit entries and maintenance are not part of
+-- Config and a rollback never touches them.
+CREATE TABLE admin_token (
+  id           INTEGER PRIMARY KEY,
+  name         TEXT NOT NULL UNIQUE,
+  role         TEXT NOT NULL,
+  secret_hash  BLOB NOT NULL,
+  created_at   INTEGER NOT NULL,
+  created_by   TEXT NOT NULL,
+  expires_at   INTEGER,
+  revoked_at   INTEGER,
+  last_used_at INTEGER
+);
+
+-- Append-only from the application; pruned by age and count.
+CREATE TABLE audit_log (
+  id         INTEGER PRIMARY KEY,
+  at         INTEGER NOT NULL,
+  instance   TEXT NOT NULL,
+  actor      TEXT NOT NULL,
+  role       TEXT NOT NULL,
+  source     TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  target     TEXT NOT NULL,
+  outcome    TEXT NOT NULL,
+  detail     TEXT NOT NULL,
+  revision   INTEGER
+);
+CREATE INDEX audit_log_at ON audit_log (at);
+
+-- One row per active scope; removed with its subsystem or route.
+CREATE TABLE maintenance (
+  id                 INTEGER PRIMARY KEY,
+  scope              TEXT NOT NULL,
+  subsystem_id       INTEGER REFERENCES subsystem(id) ON DELETE CASCADE,
+  route_id           INTEGER REFERENCES route(id) ON DELETE CASCADE,
+  message            TEXT NOT NULL DEFAULT '',
+  body               TEXT NOT NULL DEFAULT '',
+  content_type       TEXT NOT NULL DEFAULT '',
+  retry_after_secs   INTEGER,
+  bypass_cidrs       TEXT NOT NULL DEFAULT '[]',
+  bypass_header      TEXT NOT NULL DEFAULT '',
+  bypass_secret_hash BLOB,
+  expires_at         INTEGER,
+  set_by             TEXT NOT NULL,
+  set_at             INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX maintenance_target
+  ON maintenance (scope, COALESCE(subsystem_id, 0), COALESCE(route_id, 0));
