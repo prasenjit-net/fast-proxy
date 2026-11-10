@@ -50,6 +50,9 @@ pub struct AdminSummary {
     auth: &'static str,
     /// Whether private keys may be sent over the admin channel.
     protected_channel: bool,
+    /// The stored certificate the admin plane serves over TLS; `None` when it
+    /// serves plain HTTP.
+    tls_certificate: Option<String>,
     /// Tokens that are neither revoked nor expired.
     active_tokens: usize,
     /// Maintenance scopes that are on right now.
@@ -134,6 +137,7 @@ pub async fn status(State(state): State<SharedState>) -> AppResult<Json<Envelope
             admin: AdminSummary {
                 auth: state.security.auth_mode(),
                 protected_channel: state.security.channel_protected,
+                tls_certificate: state.security.admin_certificate().map(str::to_string),
                 active_tokens,
                 active_maintenance,
             },

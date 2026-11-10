@@ -263,6 +263,7 @@ mod admin_protection {
     #[test]
     fn leaving_loopback_without_tls_needs_the_explicit_override_and_names_it() {
         let message = validated("[admin]\nlisten = \"0.0.0.0:9100\"\n").unwrap_err();
+        assert!(message.contains("admin.tls.enabled"), "{message}");
         assert!(message.contains("admin.allow_insecure_remote"), "{message}");
         assert!(message.contains("0.0.0.0:9100"), "{message}");
         assert!(
@@ -291,6 +292,61 @@ mod admin_protection {
         }
         assert!(
             validated("[admin]\nallowed_hosts = [\"admin.example.com\", \"10.0.0.5\"]\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn admin_tls_defaults_to_off_with_the_documented_names() {
+        let config = parse("").unwrap();
+        assert!(!config.admin.tls.enabled);
+        assert_eq!(config.admin.tls.names, ["localhost"]);
+        assert_eq!(config.admin.tls.certificate, "admin");
+    }
+
+    #[test]
+    fn admin_tls_keys_parse_and_unknown_ones_are_rejected() {
+        let config = parse(
+            "[admin.tls]\nenabled = true\nnames = [\"admin.example.com\", \"10.0.0.5\"]\ncertificate = \"ops\"\n",
+        )
+        .unwrap();
+        assert!(config.admin.tls.enabled);
+        assert_eq!(config.admin.tls.names, ["admin.example.com", "10.0.0.5"]);
+        assert_eq!(config.admin.tls.certificate, "ops");
+        assert!(parse("[admin.tls]\ntypo = 1\n").is_err());
+    }
+
+    #[test]
+    fn tls_makes_a_non_loopback_admin_listener_acceptable_without_the_override() {
+        assert!(
+            validated("[admin]\nlisten = \"0.0.0.0:9100\"\n[admin.tls]\nenabled = true\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn authentication_off_stays_refused_off_loopback_even_with_tls() {
+        let message = validated(
+            "[admin]\nlisten = \"0.0.0.0:9100\"\nauth = \"off\"\n[admin.tls]\nenabled = true\n",
+        )
+        .unwrap_err();
+        assert!(message.contains("admin.auth"), "{message}");
+    }
+
+    #[test]
+    fn enabled_admin_tls_needs_a_certificate_name_and_names() {
+        let empty_certificate =
+            validated("[admin.tls]\nenabled = true\ncertificate = \" \"\n").unwrap_err();
+        assert!(
+            empty_certificate.contains("admin.tls.certificate"),
+            "{empty_certificate}"
+        );
+        for names in ["[]", "[\"\"]"] {
+            let message =
+                validated(&format!("[admin.tls]\nenabled = true\nnames = {names}\n")).unwrap_err();
+            assert!(message.contains("admin.tls.names"), "{names}: {message}");
+        }
+        assert!(
+            validated("[admin.tls]\nenabled = false\nnames = []\n").is_ok(),
+            "nothing is checked while it is off"
         );
     }
 }

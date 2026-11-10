@@ -48,6 +48,12 @@ while the admin plane listens on loopback and is warned about on every start.
 export TOKEN=fp_1.<the secret printed above>
 ```
 
+To reach the admin plane from another machine, serve it over HTTPS instead
+(`cargo run -- --admin-tls`, or `[admin.tls] enabled = true`, and an
+`admin.listen` address of your choice). It then generates a self-signed `admin`
+certificate on first start, so use `curl -k` (or trust it) until you upload your
+own under the same name on the Certificates page.
+
 ## 2. Start two backends
 
 In two more terminals:

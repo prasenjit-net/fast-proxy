@@ -63,6 +63,8 @@ pub fn start_slow_backend(name: &'static str, delay: Duration) -> u16 {
     port
 }
 
+pub mod console;
+
 pub struct Proxy {
     pub child: Child,
     pub data: SocketAddr,

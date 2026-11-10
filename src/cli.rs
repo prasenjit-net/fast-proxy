@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub admin_auth: Option<AdminAuth>,
 
+    /// Serve the admin plane over HTTPS (overrides [admin.tls].enabled)
+    #[arg(long)]
+    pub admin_tls: bool,
+
     /// Override [data_plane].database
     #[arg(long)]
     pub database: Option<PathBuf>,
@@ -64,6 +68,9 @@ impl Cli {
     pub fn apply(&self, config: &mut AppConfig) {
         if let Some(listen) = self.admin_listen {
             config.admin.listen = listen;
+        }
+        if self.admin_tls {
+            config.admin.tls.enabled = true;
         }
         if let Some(auth) = self.admin_auth {
             config.admin.auth = auth;
@@ -111,6 +118,17 @@ mod tests {
         parse(&["--admin-auth", "required"]).apply(&mut config);
         assert_eq!(config.admin.auth, AdminAuth::Required);
         assert!(Cli::try_parse_from(["fast-proxy", "--admin-auth", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn admin_tls_flag_turns_admin_tls_on() {
+        let mut config = AppConfig::default();
+        assert!(!config.admin.tls.enabled);
+        parse(&["--admin-tls"]).apply(&mut config);
+        assert!(config.admin.tls.enabled);
+        let mut untouched = AppConfig::default();
+        parse(&[]).apply(&mut untouched);
+        assert!(!untouched.admin.tls.enabled);
     }
 
     #[test]

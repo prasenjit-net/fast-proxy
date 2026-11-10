@@ -7,6 +7,8 @@
 //! Certificate material never enters a revision: a material change is recorded
 //! as a summary-only revision (the configuration is unchanged).
 
+use std::sync::Arc;
+
 use fast_proxy_model::{
     CertificateId, CertificateMetadata, CertificateName, CertificateSource, FieldError,
     HostPattern, HttpsPolicy, SubsystemId,
@@ -15,7 +17,7 @@ use fast_proxy_store::repository::certificates::{self, NewCertificate};
 use fast_proxy_store::repository::subsystems;
 use fast_proxy_store::{Connection, Mutation, StoreError, SubsystemFields};
 use fast_proxy_tls::{
-    generate_self_signed, parse_chain, read_metadata, validate_with_key, CertEntry,
+    generate_self_signed, parse_chain, read_metadata, validate_with_key, CertEntry, CertHandle,
     CertificateState, KeyMaterial,
 };
 
@@ -347,6 +349,38 @@ impl ConfigService {
 
     /// Every certificate with its state and the subsystems using it (metadata
     /// only; key material never leaves the vault).
+    /// The usable certificate stored under `name`, from the live cache. The
+    /// admin listener asks this on every handshake, so a replacement is live
+    /// for the next connection.
+    pub fn certificate_by_name(&self, name: &str) -> Option<Arc<CertHandle>> {
+        self.tls.cache().entries().find_map(|entry| match entry {
+            CertEntry::Ready(handle) if handle.name.as_str() == name => Some(handle.clone()),
+            _ => None,
+        })
+    }
+
+    /// Makes sure a certificate named `name` exists, generating a self-signed
+    /// one for `names` through the normal write path when there is none. An
+    /// existing certificate (uploaded or generated) is never replaced. Returns
+    /// whether one was generated.
+    pub async fn ensure_self_signed_certificate(
+        &self,
+        context: &ChangeContext,
+        name: &str,
+        names: Vec<String>,
+    ) -> Result<bool, StoreError> {
+        let exists = self
+            .list_certificates()
+            .await?
+            .iter()
+            .any(|certificate| certificate.name.as_str() == name);
+        if exists {
+            return Ok(false);
+        }
+        self.generate_self_signed(context, name, names).await?;
+        Ok(true)
+    }
+
     pub async fn list_certificates(&self) -> Result<Vec<CertificateSummary>, StoreError> {
         let cache = self.tls.cache();
         let applied = self

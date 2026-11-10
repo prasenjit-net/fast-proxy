@@ -18,6 +18,7 @@ mod security;
 mod security_headers;
 mod state;
 mod static_assets;
+mod tls_server;
 mod traffic;
 mod ui_config;
 mod ws;
@@ -34,12 +35,15 @@ mod test_support;
 mod tests;
 #[cfg(test)]
 mod tls_api_tests;
+#[cfg(test)]
+mod tls_server_tests;
 
 pub use error::{AppError, AppResult};
 pub use router::router;
 pub use runtime_info::{ListenerInfo, RuntimeInfo, TlsInfo};
 pub use security::{AdminSecurity, SecuritySettings};
 pub use state::{AdminState, SharedState};
+pub use tls_server::{serve_tls, StoredCertificate};
 pub use ui_config::UiConfig;
 
 /// Starts the admin plane's background work: the live traffic sampler and

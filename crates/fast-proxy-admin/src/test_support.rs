@@ -28,6 +28,8 @@ enum Protection {
     Normal,
     UnprotectedChannel,
     AuthOff,
+    /// Serving TLS with the stored certificate `admin`.
+    AdminTls,
 }
 
 pub struct TestApp {
@@ -60,6 +62,20 @@ impl TestApp {
                 env_master_key: Some(TEST_MASTER_KEY.into()),
             },
             Protection::UnprotectedChannel,
+        )
+        .await
+    }
+
+    /// The same, with the admin plane serving the stored certificate `admin`
+    /// over TLS (the server itself is not started; only the rules apply).
+    pub async fn with_admin_tls() -> Self {
+        Self::start(
+            TlsSettings {
+                enabled: false,
+                master_key_file: None,
+                env_master_key: Some(TEST_MASTER_KEY.into()),
+            },
+            Protection::AdminTls,
         )
         .await
     }
@@ -143,6 +159,7 @@ impl TestApp {
                 channel_protected: protection != Protection::UnprotectedChannel,
                 listen: SocketAddr::from(([127, 0, 0, 1], 9000)),
                 allowed_hosts: vec![],
+                admin_certificate: (protection == Protection::AdminTls).then(|| "admin".into()),
             },
             config.token_cache(),
         );
@@ -187,6 +204,11 @@ impl TestApp {
             request = request.header("authorization", format!("Bearer {token}"));
         }
         request
+    }
+
+    /// The router under test, to serve on a real listener.
+    pub fn router(&self) -> Router {
+        self.router.clone()
     }
 
     /// Sends a prepared request (from [`TestApp::request_builder`]) and returns

@@ -30,12 +30,15 @@ pub struct SecuritySettings {
     pub listen: SocketAddr,
     /// Extra names accepted in the `Host` header.
     pub allowed_hosts: Vec<String>,
+    /// The stored certificate the admin plane serves, when it serves TLS.
+    pub admin_certificate: Option<String>,
 }
 
 /// The protection state of one running admin plane.
 pub struct AdminSecurity {
     pub(crate) auth_required: bool,
     pub(crate) channel_protected: bool,
+    admin_certificate: Option<String>,
     hosts: HostAllowList,
     pub(crate) throttle: FailureThrottle,
     pub(crate) tickets: TicketStore,
@@ -47,6 +50,7 @@ impl AdminSecurity {
         Self {
             auth_required: settings.auth_required,
             channel_protected: settings.channel_protected,
+            admin_certificate: settings.admin_certificate.clone(),
             hosts: HostAllowList::new(settings.listen, &settings.allowed_hosts),
             throttle: FailureThrottle::new(
                 THROTTLE_MAX_FAILURES,
@@ -69,6 +73,11 @@ impl AdminSecurity {
              plane served over TLS); run the request on the machine the proxy runs on"
                 .into(),
         ))
+    }
+
+    /// The name of the certificate the admin plane is serving, if it serves TLS.
+    pub(crate) fn admin_certificate(&self) -> Option<&str> {
+        self.admin_certificate.as_deref()
     }
 
     pub(crate) fn allows_host(&self, host_header: &str) -> bool {

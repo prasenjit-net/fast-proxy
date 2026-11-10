@@ -6,10 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_admin::{
-    AdminSecurity, AdminState, ListenerInfo, RuntimeInfo, SecuritySettings, TlsInfo,
+    serve_tls, AdminSecurity, AdminState, ListenerInfo, RuntimeInfo, SecuritySettings,
+    StoredCertificate, TlsInfo,
 };
 use fast_proxy_config_service::{
-    AuditRetention, Bootstrap, ConfigService, StartError, TlsSettings,
+    AuditRetention, Bootstrap, ChangeContext, ConfigService, StartError, TlsSettings,
 };
 use fast_proxy_dataplane::{
     bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
@@ -19,12 +20,12 @@ use fast_proxy_dataplane::{
 use fast_proxy_health::{run_status_gauges, HealthEngine};
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
-use fast_proxy_tls::{MinTlsVersion, ServerTlsPolicy};
+use fast_proxy_tls::{build_server_config, MinTlsVersion, ServerConfigError, ServerTlsPolicy};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AdminAuth, AdminConfig, AppConfig, TlsConfig};
+use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
 
 /// The environment variable that seeds the first admin token (for containers).
 const BOOTSTRAP_TOKEN_VARIABLE: &str = "FAST_PROXY_BOOTSTRAP_TOKEN";
@@ -56,6 +57,8 @@ pub enum StartupError {
         addr: SocketAddr,
         source: std::io::Error,
     },
+    #[error(transparent)]
+    AdminTls(#[from] ServerConfigError),
     #[error("the admin server failed: {0}")]
     AdminServe(std::io::Error),
 }
@@ -75,6 +78,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     );
     if config.admin.auth == AdminAuth::Required {
         ensure_admin_token(&config_service).await?;
+    }
+    if config.admin.tls.enabled {
+        ensure_admin_certificate(&config_service, &config.admin.tls).await?;
     }
 
     let specs: Vec<ListenerSpec> = data_plane
@@ -130,9 +136,14 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let security = AdminSecurity::new(
         &SecuritySettings {
             auth_required: config.admin.auth == AdminAuth::Required,
-            channel_protected: admin_addr.ip().is_loopback(),
+            channel_protected: admin_addr.ip().is_loopback() || config.admin.tls.enabled,
             listen: admin_addr,
             allowed_hosts: config.admin.allowed_hosts.clone(),
+            admin_certificate: config
+                .admin
+                .tls
+                .enabled
+                .then(|| config.admin.tls.certificate.clone()),
         },
         config_service.token_cache(),
     );
@@ -203,8 +214,13 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         };
         tracing::info!("data plane listener \"{name}\" serving on {scheme}://{addr}");
     }
+    let admin_scheme = if config.admin.tls.enabled {
+        "https"
+    } else {
+        "http"
+    };
     tracing::info!(
-        "admin plane serving on http://{admin_addr}, database {}, config version {}",
+        "admin plane serving on {admin_scheme}://{admin_addr}, database {}, config version {}",
         database.display(),
         config_service.snapshot_holder().load().version
     );
@@ -222,12 +238,29 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         }
     });
 
-    let served = axum::serve(
-        admin_listener,
-        fast_proxy_admin::router(admin_state).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(admin_stop.cancelled_owned())
-    .await;
+    let router = fast_proxy_admin::router(admin_state);
+    let served = if config.admin.tls.enabled {
+        let resolver = Arc::new(StoredCertificate::new(
+            config_service.clone(),
+            config.admin.tls.certificate.clone(),
+        ));
+        let tls = build_server_config(
+            &ServerTlsPolicy {
+                min_version: config.data_plane.tls.min_version,
+                http2: true,
+            },
+            resolver,
+        )?;
+        serve_tls(admin_listener, router, Arc::new(tls), admin_stop.clone()).await;
+        Ok(())
+    } else {
+        axum::serve(
+            admin_listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(admin_stop.cancelled_owned())
+        .await
+    };
     // However the admin server ended, stop the data plane with it.
     data_stop.cancel();
     if let Ok(report) = drain.await {
@@ -329,6 +362,30 @@ async fn ensure_admin_token(config_service: &ConfigService) -> Result<(), StoreE
     Ok(())
 }
 
+/// Makes sure the stored certificate the admin plane serves exists, generating
+/// a self-signed one for the configured names the first time (browsers will warn
+/// about it until an uploaded certificate of the same name replaces it).
+async fn ensure_admin_certificate(
+    config_service: &ConfigService,
+    tls: &AdminTlsConfig,
+) -> Result<(), StoreError> {
+    let generated = config_service
+        .ensure_self_signed_certificate(
+            &ChangeContext::system(),
+            &tls.certificate,
+            tls.names.clone(),
+        )
+        .await?;
+    if generated {
+        tracing::info!(
+            "generated a self-signed certificate \"{}\" for the admin plane; upload one of the \
+             same name to replace it",
+            tls.certificate
+        );
+    }
+    Ok(())
+}
+
 /// Warnings for admin settings that are allowed but worth saying out loud.
 fn admin_warnings(admin: &AdminConfig) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -339,7 +396,7 @@ fn admin_warnings(admin: &AdminConfig) -> Vec<String> {
                 .to_string(),
         );
     }
-    if !admin.listen.ip().is_loopback() {
+    if !admin.listen.ip().is_loopback() && !admin.tls.enabled {
         warnings.push(format!(
             "the admin plane is listening on {}, which is not a loopback address, without TLS \
              (admin.allow_insecure_remote): admin tokens cross the network in clear text",
@@ -366,6 +423,13 @@ mod tests {
     fn a_protected_loopback_admin_plane_has_nothing_to_warn_about() {
         assert!(admin_warnings(&admin("127.0.0.1:9000", AdminAuth::Required)).is_empty());
         assert!(admin_warnings(&admin("[::1]:9000", AdminAuth::Required)).is_empty());
+    }
+
+    #[test]
+    fn an_exposed_admin_address_with_tls_has_nothing_to_warn_about() {
+        let mut config = admin("0.0.0.0:9000", AdminAuth::Required);
+        config.tls.enabled = true;
+        assert!(admin_warnings(&config).is_empty());
     }
 
     #[test]

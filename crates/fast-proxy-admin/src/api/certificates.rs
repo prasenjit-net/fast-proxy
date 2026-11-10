@@ -121,6 +121,12 @@ pub async fn replace_certificate(
         state.security.require_protected_channel()?;
     }
     let id = CertificateId(id);
+    if let Some(new_name) = &body.name {
+        let current = certificate_name(&state, id).await?;
+        if &current != new_name {
+            refuse_if_served_by_admin(&state, &current)?;
+        }
+    }
     let applied = state
         .config
         .replace_certificate(
@@ -141,21 +147,41 @@ pub async fn replace_certificate(
     }))
 }
 
-/// `DELETE /api/certificates/{id}`: 409 while a subsystem uses it.
-pub async fn delete_certificate(
-    State(state): State<SharedState>,
-    Change(context): Change,
-    Path(id): Path<i64>,
-) -> AppResult<Json<VersionOnly>> {
-    let id = CertificateId(id);
-    let name = state
+/// The name of certificate `id`, or a 404.
+async fn certificate_name(state: &SharedState, id: CertificateId) -> AppResult<String> {
+    state
         .config
         .list_certificates()
         .await?
         .into_iter()
         .find(|summary| summary.id == id)
         .map(|summary| summary.name.as_str().to_string())
-        .ok_or_else(|| AppError::NotFound(format!("certificate {} not found", id.0)))?;
+        .ok_or_else(|| AppError::NotFound(format!("certificate {} not found", id.0)))
+}
+
+/// Refuses a change that would break the certificate the admin plane serves
+/// (its listener finds the certificate by name): deleting it, or renaming it.
+/// Replacing its certificate and key is how it is renewed.
+fn refuse_if_served_by_admin(state: &SharedState, name: &str) -> AppResult<()> {
+    if state.security.admin_certificate() != Some(name) {
+        return Ok(());
+    }
+    Err(AppError::Conflict(format!(
+        "the admin plane is serving the certificate \"{name}\"; replace its certificate and \
+         key instead of deleting or renaming it"
+    )))
+}
+
+/// `DELETE /api/certificates/{id}`: 409 while a subsystem uses it, or while the
+/// admin plane serves it.
+pub async fn delete_certificate(
+    State(state): State<SharedState>,
+    Change(context): Change,
+    Path(id): Path<i64>,
+) -> AppResult<Json<VersionOnly>> {
+    let id = CertificateId(id);
+    let name = certificate_name(&state, id).await?;
+    refuse_if_served_by_admin(&state, &name)?;
     let applied = state.config.delete_certificate(&context, id).await?;
     state.certificate_changed("deleted", &name);
     Ok(Json(VersionOnly {

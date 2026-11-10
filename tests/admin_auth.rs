@@ -4,97 +4,12 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::io::Read;
+use std::process::{Command, Stdio};
 
+use common::console::{printed, start_ok, token_in, Running};
 use common::{free_port, http_with_headers, write_config};
 use serde_json::{json, Value};
-
-const TOKEN_MARKER: &str = "admin token (shown once, store it now): ";
-
-/// A proxy started with authentication required and its console output.
-struct Running {
-    child: Child,
-    admin: std::net::SocketAddr,
-    lines: mpsc::Receiver<String>,
-}
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn start(dir: &Path, env: &[(&str, &str)], extra_args: &[&str]) -> Result<Running, String> {
-    let data_port = free_port();
-    let admin_port = free_port();
-    let config = write_config(dir, data_port, admin_port, "");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_fast-proxy"));
-    command
-        .arg("--config")
-        .arg(&config)
-        .args(["--admin-auth", "required"])
-        .args(extra_args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for (name, value) in env {
-        command.env(name, value);
-    }
-    let mut child = command.spawn().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let (sender, lines) = mpsc::channel();
-    thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let admin: std::net::SocketAddr = ([127, 0, 0, 1], admin_port).into();
-    let mut running = Running {
-        child,
-        admin,
-        lines,
-    };
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < deadline {
-        if let Some(status) = running.child.try_wait().unwrap() {
-            return Err(format!("exited at startup ({status})"));
-        }
-        if std::net::TcpStream::connect(admin).is_ok() {
-            return Ok(running);
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    Err("did not start listening".into())
-}
-
-fn start_ok(dir: &Path, env: &[(&str, &str)]) -> Running {
-    for _ in 0..5 {
-        if let Ok(running) = start(dir, env, &[]) {
-            return running;
-        }
-    }
-    panic!("the proxy would not start");
-}
-
-/// The console lines printed so far.
-fn printed(running: &Running) -> Vec<String> {
-    thread::sleep(Duration::from_millis(200));
-    running.lines.try_iter().collect()
-}
-
-fn token_in(lines: &[String]) -> Option<String> {
-    lines
-        .iter()
-        .find_map(|line| line.strip_prefix(TOKEN_MARKER))
-        .map(str::to_string)
-}
 
 fn call(
     running: &Running,

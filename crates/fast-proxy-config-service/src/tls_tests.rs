@@ -981,3 +981,65 @@ async fn without_any_master_key_source_sealing_is_refused_clearly() {
         "{err}"
     );
 }
+
+#[tokio::test]
+async fn a_certificate_is_generated_once_by_name_and_never_replaced() {
+    let env = Env::new();
+    let service = env.start(env.settings(false)).await;
+    let context = ChangeContext::system();
+    assert!(service.certificate_by_name("admin").is_none());
+
+    let generated = service
+        .ensure_self_signed_certificate(&context, "admin", vec!["localhost".into()])
+        .await
+        .unwrap();
+    assert!(generated);
+    let first = service.certificate_by_name("admin").expect("usable");
+    assert_eq!(first.name.as_str(), "admin");
+
+    let again = service
+        .ensure_self_signed_certificate(&context, "admin", vec!["other.example.com".into()])
+        .await
+        .unwrap();
+    assert!(!again, "an existing certificate is left alone");
+    let second = service.certificate_by_name("admin").unwrap();
+    assert_eq!(first.version, second.version);
+    assert_eq!(second.metadata.names, ["localhost"]);
+}
+
+#[tokio::test]
+async fn a_replaced_certificate_is_what_the_next_lookup_returns() {
+    let env = Env::new();
+    let service = env.start(env.settings(false)).await;
+    let context = ChangeContext::system();
+    service
+        .ensure_self_signed_certificate(&context, "admin", vec!["localhost".into()])
+        .await
+        .unwrap();
+    let before = service.certificate_by_name("admin").unwrap();
+
+    let ca = TestCa::new("ca");
+    let issued = leaf(&ca, &["localhost"]);
+    service
+        .replace_certificate(
+            &context,
+            before.id,
+            CertificateChange {
+                cert_pem: Some(issued.chain_pem.clone()),
+                key_pem: Some(issued.key_pem.clone()),
+                ..CertificateChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    let after = service.certificate_by_name("admin").unwrap();
+    assert_eq!(after.id, before.id);
+    assert_ne!(after.version.fingerprint, before.version.fingerprint);
+}
+
+#[tokio::test]
+async fn a_name_that_is_not_stored_or_not_readable_finds_nothing() {
+    let env = Env::new();
+    let service = env.start(env.settings(false)).await;
+    assert!(service.certificate_by_name("nope").is_none());
+}

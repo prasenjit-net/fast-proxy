@@ -166,6 +166,7 @@ fast-proxy [OPTIONS]
   -c, --config <CONFIG>             Path to the TOML configuration file [default: config.toml]
       --admin-listen <ADDR>         Override [admin].listen
       --admin-auth <required|off>   Override [admin].auth (off only on loopback)
+      --admin-tls                   Serve the admin plane over HTTPS
       --database <PATH>             Override [data_plane].database
       --state-dir <PATH>            Override [data_plane].state_dir
       --log-level <LOG_LEVEL>       Override [logging].level (trace, debug, info, warn, error)
@@ -194,10 +195,13 @@ fast-proxy [OPTIONS]
 | `data_plane.tls.reject_unknown_sni` | `false` | Fail the handshake for an unknown name instead of presenting a placeholder certificate |
 | `data_plane.tls.handshake_timeout`, `max_concurrent_handshakes` | `10s`, `256` | Bounds on handshakes so a flood cannot starve established traffic |
 | `data_plane.tls.http2_max_concurrent_streams`, `http2_max_header_list_size`, `http2_keep_alive_interval`, `http2_keep_alive_timeout` | `128`, `65536`, `30s`, `20s` | HTTP/2 limits |
-| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener. Leaving loopback needs `admin.allow_insecure_remote = true` (there is no admin TLS yet) |
+| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener. Leaving loopback needs `admin.tls.enabled = true` (or, to accept clear-text tokens, `admin.allow_insecure_remote = true`) |
 | `admin.auth` | `required` | `required`: every API call and the WebSocket need a token; `off` is accepted only on loopback and is warned about |
 | `admin.allowed_hosts` | `[]` | Extra names accepted in the `Host` header (the listen address and `localhost`, `127.0.0.1`, `[::1]` always are) |
 | `admin.allow_insecure_remote` | `false` | Accept a non-loopback admin listener without TLS; tokens then cross the network in clear text |
+| `admin.tls.enabled` | `false` | Serve the admin plane over HTTPS (the plain port is then not open). `--admin-tls` turns it on |
+| `admin.tls.names` | `["localhost"]` | Names and IP addresses of the self-signed certificate generated the first time it is needed |
+| `admin.tls.certificate` | `admin` | The stored certificate to serve, by name. Upload a certificate and key of that name on the Certificates page to replace the generated one, live |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
@@ -252,7 +256,7 @@ All routes except `/api/health` need `Authorization: Bearer <token>`; a missing 
 | DELETE | `/api/ca-bundles/{id}` | Delete (409 while an upstream group names it) |
 | GET | `/ws` | WebSocket: server-push events |
 
-A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) need an `admin` token and a **protected channel** (the admin plane on loopback).
+A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) need an `admin` token and a **protected channel** (the admin plane on loopback, or served over TLS).
 
 Config responses are `{ "data": ..., "version": N }`, where `version` is the config
 revision the response reflects (for a write, the one it created); deletes return
@@ -365,14 +369,18 @@ read, and never serves the ones it cannot.
   revoked. A `Host` header that is not an allowed admin name is refused (DNS
   rebinding), ten failed attempts from one address are throttled, and
   responses carry a strict `Content-Security-Policy`. The plane still binds to
-  `127.0.0.1` by default; there is no admin TLS yet, so leaving loopback needs
-  `admin.allow_insecure_remote = true` and sends tokens in clear text. A reverse
-  proxy in front makes every request look local to the admin plane, so it needs
-  its own access control.
+  `127.0.0.1` by default. Leaving loopback needs **admin TLS**
+  (`admin.tls.enabled`): the plane then serves HTTPS with a certificate stored in
+  the database (a self-signed `admin` one is generated the first time; browsers
+  warn about it until you upload your own of the same name), and the plain port
+  is not open. The only way to leave loopback without TLS is the explicit,
+  warned `admin.allow_insecure_remote = true`, which sends tokens in clear text.
+  A reverse proxy in front makes every request look local to the admin plane, so
+  it needs its own access control.
 - **Private keys are write-only.** No endpoint, log line, metric, event, error or
   revision ever contains one; they are stored encrypted (AES-256-GCM) under a master
   key that lives outside the database, and requests that carry a key need an `admin`
-  token over a protected channel (the admin plane on loopback). See
+  token over a protected channel (the admin plane on loopback, or served over TLS). See
   [docs/security-review-m3.md](docs/security-review-m3.md).
 - **Back up the master key separately from the database.** The database alone does
   not expose the keys, and cannot be used without the master key: if the key is

@@ -336,7 +336,7 @@ carry-over.
   actor on every change (H7, H8), 0018 maintenance mode: model, TTL, response, bypass,
   placement (H9-H14), 0019 the CLI and reload (H15, H16).
   *Done when:* the ADRs are merged and no **(confirm)** item is open.
-- [ ] **G2 (S) Spike: the admin listener over TLS and the WebSocket ticket.** A
+- [x] **G2 (S) Spike: the admin listener over TLS and the WebSocket ticket.** A
   throwaway test that (a) serves the Axum admin router through the existing TLS stack
   (`tokio-rustls`, the `tls` crate's server config, a fixed-certificate resolver) with
   `ConnectInfo` still working for the peer address, (b) upgrades a WebSocket through it,
@@ -573,7 +573,7 @@ carry-over.
 
 ### Workstream AT: Admin TLS
 
-- [ ] **AT1 (L) The admin listener over TLS.** Serve the Axum router through the TLS
+- [x] **AT1 (L) The admin listener over TLS.** Serve the Axum router through the TLS
   stack with a fixed-certificate resolver reading the live certificate cache by the
   configured name; generate the `admin` self-signed certificate (names from
   `[admin.tls] names`) through the normal write path when absent; handle graceful
@@ -585,6 +585,17 @@ carry-over.
   certificate the admin plane uses, with a note about browser warnings for the generated
   one.
   *Done when:* a UI test covers the card (see U-tasks).
+
+**PR5 notes (decisions made while building):**
+- G2 was folded into AT1: the findings (the accept loop, `ConnectInfo` added per request, the
+  by-name certificate lookup on every handshake, graceful shutdown) are in ADR 0016.
+- The non-loopback rule of PR4 is replaced as planned: a non-loopback `admin.listen` needs
+  `admin.tls.enabled` (or the explicit, warned `allow_insecure_remote`); `auth = "off"` off loopback
+  stays refused. `--admin-tls` turns it on.
+- The certificate the admin plane serves cannot be deleted or renamed (409); replacing its material
+  is allowed and is live for the next connection.
+- **AT2 (the admin certificate card in the UI) moves to PR8** with U7: it is a UI change. The API
+  already reports it (`GET /api/status` -> `admin.tlsCertificate`).
 
 ### Workstream CL: The CLI
 

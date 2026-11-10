@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{AdminAuth, AppConfig, ConfigError};
+use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
@@ -63,15 +63,16 @@ fn validate_admin(config: &AppConfig) -> Result<(), ConfigError> {
                 admin.listen
             ));
         }
-        if !admin.allow_insecure_remote {
+        if !admin.tls.enabled && !admin.allow_insecure_remote {
             return invalid(format!(
-                "admin.listen {} is not a loopback address and the admin plane has no TLS yet, so \
-                 tokens would cross the network in clear text; listen on 127.0.0.1 or set \
-                 admin.allow_insecure_remote = true to accept that",
+                "admin.listen {} is not a loopback address and admin TLS is off, so tokens would \
+                 cross the network in clear text; set admin.tls.enabled = true (or listen on \
+                 127.0.0.1, or set admin.allow_insecure_remote = true to accept clear text)",
                 admin.listen
             ));
         }
     }
+    validate_admin_tls(&admin.tls)?;
     for host in &admin.allowed_hosts {
         let usable =
             !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c == '/' || c == '@');
@@ -80,6 +81,20 @@ fn validate_admin(config: &AppConfig) -> Result<(), ConfigError> {
                 "admin.allowed_hosts entry \"{host}\" is not a host name"
             ));
         }
+    }
+    Ok(())
+}
+
+/// Checks `[admin.tls]`: when on, it needs a certificate name and at least one name.
+fn validate_admin_tls(tls: &AdminTlsConfig) -> Result<(), ConfigError> {
+    if !tls.enabled {
+        return Ok(());
+    }
+    if tls.certificate.trim().is_empty() {
+        return invalid("admin.tls.certificate must name the stored certificate to serve");
+    }
+    if tls.names.is_empty() || tls.names.iter().any(|name| name.trim().is_empty()) {
+        return invalid("admin.tls.names must list at least one non-empty name");
     }
     Ok(())
 }
