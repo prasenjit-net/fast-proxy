@@ -122,7 +122,10 @@ pub async fn get_revision(
             version: found.version,
             created_at_ms: found.created_at_ms,
             summary: found.summary,
-            config: ConfigView::from_config(&found.config),
+            config: ConfigView::from_config(
+                &found.config,
+                state.config.snapshot_holder().load().tls_enabled,
+            ),
         },
         version: read.version,
     }))

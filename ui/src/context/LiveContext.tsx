@@ -8,6 +8,8 @@
 // configuration) refetches every list and detail that shows it. An
 // endpointState event (an endpoint became unhealthy, was ejected, or came
 // back) refetches the live endpoint status and the upstream health summary.
+// A certState event (a certificate was uploaded, replaced, deleted or generated)
+// refetches the certificate list, the TLS state and the status card.
 // Connection transitions surface as toast bubbles, but only when a
 // previously-live connection drops — a backend that is simply not
 // running yet retries quietly.
@@ -21,7 +23,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Traffic } from "../lib/api";
-import { refreshConfigData, refreshEndpointStatus } from "../lib/refreshConfigData";
+import { refreshCertificates, refreshConfigData, refreshEndpointStatus } from "../lib/refreshConfigData";
 import { useToast } from "./ToastContext";
 
 export interface Activity {
@@ -44,6 +46,7 @@ type ServerEvent =
   | { type: "traffic"; data: Traffic }
   | { type: "configChanged"; version: number; summary: string; timestampMs: number }
   | { type: "activity"; kind: string; message: string; timestampMs: number }
+  | { type: "certState"; change: string; certificate: string; timestampMs: number }
   | {
       type: "endpointState";
       subsystem: string;
@@ -110,6 +113,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           ]);
         } else if (event.type === "configChanged") {
           void refreshConfigData(queryClientRef.current);
+        } else if (event.type === "certState") {
+          void refreshCertificates(queryClientRef.current);
         } else if (event.type === "endpointState") {
           void refreshEndpointStatus(queryClientRef.current);
         } else if (event.type === "activity") {

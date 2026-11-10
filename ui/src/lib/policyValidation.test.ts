@@ -13,8 +13,8 @@ const with_ = (patch: Partial<PolicyValues>): PolicyValues => ({ ...ok, ...patch
 
 describe("validatePolicy", () => {
   it("turns the server's defaults into the server's default policy", () => {
-    const { health, passive, retryBudget, lb, failurePolicy } = upstream();
-    expect(validatePolicy(ok).value).toEqual({ lb, failurePolicy, health, passive, retryBudget });
+    const { health, passive, retryBudget, lb, failurePolicy, tls } = upstream();
+    expect(validatePolicy(ok).value).toEqual({ lb, failurePolicy, health, passive, retryBudget, tls });
   });
 
   it("round-trips an existing group's policy through the form values", () => {
@@ -130,5 +130,30 @@ describe("validateEndpoint", () => {
   it("namespaces errors when asked, to match the server's nested names", () => {
     const result = validateEndpoint({ addr: "nope", weight: "0" }, "endpoints.0.");
     expect(Object.keys(result.errors)).toEqual(["endpoints.0.addr", "endpoints.0.weight"]);
+  });
+});
+
+describe("upstream TLS values", () => {
+  it("round-trips through the form values", () => {
+    const tls = { enabled: true, verify: false, serverName: "backend.internal", ca: "corp" };
+    const values = policyValuesFrom(upstream({ tls }));
+    expect(values).toMatchObject({ tlsEnabled: true, tlsVerify: false, tlsServerName: "backend.internal", tlsCa: "corp" });
+    expect(validatePolicy(values).value?.tls).toEqual(tls);
+  });
+
+  it("defaults to off, verifying, the endpoint's name and the OS trust store", () => {
+    expect(validatePolicy(defaultPolicyValues()).value?.tls).toEqual({
+      enabled: false,
+      verify: true,
+      serverName: "",
+      ca: "",
+    });
+  });
+
+  it("trims the server name and rejects anything but a plain host name, under tls.serverName", () => {
+    expect(validatePolicy({ ...ok, tlsServerName: " backend.internal " }).value?.tls.serverName).toBe("backend.internal");
+    for (const bad of ["a b", "backend:443", "https://x", "-bad.example.com", "a..b"]) {
+      expect(validatePolicy({ ...ok, tlsServerName: bad }).errors["tls.serverName"], bad).toBeDefined();
+    }
   });
 });

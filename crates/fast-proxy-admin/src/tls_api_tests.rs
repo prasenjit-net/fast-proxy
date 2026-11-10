@@ -938,3 +938,39 @@ async fn an_unknown_ca_name_or_a_bad_server_name_is_a_400_naming_the_field() {
         "nothing was created"
     );
 }
+
+#[tokio::test]
+async fn a_revision_shows_the_https_settings_and_the_group_tls_it_held() {
+    let app = TestApp::with_tls(true).await;
+    let id = site(&app, "shop", "shop.example.com").await;
+    route_to_backend(&app, id).await;
+    let (status, body) = app
+        .put(
+            &format!("/api/subsystems/{id}"),
+            json!({
+                "name": "shop",
+                "https": { "enabled": true, "redirect": "301",
+                           "hsts": { "enabled": true, "maxAgeSecs": 600 } }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let version = body["version"].as_u64().unwrap();
+
+    let (status, revision) = app.get(&format!("/api/revisions/{version}")).await;
+    assert_eq!(status, StatusCode::OK, "{revision}");
+    let subsystem = &revision["data"]["config"]["subsystems"][0];
+    assert_eq!(subsystem["https"]["enabled"], true);
+    assert_eq!(subsystem["https"]["redirect"], "301");
+    assert_eq!(subsystem["https"]["hsts"]["maxAgeSecs"], 600);
+    assert!(
+        subsystem["https"]["certificateId"].is_i64(),
+        "the dev certificate's id is recorded"
+    );
+    assert_eq!(subsystem["upstreams"][0]["tls"]["enabled"], false);
+    let text = revision.to_string();
+    assert!(
+        !text.contains("BEGIN") && !text.contains("PRIVATE"),
+        "no certificate material in a revision"
+    );
+}

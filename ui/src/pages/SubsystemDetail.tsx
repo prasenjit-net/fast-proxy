@@ -4,6 +4,7 @@ import { useState } from "react";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import HostsSection from "../components/subsystem/HostsSection";
+import HttpsSection from "../components/subsystem/HttpsSection";
 import RoutesSection from "../components/subsystem/RoutesSection";
 import SubsystemSettings from "../components/subsystem/SubsystemSettings";
 import UpstreamsSection from "../components/subsystem/UpstreamsSection";
@@ -81,6 +82,7 @@ export default function SubsystemDetailPage() {
 
       <SubsystemSettings subsystem={subsystem} />
       <HostsSection subsystem={subsystem} />
+      <HttpsSection subsystem={subsystem} />
       <UpstreamsSection subsystem={subsystem} />
       <RoutesSection subsystem={subsystem} />
 

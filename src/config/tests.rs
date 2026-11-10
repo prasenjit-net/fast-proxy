@@ -213,6 +213,8 @@ fn the_repository_config_file_parses_and_is_valid() {
         "/config.toml"
     )))
     .unwrap();
-    assert!(!config.data_plane.tls.enabled);
+    // Whether TLS is switched on in the file is the operator's choice; the
+    // built-in default (off) is checked by the defaults test above.
     assert_eq!(config.data_plane.tls.listen.port(), 8443);
+    config.validate().unwrap();
 }

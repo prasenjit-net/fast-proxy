@@ -152,6 +152,7 @@ describe("SubsystemDetailPage", () => {
       },
       passive: { consecutiveFailures: 3, baseEjectionMs: 10000, maxEjectionMs: 300000, maxEjectionPercent: 50 },
       retryBudget: { percent: 20, minPerSec: 10 },
+      tls: { enabled: false, verify: true, serverName: "", ca: "" },
     };
 
     it("checks the form before sending, naming every problem", async () => {
@@ -186,6 +187,42 @@ describe("SubsystemDetailPage", () => {
         endpoints: [{ addr: "api.internal:8080", weight: 1 }],
       });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("sends the TLS settings of a new upstream and shows a server error on tls.ca inline", async () => {
+      const { api } = renderDetail({
+        "GET /api/ca-bundles": { body: envelope([{ id: 2, name: "corp", certCount: 1, certificates: [], updatedAtMs: 1 }]) },
+        "POST /api/subsystems/1/upstreams": apiError(400, "VALIDATION_FAILED", "validation failed", [
+          { field: "tls.ca", message: "no CA bundle has this name; upload it first" },
+        ]),
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
+      const form = dialog();
+      await userEvent.type(form.getByLabelText("Name"), "secure");
+      await userEvent.type(form.getByLabelText("First endpoint address"), "10.0.0.1:443");
+      await userEvent.click(form.getByLabelText("Connect to the endpoints over TLS"));
+      await userEvent.type(form.getByLabelText("Server name"), "backend.internal");
+      await form.findByRole("option", { name: "corp" });
+      await userEvent.selectOptions(form.getByLabelText("CA bundle"), "corp");
+      await userEvent.click(form.getByRole("button", { name: "Add upstream" }));
+
+      expect(await form.findByText("no CA bundle has this name; upload it first")).toBeInTheDocument();
+      expect(api.called("POST", "/api/subsystems/1/upstreams")[0].body).toMatchObject({
+        tls: { enabled: true, verify: true, serverName: "backend.internal", ca: "corp" },
+      });
+    });
+
+    it("checks the TLS server name before sending", async () => {
+      const { api } = renderDetail({});
+      await userEvent.click(await screen.findByRole("button", { name: /add upstream/i }));
+      const form = dialog();
+      await userEvent.type(form.getByLabelText("Name"), "secure");
+      await userEvent.type(form.getByLabelText("First endpoint address"), "10.0.0.1:443");
+      await userEvent.click(form.getByLabelText("Connect to the endpoints over TLS"));
+      await userEvent.type(form.getByLabelText("Server name"), "not a name");
+      await userEvent.click(form.getByRole("button", { name: "Add upstream" }));
+      expect(await form.findByText(/Enter a host name such as backend.internal/)).toBeInTheDocument();
+      expect(api.called("POST", "/api/subsystems/1/upstreams")).toHaveLength(0);
     });
 
     it("sends the chosen algorithm, hash key, failure policy and health check", async () => {

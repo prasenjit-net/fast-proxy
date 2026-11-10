@@ -2,6 +2,7 @@ use fast_proxy_model::{Config, SubsystemConfig};
 use serde::Serialize;
 
 use super::detail::{routes_in_match_order, RouteDto};
+use super::https_dto::HttpsDto;
 use super::upstream_dto::{upstream_dto, UpstreamDto};
 
 /// A whole configuration as shown when viewing a revision.
@@ -17,25 +18,33 @@ pub struct SubsystemView {
     pub name: String,
     pub enabled: bool,
     pub description: String,
+    /// The HTTPS settings the revision held (the certificate itself is not part
+    /// of a revision, only its id). `effective` says whether they would act now.
+    pub https: HttpsDto,
     pub hosts: Vec<String>,
     pub upstreams: Vec<UpstreamDto>,
     pub routes: Vec<RouteDto>,
 }
 
 impl ConfigView {
-    pub fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &Config, tls_enabled: bool) -> Self {
         Self {
-            subsystems: config.subsystems.iter().map(subsystem_view).collect(),
+            subsystems: config
+                .subsystems
+                .iter()
+                .map(|subsystem| subsystem_view(subsystem, tls_enabled))
+                .collect(),
         }
     }
 }
 
-fn subsystem_view(subsystem: &SubsystemConfig) -> SubsystemView {
+fn subsystem_view(subsystem: &SubsystemConfig, tls_enabled: bool) -> SubsystemView {
     SubsystemView {
         id: subsystem.id.0,
         name: subsystem.name.as_str().to_string(),
         enabled: subsystem.enabled,
         description: subsystem.description.clone(),
+        https: HttpsDto::new(&subsystem.https, tls_enabled, &subsystem.hosts, None),
         hosts: subsystem
             .hosts
             .iter()

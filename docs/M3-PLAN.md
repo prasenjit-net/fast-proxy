@@ -760,9 +760,13 @@ rule), and a test proves each write is visible to the data plane without a resta
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (S) API client, types and validation** for the new resources and fields
+_Landed in PR10: U1-U8 and C2. **C1, your click-through of the M2 UI in a real
+browser, has not been done** (it needs you); the UI here is verified by Vitest and
+the production build only, not by looking at it in a browser._
+
+- [x] **U1 (S) API client, types and validation** for the new resources and fields
   (cheap PEM sanity checks: the text contains the expected `BEGIN` lines).
-- [ ] **U2 (L) Subsystem HTTPS section.** An enable switch (explaining, and
+- [x] **U2 (L) Subsystem HTTPS section.** An enable switch (explaining, and
   disabled-looking with the reason, while TLS is off for the process); a
   **certificate card** (name, source badge, issuer, expiry with days left, hosts it
   does not cover) with actions: **upload a certificate and key** for this subsystem
@@ -771,21 +775,21 @@ rule), and a test proves each write is visible to the data plane without a resta
   detach; redirect (off, 308, 301) and HSTS controls with confirmations that say
   what will happen (HSTS in particular: browsers remember it for the max age, so a
   wrong setting is hard to undo); a placeholder where M4 adds the ACME switch.
-- [ ] **U3 (M) Certificates page.** All certificates with source badge, expiry,
+- [x] **U3 (M) Certificates page.** All certificates with source badge, expiry,
   state and which subsystems use them; upload, replace, rename and delete (the
   server's 409 shown); "generate self-signed"; the process TLS state, the vault
   state, and a banner while only dev certificates exist.
-- [ ] **U4 (M) CA bundles section** on the same page: upload, list, delete (the
+- [x] **U4 (M) CA bundles section** on the same page: upload, list, delete (the
   server's 409 shown).
-- [ ] **U5 (M) Upstream TLS fields.** Enable, verify (with a warning badge when
+- [x] **U5 (M) Upstream TLS fields.** Enable, verify (with a warning badge when
   off), server name, CA bundle chosen from the uploaded ones.
-- [ ] **U6 (S) Dashboard.** A certificate card: the soonest expiry, a warning under
+- [x] **U6 (S) Dashboard.** A certificate card: the soonest expiry, a warning under
   14 days or after expiry, the dev-certificate warning, and the TLS-off notice;
   live updates from `certState`.
-- [ ] **U7 (S) Revisions viewer and resolver** show HTTPS and TLS settings (and, as
+- [x] **U7 (S) Revisions viewer and resolver** show HTTPS and TLS settings (and, as
   carry-over C2, the group policy that M2 left out); certificate changes appear in
   the history as summary entries.
-- [ ] **U8 (S) Tests and build.** Vitest tests for the forms (validation shown,
+- [x] **U8 (S) Tests and build.** Vitest tests for the forms (validation shown,
   submit sends the right body, the key never rendered or kept), the confirmations,
   the certificate card and table, and live updates; `npm test` and
   `npm run build` pass.
@@ -871,7 +875,7 @@ rule), and a test proves each write is visible to the data plane without a resta
 
 - [ ] **C1 (S) Owner click-through of the M2 UI** (the old C3) in a real browser,
   desktop and phone width, light and dark, **before** U2-U5 build on it.
-- [ ] **C2 (S) Revision viewer shows group policies** (the old U6 gap); done with
+- [x] **C2 (S) Revision viewer shows group policies** (the old U6 gap); done with
   U7 above.
 - [ ] **C3 (M) Find the unexplained flaky test.** One full-suite run failed once
   in M2 and did not reproduce. Run the suite in a loop and under load in CI

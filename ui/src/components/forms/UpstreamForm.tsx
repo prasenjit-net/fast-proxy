@@ -12,6 +12,7 @@ import { useServerErrors } from "../../lib/useServerErrors";
 import FormError from "../FormError";
 import FormField, { errorProps } from "../FormField";
 import PolicyFields from "./PolicyFields";
+import UpstreamTlsFields from "./UpstreamTlsFields";
 
 interface UpstreamFormProps {
   /** The group being edited; omit to create one. */
@@ -118,6 +119,12 @@ export default function UpstreamForm({ initial, submitLabel, onSubmit, onCancel 
           </FormField>
         </div>
       ) : null}
+      <UpstreamTlsFields
+        values={policy}
+        onChange={(patch) => setPolicy((current) => ({ ...current, ...patch }))}
+        error={error}
+        idPrefix="upstream"
+      />
       <PolicyFields
         values={policy}
         onChange={(patch) => setPolicy((current) => ({ ...current, ...patch }))}

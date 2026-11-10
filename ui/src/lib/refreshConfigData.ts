@@ -16,6 +16,12 @@ export function refreshEndpointStatus(client: QueryClient): Promise<void> {
   });
 }
 
+/** Refetches what shows certificates: the list, the TLS state, the status card and subsystem details. */
+export function refreshCertificates(client: QueryClient): Promise<void> {
+  const keys = ["certificates", "tls", "status", "subsystem", "ca-bundles"];
+  return client.invalidateQueries({ predicate: (query) => keys.includes(String(query.queryKey[0])) });
+}
+
 /** A function that refreshes everything derived from the configuration. */
 export function useRefreshConfigData(): () => Promise<void> {
   const client = useQueryClient();
