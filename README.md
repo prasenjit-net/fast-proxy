@@ -275,7 +275,7 @@ WebSocket events are JSON discriminated by `type`:
 ## Project structure
 
 ```
-├── docs/                     ROADMAP.md · M1-PLAN.md · M2-PLAN.md · getting-started.md · benchmarks.md · adr/
+├── docs/                     ROADMAP.md · M1-PLAN.md · M2-PLAN.md · M3-PLAN.md · getting-started.md · benchmarks.md · adr/
 ├── config.toml               process settings (listeners, admin, logging) + UI
 ├── src/
 │   ├── main.rs               CLI entry + logging

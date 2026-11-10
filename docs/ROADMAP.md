@@ -169,6 +169,13 @@ level = "info"
 access_log = "access.log"
 ```
 
+*Decided for M3:* certificates and CA bundles are **not** configured in this
+file; they live in the database (see [M3-PLAN.md](M3-PLAN.md)). The
+`[[data_plane.tls.cert]]` entries and the per-listener `tls = true` above are
+superseded: `[data_plane.tls]` holds the process-wide switch (`enabled`, also
+`--tls`), the HTTPS `listen` address and the policy, and `[data_plane.acme]` (M4)
+stays in this file.
+
 *As built in M1:* `state_dir`, `database`, `trusted_proxies`, `shutdown_grace`,
 `[[data_plane.listener]]` (`name`, `listen`), `[admin].listen` and `[logging]`
 exist, and unknown keys (including `tls`) are rejected. The TLS and ACME
@@ -241,32 +248,54 @@ example a remote DB for multi-node setups) without touching the proxy.
 
 ### 4.3 TLS termination (M3)
 
-- TLS is **data plane config**: listeners, static certs, and TLS policy come
-  from the config file.
-- SNI-based certificate selection via a custom resolver. It consults static
-  certs from the config file and ACME-managed certs, so renewed certs apply
-  without restart.
-- Static certs from files with file-watch reload; minimum TLS 1.2, sane cipher
-  defaults, ALPN for `h2` and `http/1.1`.
-- HTTP -> HTTPS redirect and HSTS are per-subsystem settings (DB, live).
-- Optional upstream TLS (re-encrypt) with CA bundle and SNI override.
+- **Enablement:** TLS is switched on for the whole process by config
+  (`[data_plane.tls] enabled`) or a command-line flag (`--tls`); that starts the
+  HTTPS listener. Each **subsystem** then opts in (`https.enabled`) and
+  configures its certificate, HSTS and redirect. With TLS off, subsystem HTTPS
+  settings are stored but inert.
+- **Certificates live in SQLite** (uploaded, self-signed and ACME-managed), with
+  private keys encrypted at rest under a master key kept outside the database.
+  A certificate is referenced by one or more subsystems (a wildcard certificate is
+  stored once). SNI maps to a subsystem through the host table and to that
+  subsystem's certificate; unknown names get an in-memory placeholder.
+- **A certificate is guaranteed before the first request:** enabling HTTPS
+  attaches an uploaded certificate, or generates a self-signed dev certificate in
+  the same write.
+- **Live and cached:** a write goes through the single writer and swaps one
+  snapshot that carries routing, HTTPS settings and the parsed certificates, so
+  renewed or replaced certificates apply to the next handshake without a restart.
+  An in-memory cache reuses unchanged certificates.
+- **Cluster-ready:** the revision version is the cluster generation; instances
+  poll it and reload when another instance wrote. The master key must be the same
+  on all instances; health state and session-ticket keys stay per instance.
+- Minimum TLS 1.2, sane cipher defaults, ALPN for `h2` and `http/1.1`; 421 when a
+  host is not served by the connection's certificate.
+- HTTP -> HTTPS redirect and HSTS are per-subsystem settings (DB, live), accepted
+  only with HTTPS enabled and effective only while TLS is on.
+- Optional upstream TLS (re-encrypt) with an uploaded CA bundle and SNI override.
 
 ### 4.4 ACME (M4)
 
-- ACME is **data plane config** (account email, directory, state dir,
-  allowlist) in the config file. The set of host names to certify is derived
-  from the subsystem host patterns in the DB: adding a subsystem host in the
-  admin UI triggers issuance, if it matches `allowed_domains`. Wildcard host
-  patterns need DNS-01 and are not auto-issued until that lands.
-- Account key and issued certs stored in a configurable state directory with
-  restrictive permissions.
-- HTTP-01 challenge served on the plain HTTP listener ahead of routing.
-  TLS-ALPN-01 and DNS-01 (wildcards) are later candidates.
+- ACME **settings** are data plane config in the config file
+  (`[data_plane.acme]`: `enabled`, account email, directory, an allowlist) with a
+  `--acme` flag. ACME is **enabled per subsystem** (`https.acme_enabled`), and
+  that setting is accepted only when ACME is enabled for the process.
+- ACME issues for the subsystem's hosts (adding a host in the admin UI triggers
+  issuance, if it matches the allowlist). Wildcard host patterns need DNS-01 and
+  are not auto-issued until that lands.
+- **Issued certificates are stored in SQLite** like every certificate (see 4.3),
+  attached to the subsystem and replaced in place on renewal; the account key is a
+  secret and is sealed with the same key vault (to confirm in M4).
+- **In a cluster only one instance renews** (a lease row taken by
+  compare-and-swap), and **HTTP-01 challenge tokens are stored in the database** so
+  any instance can answer the challenge request.
+- HTTP-01 challenge served on the plain HTTP listener ahead of routing (and ahead
+  of the HTTPS redirect). TLS-ALPN-01 and DNS-01 (wildcards) are later candidates.
 - Renewal loop: renew at ~2/3 of lifetime, jittered, with backoff on failure and
   a visible status per domain (admin API and UI).
 - Use the **Let's Encrypt staging** directory by default in dev; guard against
   rate limits by caching and never re-ordering on every restart.
-- Serve a self-signed fallback cert while the first issuance is pending.
+- The self-signed dev certificate (M3) serves while the first issuance is pending.
 
 ### 4.5 Maintenance mode (M5)
 
@@ -375,21 +404,36 @@ automatically after recovery.
 
 ### M3: TLS termination
 
-- [ ] `[data_plane.tls]` config section; HTTPS listener with rustls, SNI cert
-      resolver, HTTP/2 via ALPN.
-- [ ] Static cert loading with hot reload; self-signed dev fallback.
-- [ ] TLS version policy (config file); per-subsystem HTTP -> HTTPS redirect
-      and opt-in HSTS (DB).
-- [ ] Optional TLS to upstreams.
-- [ ] Cert expiry metrics.
+Detailed task plan: [M3-PLAN.md](M3-PLAN.md) (draft; decisions awaiting confirmation).
+
+- [ ] Process-wide TLS switch (`[data_plane.tls] enabled`, `--tls`) that starts one
+      HTTPS listener (rustls, ALPN `h2` and `http/1.1`); off by default.
+- [ ] Per-subsystem HTTPS: enable, certificate, opt-in HSTS and HTTP -> HTTPS
+      redirect (DB, live). SNI picks the certificate of the subsystem a host
+      belongs to; certificates can be shared (wildcards).
+- [ ] Certificates stored in SQLite (private keys encrypted at rest with a master
+      key), uploaded live through the admin UI/API; a self-signed dev certificate
+      is auto-generated when a subsystem enables HTTPS without one. No certificate
+      files are read from disk.
+- [ ] In-memory certificate cache carried atomically with the routing snapshot;
+      changes made by another instance are picked up by a version poll (ready for
+      a cluster and a later PostgreSQL backend).
+- [ ] TLS version policy (config file); 421 for SNI/Host mismatches.
+- [ ] Optional TLS to upstreams (uploaded CA bundles, SNI override); TLS health
+      probes.
+- [ ] Cert expiry and handshake metrics; certificate screens in the admin UI.
 
 ### M4: ACME automatic certificates
 
-- [ ] `[data_plane.acme]` config section; ACME client, account and cert
-      persistence in the state directory.
+- [ ] `[data_plane.acme]` config section (`enabled`, email, directory; `--acme`);
+      ACME client; issued certificates stored in SQLite through the M3
+      certificate path; account key sealed by the key vault.
+- [ ] Per-subsystem ACME switch, accepted only when ACME is enabled for the
+      process.
 - [ ] Derive domains to certify from subsystem hosts in the DB, filtered by
       the config allowlist; react to host add/remove at runtime.
-- [ ] HTTP-01 challenge handling ahead of routing.
+- [ ] HTTP-01 challenge handling ahead of routing, tokens kept in the database;
+      a lease so one cluster instance renews.
 - [ ] Renewal scheduler with jitter, backoff, and status reporting.
 - [ ] Staging/production directory switch; rate-limit safeguards.
 - [ ] Stretch: TLS-ALPN-01, DNS-01 for wildcards.
