@@ -1,6 +1,6 @@
 use fast_proxy_model::SubsystemId;
 
-use crate::{CompiledRoute, CompiledSubsystem, RouteMatch, Snapshot};
+use crate::{CompiledHttps, CompiledRoute, CompiledSubsystem, RouteMatch, Snapshot};
 
 /// The outcome of routing one request against a snapshot.
 #[derive(Debug)]
@@ -24,7 +24,34 @@ pub enum Lookup<'snapshot, 'path> {
     },
 }
 
+/// Which certificate a TLS handshake should present, from the SNI.
+#[derive(Debug)]
+pub enum SniLookup<'snapshot> {
+    /// No subsystem answers to this name (or no SNI was sent).
+    Unknown,
+    /// A subsystem owns the name; use its `https` settings and certificate.
+    Subsystem {
+        id: SubsystemId,
+        https: &'snapshot CompiledHttps,
+    },
+}
+
 impl Snapshot {
+    /// Finds the subsystem whose host patterns match the SNI `server_name`
+    /// (exact name first, then the longest wildcard, like routing).
+    pub fn sni_lookup(&self, server_name: &str) -> SniLookup<'_> {
+        let Some(id) = self.hosts.lookup(server_name) else {
+            return SniLookup::Unknown;
+        };
+        match self.subsystems.get(&id) {
+            Some(subsystem) => SniLookup::Subsystem {
+                id,
+                https: &subsystem.https,
+            },
+            None => SniLookup::Unknown,
+        }
+    }
+
     /// Routes a request: host to subsystem, then path to route.
     /// `path` excludes the query string.
     pub fn lookup<'snapshot, 'path>(

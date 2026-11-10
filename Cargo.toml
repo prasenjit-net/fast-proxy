@@ -27,6 +27,7 @@ fast-proxy-config-service = { path = "crates/fast-proxy-config-service" }
 fast-proxy-dataplane = { path = "crates/fast-proxy-dataplane" }
 fast-proxy-health = { path = "crates/fast-proxy-health" }
 fast-proxy-store = { path = "crates/fast-proxy-store" }
+fast-proxy-tls = { path = "crates/fast-proxy-tls" }
 fast-proxy-telemetry = { path = "crates/fast-proxy-telemetry" }
 axum = { workspace = true }
 tokio = { workspace = true }

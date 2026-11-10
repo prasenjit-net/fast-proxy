@@ -40,4 +40,16 @@ pub enum CompileError {
         upstream: String,
         reason: String,
     },
+    #[error("subsystem \"{subsystem}\" has HTTPS enabled but no certificate")]
+    HttpsWithoutCertificate { subsystem: String },
+    #[error("subsystem \"{subsystem}\" references certificate {id}, which does not exist")]
+    UnknownCertificate { subsystem: String, id: i64 },
+    #[error(
+        "upstream \"{upstream}\" in \"{subsystem}\" names CA bundle \"{name}\", which does not exist"
+    )]
+    UnknownCaBundle {
+        subsystem: String,
+        upstream: String,
+        name: String,
+    },
 }

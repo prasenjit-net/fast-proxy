@@ -41,6 +41,18 @@ pub struct Cli {
     /// Disable the access log file entirely
     #[arg(long)]
     pub no_access_log: bool,
+
+    /// Turn TLS on, overriding [data_plane.tls].enabled
+    #[arg(long, conflicts_with = "no_tls")]
+    pub tls: bool,
+
+    /// Turn TLS off, overriding [data_plane.tls].enabled
+    #[arg(long)]
+    pub no_tls: bool,
+
+    /// Override [data_plane.tls].listen, the HTTPS address (for example 0.0.0.0:443)
+    #[arg(long)]
+    pub https_listen: Option<SocketAddr>,
 }
 
 impl Cli {
@@ -63,6 +75,15 @@ impl Cli {
         }
         if self.no_access_log {
             config.logging.access_log = None;
+        }
+        if self.tls {
+            config.data_plane.tls.enabled = true;
+        }
+        if self.no_tls {
+            config.data_plane.tls.enabled = false;
+        }
+        if let Some(listen) = self.https_listen {
+            config.data_plane.tls.listen = listen;
         }
     }
 }
@@ -116,6 +137,27 @@ mod tests {
         config.logging.access_log = Some(PathBuf::from("access.log"));
         parse(&["--no-access-log"]).apply(&mut config);
         assert!(config.logging.access_log.is_none());
+    }
+
+    #[test]
+    fn tls_flags_override_the_file_in_both_directions() {
+        let mut config = AppConfig::default();
+        parse(&["--tls", "--https-listen", "127.0.0.1:8444"]).apply(&mut config);
+        assert!(config.data_plane.tls.enabled);
+        assert_eq!(config.data_plane.tls.listen.port(), 8444);
+
+        config.data_plane.tls.enabled = true;
+        parse(&["--no-tls"]).apply(&mut config);
+        assert!(!config.data_plane.tls.enabled);
+
+        let mut untouched = AppConfig::default();
+        parse(&[]).apply(&mut untouched);
+        assert!(!untouched.data_plane.tls.enabled, "off by default");
+    }
+
+    #[test]
+    fn tls_and_no_tls_conflict() {
+        assert!(Cli::try_parse_from(["fast-proxy", "--tls", "--no-tls"]).is_err());
     }
 
     #[test]

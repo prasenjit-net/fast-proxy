@@ -7,7 +7,7 @@ use fast_proxy_model::{
     RetryPolicy, RouteId, SubsystemId, SubsystemName, UpstreamGroupId, UpstreamPrefix,
 };
 
-use crate::{CompiledUpstream, HostTable, RouteTable};
+use crate::{CompiledHttps, CompiledUpstream, HostTable, RouteTable};
 
 /// A route with its upstream group resolved. The endpoint is chosen per
 /// request from [`CompiledRoute::upstream`].
@@ -32,6 +32,7 @@ pub struct CompiledRoute {
 pub struct CompiledSubsystem {
     pub name: SubsystemName,
     pub enabled: bool,
+    pub https: CompiledHttps,
     pub routes: RouteTable<CompiledRoute>,
     /// Every upstream group of the subsystem, including ones no enabled
     /// route uses (their runtime state must survive too).
@@ -43,6 +44,9 @@ pub struct CompiledSubsystem {
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub version: u64,
+    /// Whether TLS is on for the process; subsystem HTTPS settings are inert
+    /// while it is off.
+    pub tls_enabled: bool,
     pub hosts: HostTable,
     pub subsystems: HashMap<SubsystemId, CompiledSubsystem>,
 }

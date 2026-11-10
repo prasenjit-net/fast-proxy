@@ -5,6 +5,7 @@ mod admin;
 mod data_plane;
 mod error;
 mod logging;
+mod tls;
 mod validate;
 
 use std::path::Path;
@@ -16,6 +17,7 @@ pub use admin::AdminConfig;
 pub use data_plane::DataPlaneConfig;
 pub use error::ConfigError;
 pub use logging::LoggingConfig;
+pub use tls::TlsConfig;
 
 /// Everything the config file can set.
 #[derive(Debug, Clone, Default, Deserialize)]

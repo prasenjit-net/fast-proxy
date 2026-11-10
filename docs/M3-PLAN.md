@@ -523,12 +523,12 @@ from M2.
 
 ### Workstream F: Config file and command line
 
-- [ ] **F1 (S) TLS config and flags.** `TlsConfig` (`enabled`, `listen`,
+- [x] **F1 (S) TLS config and flags.** `TlsConfig` (`enabled`, `listen`,
   `public_port`, `min_version`, `http2`, `reject_unknown_sni`, `handshake_timeout`,
   `max_concurrent_handshakes`), `master_key_file`, `config_poll_interval`, and the
   CLI flags `--tls`, `--no-tls` (conflicting with each other) and `--https-listen`
   overriding the file; `deny_unknown_fields` still rejects anything else.
-- [ ] **F2 (S) Validation.** Every rule in 5.1, with errors that name the file and
+- [x] **F2 (S) Validation.** Every rule in 5.1, with errors that name the file and
   key (and never print key material); the flags override the file before
   validation; TLS on with no certificate is allowed.
   *Done when:* each rule has an accepted and a rejected test, the flag precedence is
@@ -564,7 +564,7 @@ from M2.
   equality), a changed row producing a new handle while the old one stays usable,
   a removed row, an unreadable row not poisoning the others, a wrong master key
   marking all unreadable, and a rebuild with 256 certificates under a time budget.
-- [ ] **T5 (M) Server configuration.** Build the rustls `ServerConfig`: minimum
+- [x] **T5 (M) Server configuration.** Build the rustls `ServerConfig`: minimum
   version, ALPN from `http2`, a resolver supplied by the data plane, session
   tickets on and early data off, `ring` provider.
   *Done when:* a handshake test per case: TLS 1.2 and 1.3 accepted, a client
@@ -619,7 +619,7 @@ from M2.
 
 ### Workstream R: Routing and compile
 
-- [ ] **R1 (L) Compile the new settings and certificates.** `CompiledSubsystem.https`
+- [x] **R1 (L) Compile the new settings and certificates.** `CompiledSubsystem.https`
   (enabled, redirect, HSTS, the certificate handle) and `CompiledUpstream.tls`; the
   host table answers "which subsystem and certificate for this SNI"; the compile
   step takes the certificate handles, the CA bundle names and the process TLS state
@@ -629,7 +629,7 @@ from M2.
   *Done when:* tests cover each rejection, the lookup for exact, wildcard and
   unknown names, a certificate handle swapped by a new compile, and that unrelated
   edits keep runtime state (as in M2).
-- [ ] **R2 (S) `build_upstream_uri`** takes the scheme from the group's TLS flag.
+- [x] **R2 (S) `build_upstream_uri`** takes the scheme from the group's TLS flag.
   *Done when:* the URI tests cover `https` with and without a port and IPv6.
 
 ### Workstream D: Data plane
@@ -942,6 +942,11 @@ Suggested slicing into pull requests, each leaving `main` green and releasable.
 9. **PR9** R2, D6, H1, A7 (upstream TLS, TLS probes, group API).
 10. **PR10** U1-U8 (UI), after the owner's C1 click-through.
 11. **PR11** Q2-Q6, Q8, W1-W4, C2-C4, release `v0.4.0`.
+
+**Split of PR4 (decided while implementing):** PR4a is T5, R1, R2, F1-F2 (the
+server configuration, the compile step carrying HTTPS settings and certificates,
+the config section and flags); PR4b is CS1, CS2, CS4, D1, the `tests/tls.rs`
+basics and Q7 (the write path, startup and the accept path). Both stay stacked.
 
 PRs 2 and 3 can proceed in parallel after PR1; PR4 needs PR2 and PR3; PRs 5 to 9
 need PR4 and can be taken in a different order (PR6 needs PR5's write paths only
