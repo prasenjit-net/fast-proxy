@@ -610,6 +610,7 @@ version = "0.0.0"
 dependencies = [
  "axum",
  "chrono",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-config-service",
  "fast-proxy-model",

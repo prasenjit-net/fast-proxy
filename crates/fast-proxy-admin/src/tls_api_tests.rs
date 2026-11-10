@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use crate::test_support::TestApp;
 
 const REMOTE: &str = "203.0.113.9:4000";
+const LOCAL: &str = "127.0.0.1:4000";
 
 fn issue(ca: &TestCa, names: &[&str]) -> Issued {
     ca.issue(&LeafSpec::new(names))
@@ -149,38 +150,32 @@ async fn invalid_uploads_name_their_field_and_change_nothing() {
 }
 
 #[tokio::test]
-async fn requests_carrying_a_key_are_refused_from_a_non_loopback_peer() {
-    let app = TestApp::with_tls(true).await;
+async fn requests_carrying_a_key_are_refused_on_an_unprotected_channel() {
+    let app = TestApp::with_unprotected_channel().await;
     let ca = TestCa::new("ca");
     let issued = issue(&ca, &["shop.example.com"]);
     let id = site(&app, "shop", "shop.example.com").await;
 
-    let (status, body) = app
-        .call_from(
-            REMOTE,
-            Method::POST,
-            "/api/certificates",
-            Some(upload_body("shop", &issued)),
-        )
-        .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], "FORBIDDEN");
+    // Whoever the peer is: the channel itself is what is unsafe.
+    for peer in [LOCAL, REMOTE] {
+        let (status, body) = app
+            .call_from(
+                peer,
+                Method::POST,
+                "/api/certificates",
+                Some(upload_body("shop", &issued)),
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "FORBIDDEN");
+    }
     let selfsigned = json!({ "name": "s", "names": ["x.example.com"] });
-    let (status, _) = app
-        .call_from(
-            REMOTE,
-            Method::POST,
-            "/api/certificates/self-signed",
-            Some(selfsigned),
-        )
-        .await;
+    let (status, _) = app.post("/api/certificates/self-signed", selfsigned).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, _) = app
-        .call_from(
-            REMOTE,
-            Method::POST,
+        .post(
             &format!("/api/subsystems/{id}/certificate"),
-            Some(upload_body("shop", &issued)),
+            upload_body("shop", &issued),
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -189,20 +184,30 @@ async fn requests_carrying_a_key_are_refused_from_a_non_loopback_peer() {
         json!([]),
         "nothing was stored"
     );
+}
 
-    let (status, created) = app
-        .post("/api/certificates", upload_body("shop", &issued))
-        .await;
-    assert_eq!(status, StatusCode::CREATED);
-    let cert = created["data"]["id"].as_i64().unwrap();
-    let uri = format!("/api/certificates/{cert}");
-    let (status, _) = app
-        .call_from(
-            REMOTE,
-            Method::PUT,
-            &uri,
-            Some(json!({ "keyPem": issued.key_pem })),
+#[tokio::test]
+async fn replacing_a_key_needs_a_protected_channel_but_a_rename_does_not() {
+    let app = TestApp::with_unprotected_channel().await;
+    let ca = TestCa::new("ca");
+    let issued = issue(&ca, &["shop.example.com"]);
+    let cert = app
+        .config
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
         )
+        .await
+        .unwrap()
+        .value
+        .id
+        .0;
+    let uri = format!("/api/certificates/{cert}");
+
+    let (status, _) = app
+        .call(Method::PUT, &uri, Some(json!({ "keyPem": issued.key_pem })))
         .await;
     assert_eq!(
         status,
@@ -210,20 +215,29 @@ async fn requests_carrying_a_key_are_refused_from_a_non_loopback_peer() {
         "replacing a key is key-bearing"
     );
     let (status, _) = app
-        .call_from(
-            REMOTE,
-            Method::PUT,
-            &uri,
-            Some(json!({ "name": "renamed" })),
-        )
+        .call(Method::PUT, &uri, Some(json!({ "name": "renamed" })))
         .await;
     assert_eq!(status, StatusCode::OK, "a rename carries no key");
-    let (status, _) = app
-        .call_from(REMOTE, Method::GET, "/api/certificates", None)
-        .await;
+    let (status, _) = app.call(Method::GET, "/api/certificates", None).await;
     assert_eq!(status, StatusCode::OK, "reads are not restricted");
-    let (status, _) = app.call_from(REMOTE, Method::DELETE, &uri, None).await;
+    let (status, _) = app.call(Method::DELETE, &uri, None).await;
     assert_eq!(status, StatusCode::OK, "deleting carries no key");
+}
+
+#[tokio::test]
+async fn a_protected_channel_accepts_keys_from_any_peer() {
+    let app = TestApp::with_tls(true).await;
+    let ca = TestCa::new("ca");
+    let issued = issue(&ca, &["shop.example.com"]);
+    let (status, body) = app
+        .call_from(
+            REMOTE,
+            Method::POST,
+            "/api/certificates",
+            Some(upload_body("shop", &issued)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
 #[tokio::test]

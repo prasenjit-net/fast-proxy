@@ -1,4 +1,4 @@
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use fast_proxy_config_service::CertificateChange;
@@ -9,7 +9,6 @@ use super::certificate_dto::{now_ms, CertificateDto};
 use super::change::Change;
 use super::envelope::{Envelope, VersionOnly};
 use super::json::ApiJson;
-use super::key_safety::require_loopback_for_keys;
 use crate::state::SharedState;
 use crate::{AppError, AppResult};
 
@@ -68,14 +67,12 @@ pub async fn list_certificates(
     }))
 }
 
-/// `POST /api/certificates` (loopback only: the body carries a private key).
+/// `POST /api/certificates` (the body carries a private key: needs an admin token over a protected channel).
 pub async fn upload_certificate(
     State(state): State<SharedState>,
     Change(context): Change,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     ApiJson(body): ApiJson<UploadRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
-    require_loopback_for_keys(peer)?;
     let applied = state
         .config
         .upload_certificate(&context, &body.name, &body.cert_pem, &body.key_pem)
@@ -91,14 +88,12 @@ pub async fn upload_certificate(
     ))
 }
 
-/// `POST /api/certificates/self-signed` (loopback only, like every key-writing call).
+/// `POST /api/certificates/self-signed` (needs an admin token over a protected channel, like every key-writing call).
 pub async fn generate_self_signed(
     State(state): State<SharedState>,
     Change(context): Change,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     ApiJson(body): ApiJson<SelfSignedRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
-    require_loopback_for_keys(peer)?;
     let applied = state
         .config
         .generate_self_signed(&context, &body.name, body.names)
@@ -115,16 +110,15 @@ pub async fn generate_self_signed(
 }
 
 /// `PUT /api/certificates/{id}`: rename and/or replace the chain and key. A
-/// body that carries a key is loopback only.
+/// body that carries a key needs a protected channel.
 pub async fn replace_certificate(
     State(state): State<SharedState>,
     Change(context): Change,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<ReplaceRequest>,
 ) -> AppResult<Json<Envelope<CertificateDto>>> {
     if body.key_pem.is_some() {
-        require_loopback_for_keys(peer)?;
+        state.security.require_protected_channel()?;
     }
     let id = CertificateId(id);
     let applied = state
@@ -170,15 +164,13 @@ pub async fn delete_certificate(
 }
 
 /// `POST /api/subsystems/{id}/certificate`: upload and attach in one step
-/// (loopback only).
+/// (needs an admin token over a protected channel).
 pub async fn upload_subsystem_certificate(
     State(state): State<SharedState>,
     Change(context): Change,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<UploadRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
-    require_loopback_for_keys(peer)?;
     let applied = state
         .config
         .upload_certificate_for_subsystem(

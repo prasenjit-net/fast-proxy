@@ -218,3 +218,79 @@ fn the_repository_config_file_parses_and_is_valid() {
     assert_eq!(config.data_plane.tls.listen.port(), 8443);
     config.validate().unwrap();
 }
+
+mod admin_protection {
+    use super::*;
+
+    fn validated(toml: &str) -> Result<(), String> {
+        let mut config = parse(toml).unwrap();
+        config.data_plane.state_dir = tempfile::tempdir().unwrap().keep();
+        config.validate().map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn authentication_is_required_by_default() {
+        let config = parse("").unwrap();
+        assert_eq!(config.admin.auth, AdminAuth::Required);
+        assert!(config.admin.allowed_hosts.is_empty());
+        assert!(!config.admin.allow_insecure_remote);
+    }
+
+    #[test]
+    fn the_admin_keys_parse() {
+        let config = parse(
+            "[admin]\nauth = \"off\"\nallowed_hosts = [\"admin.example.com\"]\nallow_insecure_remote = true\n",
+        )
+        .unwrap();
+        assert_eq!(config.admin.auth, AdminAuth::Off);
+        assert_eq!(config.admin.allowed_hosts, ["admin.example.com"]);
+        assert!(config.admin.allow_insecure_remote);
+    }
+
+    #[test]
+    fn an_unknown_auth_mode_is_rejected() {
+        assert!(parse("[admin]\nauth = \"maybe\"\n").is_err());
+        assert!(parse("[admin]\nauth = \"Required\"\n").is_err());
+    }
+
+    #[test]
+    fn loopback_with_or_without_authentication_is_accepted() {
+        assert!(validated("[admin]\nlisten = \"127.0.0.1:9100\"\n").is_ok());
+        assert!(validated("[admin]\nlisten = \"127.0.0.1:9100\"\nauth = \"off\"\n").is_ok());
+        assert!(validated("[admin]\nlisten = \"[::1]:9100\"\nauth = \"off\"\n").is_ok());
+    }
+
+    #[test]
+    fn leaving_loopback_without_tls_needs_the_explicit_override_and_names_it() {
+        let message = validated("[admin]\nlisten = \"0.0.0.0:9100\"\n").unwrap_err();
+        assert!(message.contains("admin.allow_insecure_remote"), "{message}");
+        assert!(message.contains("0.0.0.0:9100"), "{message}");
+        assert!(
+            validated("[admin]\nlisten = \"0.0.0.0:9100\"\nallow_insecure_remote = true\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn authentication_off_is_refused_off_loopback_even_with_the_override() {
+        let message = validated(
+            "[admin]\nlisten = \"0.0.0.0:9100\"\nauth = \"off\"\nallow_insecure_remote = true\n",
+        )
+        .unwrap_err();
+        assert!(message.contains("admin.auth"), "{message}");
+    }
+
+    #[test]
+    fn allowed_hosts_must_be_host_names() {
+        for bad in ["", "has space", "a/b", "user@host"] {
+            let message =
+                validated(&format!("[admin]\nallowed_hosts = [\"{bad}\"]\n")).unwrap_err();
+            assert!(
+                message.contains("admin.allowed_hosts"),
+                "{bad:?}: {message}"
+            );
+        }
+        assert!(
+            validated("[admin]\nallowed_hosts = [\"admin.example.com\", \"10.0.0.5\"]\n").is_ok()
+        );
+    }
+}

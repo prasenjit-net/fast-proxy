@@ -85,6 +85,7 @@ mod tests {
             token_id: TokenId(1),
             name: name.into(),
             role,
+            expires_at_ms: None,
         }
     }
 

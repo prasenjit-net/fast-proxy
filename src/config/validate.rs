@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{AppConfig, ConfigError};
+use super::{AdminAuth, AppConfig, ConfigError};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
@@ -39,6 +39,7 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
         }
     }
 
+    validate_admin(config)?;
     validate_tls(config)?;
 
     let state_dir = &config.data_plane.state_dir;
@@ -48,6 +49,39 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
             state_dir.display()
         ))
     })
+}
+
+/// Checks `[admin]`: the admin plane may leave loopback only with authentication
+/// on, and only when the operator accepts the missing TLS explicitly.
+fn validate_admin(config: &AppConfig) -> Result<(), ConfigError> {
+    let admin = &config.admin;
+    if !admin.listen.ip().is_loopback() {
+        if admin.auth == AdminAuth::Off {
+            return invalid(format!(
+                "admin.auth = \"off\" is only allowed on a loopback address, but admin.listen is {}; \
+                 set admin.auth = \"required\" or listen on 127.0.0.1",
+                admin.listen
+            ));
+        }
+        if !admin.allow_insecure_remote {
+            return invalid(format!(
+                "admin.listen {} is not a loopback address and the admin plane has no TLS yet, so \
+                 tokens would cross the network in clear text; listen on 127.0.0.1 or set \
+                 admin.allow_insecure_remote = true to accept that",
+                admin.listen
+            ));
+        }
+    }
+    for host in &admin.allowed_hosts {
+        let usable =
+            !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c == '/' || c == '@');
+        if !usable {
+            return invalid(format!(
+                "admin.allowed_hosts entry \"{host}\" is not a host name"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Checks `[data_plane.tls]` and the master key file. The listener clash is only

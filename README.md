@@ -13,8 +13,8 @@ change is recorded so it can be rolled back.
 > **Status: milestones 1 and 2 are feature-complete.** It is a working HTTP
 > reverse proxy with live configuration, load balancing across several endpoints
 > per upstream, active and passive health checking, and safe retries. TLS, ACME
-> and maintenance mode are the next milestones; see the [roadmap](docs/ROADMAP.md). The admin plane has **no
-> authentication yet** (see [Security notes](#security-notes)).
+> and maintenance mode are the next milestones; see the [roadmap](docs/ROADMAP.md). The admin plane needs a
+> bearer token (see [Security notes](#security-notes)).
 
 ## What it does today
 
@@ -165,6 +165,7 @@ fast-proxy [OPTIONS]
 
   -c, --config <CONFIG>             Path to the TOML configuration file [default: config.toml]
       --admin-listen <ADDR>         Override [admin].listen
+      --admin-auth <required|off>   Override [admin].auth (off only on loopback)
       --database <PATH>             Override [data_plane].database
       --state-dir <PATH>            Override [data_plane].state_dir
       --log-level <LOG_LEVEL>       Override [logging].level (trace, debug, info, warn, error)
@@ -193,7 +194,10 @@ fast-proxy [OPTIONS]
 | `data_plane.tls.reject_unknown_sni` | `false` | Fail the handshake for an unknown name instead of presenting a placeholder certificate |
 | `data_plane.tls.handshake_timeout`, `max_concurrent_handshakes` | `10s`, `256` | Bounds on handshakes so a flood cannot starve established traffic |
 | `data_plane.tls.http2_max_concurrent_streams`, `http2_max_header_list_size`, `http2_keep_alive_interval`, `http2_keep_alive_timeout` | `128`, `65536`, `30s`, `20s` | HTTP/2 limits |
-| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener (no authentication yet, keep it on loopback) |
+| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener. Leaving loopback needs `admin.allow_insecure_remote = true` (there is no admin TLS yet) |
+| `admin.auth` | `required` | `required`: every API call and the WebSocket need a token; `off` is accepted only on loopback and is warned about |
+| `admin.allowed_hosts` | `[]` | Extra names accepted in the `Host` header (the listen address and `localhost`, `127.0.0.1`, `[::1]` always are) |
+| `admin.allow_insecure_remote` | `false` | Accept a non-loopback admin listener without TLS; tokens then cross the network in clear text |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
@@ -209,9 +213,16 @@ message.
 
 ## API
 
+All routes except `/api/health` need `Authorization: Bearer <token>`; a missing or wrong token is 401, a `viewer` token on anything but a read is 403.
+
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness + version |
+| GET | `/api/health` | Liveness + version (open) |
+| GET | `/api/whoami` | The caller's token name and role, its expiry, and whether the channel is protected |
+| POST | `/api/ws-ticket` | A single-use ticket (30 s) to open `/ws?ticket=…`: browsers cannot set headers on a WebSocket |
+| GET, POST | `/api/tokens` | List / create (`name`, `role`, optional `expiresInDays`; the secret appears only in the creation response) |
+| DELETE | `/api/tokens/{id}` | Revoke at once (409 for the last usable admin token) |
+| POST | `/api/reload` | Re-read the database now and recompile; answers with the live version |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
 | GET | `/api/status` | Listeners, database path, subsystem counts, upstream health summary, uptime, live config version |
 | GET | `/api/traffic` | Latest live traffic sample: requests/s, 5xx error rate, connections, per subsystem |
@@ -241,7 +252,7 @@ message.
 | DELETE | `/api/ca-bundles/{id}` | Delete (409 while an upstream group names it) |
 | GET | `/ws` | WebSocket: server-push events |
 
-A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) are accepted **only from a loopback peer** until admin authentication exists.
+A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) need an `admin` token and a **protected channel** (the admin plane on loopback).
 
 Config responses are `{ "data": ..., "version": N }`, where `version` is the config
 revision the response reflects (for a write, the one it created); deletes return
@@ -346,14 +357,22 @@ read, and never serves the ones it cannot.
 
 ## Security notes
 
-- **The admin plane has no authentication yet** (authentication arrives in M5).
-  It binds to `127.0.0.1` by default and logs a warning if you bind it
-  elsewhere. Anyone who can reach it can reconfigure the proxy, so do not
-  expose it to a network you do not trust.
+- **The admin plane needs a bearer token.** Every API call and the WebSocket
+  need one (only `GET /api/health` is open). The first start prints a bootstrap
+  admin token once; `POST /api/tokens` creates more, with the role `admin`
+  (everything) or `viewer` (read-only), and `DELETE /api/tokens/{id}` revokes
+  one at once. Only a hash is stored, and the last admin token cannot be
+  revoked. A `Host` header that is not an allowed admin name is refused (DNS
+  rebinding), ten failed attempts from one address are throttled, and
+  responses carry a strict `Content-Security-Policy`. The plane still binds to
+  `127.0.0.1` by default; there is no admin TLS yet, so leaving loopback needs
+  `admin.allow_insecure_remote = true` and sends tokens in clear text. A reverse
+  proxy in front makes every request look local to the admin plane, so it needs
+  its own access control.
 - **Private keys are write-only.** No endpoint, log line, metric, event, error or
   revision ever contains one; they are stored encrypted (AES-256-GCM) under a master
-  key that lives outside the database, and requests that carry a key are accepted
-  only from the machine the proxy runs on until authentication exists. See
+  key that lives outside the database, and requests that carry a key need an `admin`
+  token over a protected channel (the admin plane on loopback). See
   [docs/security-review-m3.md](docs/security-review-m3.md).
 - **Back up the master key separately from the database.** The database alone does
   not expose the keys, and cannot be used without the master key: if the key is

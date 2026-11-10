@@ -55,6 +55,9 @@ pub struct AccessRecord<'a> {
     /// Time from receiving the request to finishing the response.
     pub elapsed: Duration,
     pub data_plane: Option<&'a DataPlaneFields>,
+    /// Who made an admin request (a token's name, never the token); `None` on
+    /// the data plane and for requests that did not authenticate.
+    pub actor: Option<&'a str>,
 }
 
 fn ms(duration: Duration) -> f64 {
@@ -98,6 +101,9 @@ impl AccessRecord<'_> {
                 escape_log_field(&data.proto),
                 escape_log_field(data.tls.as_deref().unwrap_or("-"))
             ));
+        }
+        if let Some(actor) = self.actor {
+            line.push_str(&format!(" actor={}", escape_log_field(actor)));
         }
         line.push_str(&format!(" total_ms={:.1}", ms(self.elapsed)));
         line
@@ -218,6 +224,7 @@ mod tests {
             status: 200,
             elapsed: Duration::from_micros(400),
             data_plane: None,
+            actor: None,
         }
     }
 
@@ -244,6 +251,16 @@ mod tests {
         line.split(' ')
             .filter_map(|part| part.split_once('='))
             .collect()
+    }
+
+    #[test]
+    fn an_admin_line_names_the_actor_only_when_there_is_one() {
+        let at = Utc.with_ymd_and_hms(2026, 8, 3, 10, 15, 42).unwrap();
+        let mut record = admin_record("/api/status");
+        assert!(!record.format_line(at).contains("actor="));
+        record.actor = Some("ci deploy");
+        let line = record.format_line(at);
+        assert!(line.contains(" actor=ci deploy total_ms="), "{line}");
     }
 
     #[test]
@@ -280,6 +297,7 @@ mod tests {
         let record = AccessRecord {
             plane: Plane::Data,
             data_plane: Some(&fields),
+            actor: None,
             ..admin_record("/api/users?page=2")
         };
         let line = record.format_line(at());
@@ -301,6 +319,7 @@ mod tests {
         let record = AccessRecord {
             plane: Plane::Data,
             data_plane: Some(&fields),
+            actor: None,
             ..admin_record("/")
         };
         let line = record.format_line(at());
@@ -323,6 +342,7 @@ mod tests {
             plane: Plane::Data,
             status: 404,
             data_plane: Some(&fields),
+            actor: None,
             ..admin_record("/")
         };
         let line = record.format_line(at());
@@ -343,6 +363,7 @@ mod tests {
         let record = AccessRecord {
             plane: Plane::Data,
             data_plane: Some(&fields),
+            actor: None,
             ..admin_record("/")
         };
         let line = record.format_line(at());

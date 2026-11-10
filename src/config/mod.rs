@@ -13,7 +13,7 @@ use std::path::Path;
 use fast_proxy_admin::UiConfig;
 use serde::Deserialize;
 
-pub use admin::AdminConfig;
+pub use admin::{AdminAuth, AdminConfig};
 pub use data_plane::DataPlaneConfig;
 pub use error::ConfigError;
 pub use logging::LoggingConfig;

@@ -88,6 +88,7 @@ impl TokenSet {
             token_id: record.id,
             name: record.name.as_str().to_string(),
             role: record.role,
+            expires_at_ms: record.expires_at_ms,
         })
     }
 
@@ -171,6 +172,7 @@ mod tests {
         assert_eq!(principal.token_id, TokenId(1));
         assert_eq!(principal.name, "token-1");
         assert_eq!(principal.role, Role::Admin);
+        assert_eq!(principal.expires_at_ms, None);
     }
 
     #[test]

@@ -1,109 +1,155 @@
 //! Route table for the admin plane.
 
-use axum::extract::DefaultBodyLimit;
-use axum::middleware::from_fn_with_state;
-use axum::routing::{delete, get, post, put};
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::Router;
+use fast_proxy_model::Action::{Keys, Read, Tokens, Write};
 
+use crate::guard::Access::{Needs, Open, Ticket};
+use crate::route_table::{RouteSpec, RouteTable};
 use crate::state::SharedState;
-use crate::{access_middleware, api, static_assets, ws};
-
-/// The most a request carrying certificate material may weigh: a 256 KiB chain,
-/// a 256 KiB key and JSON around them.
-const KEY_BODY_LIMIT: usize = 600 * 1024;
+use crate::{access_middleware, api, host_check, security_headers, static_assets, ws};
 
 /// Builds the admin router: REST API, `/ws`, and the SPA fallback.
 pub fn router(state: SharedState) -> Router {
-    Router::new()
-        .route("/api/health", get(api::system::health))
-        .route("/api/config", get(api::system::config))
-        .route("/api/traffic", get(api::system::traffic))
-        .route("/metrics", get(api::system::prometheus))
-        .route(
-            "/api/subsystems",
-            get(api::list_subsystems).post(api::create_subsystem),
-        )
-        .route(
-            "/api/subsystems/{id}",
-            get(api::get_subsystem)
-                .put(api::update_subsystem)
-                .delete(api::delete_subsystem),
-        )
-        .route("/api/subsystems/{id}/hosts", post(api::add_host))
-        .route(
+    build(state).0
+}
+
+/// The router and the list of its routes with the access each needs.
+pub(crate) fn build(state: SharedState) -> (Router, Vec<RouteSpec>) {
+    let (routes, specs) = RouteTable::new(state.clone())
+        .get("/api/health", Open, api::system::health)
+        .get("/api/config", Needs(Read), api::system::config)
+        .get("/api/traffic", Needs(Read), api::system::traffic)
+        .get("/metrics", Needs(Read), api::system::prometheus)
+        .get("/api/whoami", Needs(Read), api::whoami)
+        .post("/api/ws-ticket", Needs(Read), api::ws_ticket)
+        .get("/api/tokens", Needs(Tokens), api::list_tokens)
+        .post("/api/tokens", Needs(Tokens), api::create_token)
+        .delete("/api/tokens/{id}", Needs(Tokens), api::revoke_token)
+        .get("/api/subsystems", Needs(Read), api::list_subsystems)
+        .post("/api/subsystems", Needs(Write), api::create_subsystem)
+        .get("/api/subsystems/{id}", Needs(Read), api::get_subsystem)
+        .put("/api/subsystems/{id}", Needs(Write), api::update_subsystem)
+        .delete("/api/subsystems/{id}", Needs(Write), api::delete_subsystem)
+        .post("/api/subsystems/{id}/hosts", Needs(Write), api::add_host)
+        .delete(
             "/api/subsystems/{id}/hosts/{host_id}",
-            delete(api::remove_host),
+            Needs(Write),
+            api::remove_host,
         )
-        .route(
+        .get(
             "/api/subsystems/{id}/upstreams",
-            get(api::list_upstreams).post(api::create_upstream),
+            Needs(Read),
+            api::list_upstreams,
         )
-        .route(
+        .post(
+            "/api/subsystems/{id}/upstreams",
+            Needs(Write),
+            api::create_upstream,
+        )
+        .put(
             "/api/subsystems/{id}/upstreams/{upstream_id}",
-            put(api::update_upstream).delete(api::delete_upstream),
+            Needs(Write),
+            api::update_upstream,
         )
-        .route(
+        .delete(
+            "/api/subsystems/{id}/upstreams/{upstream_id}",
+            Needs(Write),
+            api::delete_upstream,
+        )
+        .get(
             "/api/subsystems/{id}/upstreams/{upstream_id}/status",
-            get(api::upstream_status),
+            Needs(Read),
+            api::upstream_status,
         )
-        .route(
+        .post(
             "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints",
-            post(api::add_endpoint),
+            Needs(Write),
+            api::add_endpoint,
         )
-        .route(
+        .put(
             "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints/{endpoint_id}",
-            put(api::update_endpoint).delete(api::delete_endpoint),
+            Needs(Write),
+            api::update_endpoint,
         )
-        .route(
+        .delete(
+            "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            Needs(Write),
+            api::delete_endpoint,
+        )
+        .put(
             "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints/{endpoint_id}/state",
-            put(api::set_endpoint_state),
+            Needs(Write),
+            api::set_endpoint_state,
         )
-        .route(
+        .get("/api/subsystems/{id}/routes", Needs(Read), api::list_routes)
+        .post(
             "/api/subsystems/{id}/routes",
-            get(api::list_routes).post(api::create_route),
+            Needs(Write),
+            api::create_route,
         )
-        .route(
+        .put(
             "/api/subsystems/{id}/routes/{route_id}",
-            put(api::update_route).delete(api::delete_route),
+            Needs(Write),
+            api::update_route,
         )
-        .route(
+        .delete(
+            "/api/subsystems/{id}/routes/{route_id}",
+            Needs(Write),
+            api::delete_route,
+        )
+        .post(
             "/api/subsystems/{id}/certificate",
-            post(api::upload_subsystem_certificate)
-                .delete(api::detach_subsystem_certificate)
-                .layer(DefaultBodyLimit::max(KEY_BODY_LIMIT)),
+            Needs(Keys),
+            api::upload_subsystem_certificate,
         )
-        .route(
-            "/api/certificates",
-            get(api::list_certificates)
-                .post(api::upload_certificate)
-                .layer(DefaultBodyLimit::max(KEY_BODY_LIMIT)),
+        .delete(
+            "/api/subsystems/{id}/certificate",
+            Needs(Write),
+            api::detach_subsystem_certificate,
         )
-        .route(
+        .get("/api/certificates", Needs(Read), api::list_certificates)
+        .post("/api/certificates", Needs(Keys), api::upload_certificate)
+        .post(
             "/api/certificates/self-signed",
-            post(api::generate_self_signed),
+            Needs(Keys),
+            api::generate_self_signed,
         )
-        .route(
+        // A key in the body is checked in the handler, so a rename needs none.
+        .put(
             "/api/certificates/{id}",
-            put(api::replace_certificate)
-                .delete(api::delete_certificate)
-                .layer(DefaultBodyLimit::max(KEY_BODY_LIMIT)),
+            Needs(Write),
+            api::replace_certificate,
         )
-        .route(
-            "/api/ca-bundles",
-            get(api::list_ca_bundles).post(api::upload_ca_bundle),
+        .delete(
+            "/api/certificates/{id}",
+            Needs(Write),
+            api::delete_certificate,
         )
-        .route("/api/ca-bundles/{id}", delete(api::delete_ca_bundle))
-        .route("/api/tls", get(api::tls_status))
-        .route("/api/revisions", get(api::list_revisions))
-        .route("/api/revisions/{version}", get(api::get_revision))
-        .route(
+        .get("/api/ca-bundles", Needs(Read), api::list_ca_bundles)
+        .post("/api/ca-bundles", Needs(Write), api::upload_ca_bundle)
+        .delete("/api/ca-bundles/{id}", Needs(Write), api::delete_ca_bundle)
+        .get("/api/tls", Needs(Read), api::tls_status)
+        .get("/api/revisions", Needs(Read), api::list_revisions)
+        .get("/api/revisions/{version}", Needs(Read), api::get_revision)
+        .post(
             "/api/revisions/{version}/rollback",
-            post(api::rollback_revision),
+            Needs(Write),
+            api::rollback_revision,
         )
-        .route("/api/resolve", post(api::resolve))
-        .route("/api/status", get(api::status))
-        .route("/ws", get(ws::handler))
+        .post("/api/resolve", Needs(Read), api::resolve)
+        .get("/api/status", Needs(Read), api::status)
+        .post("/api/reload", Needs(Write), api::reload)
+        .get("/ws", Ticket(Read), ws::handler)
+        .finish();
+    // Layers run outermost first: the access log sees every response, the
+    // security headers go on whatever comes back (a refusal included), and
+    // the Host check runs before anything else looks at the request.
+    let router = routes
         .fallback(static_assets::handler)
+        .layer(from_fn_with_state(state.clone(), host_check::check))
+        .layer(from_fn(security_headers::add))
         .layer(from_fn_with_state(state.clone(), access_middleware::record))
-        .with_state(state)
+        .with_state(state);
+    (router, specs)
 }

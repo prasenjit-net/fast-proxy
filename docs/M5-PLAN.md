@@ -507,7 +507,7 @@ carry-over.
 
 ### Workstream A: Admin API and security
 
-- [ ] **A1 (L) Authentication and authorization middleware.** The order of 4.1: `Host`
+- [x] **A1 (L) Authentication and authorization middleware.** The order of 4.1: `Host`
   allow-list, throttle, token or ticket, role per route (every route declares its
   `Action`; a route without one fails a test), request id and the actor into the handler
   context; `/api/health` and the UI assets open; the admin access log names the actor and
@@ -515,16 +515,16 @@ carry-over.
   *Done when:* HTTP-level tests cover 401, 403, a viewer on every write route (generated
   from the router so a new route cannot be forgotten), an expired and a revoked token, a
   bad `Host` (421), and the throttle (429 with `Retry-After`).
-- [ ] **A2 (M) Tokens API.** `POST`, `GET`, `DELETE /api/tokens`, `GET /api/whoami`;
+- [x] **A2 (M) Tokens API.** `POST`, `GET`, `DELETE /api/tokens`, `GET /api/whoami`;
   the secret only in the creation response; the last admin token protected.
   *Done when:* tests cover create then use, the secret never reappearing (every response,
   event, log line and the metrics text are scanned for it), revoke taking effect on the
   next request, and the 409.
-- [ ] **A3 (S) WebSocket tickets.** `POST /api/ws-ticket` and ticket authentication on
+- [x] **A3 (S) WebSocket tickets.** `POST /api/ws-ticket` and ticket authentication on
   `/ws`; a socket with no ticket is refused; viewers connect.
   *Done when:* tests cover a ticket used twice, an expired one, none, and a viewer
   receiving events.
-- [ ] **A4 (M) Security headers and the key rule.** The headers of H6 on every response
+- [x] **A4 (M) Security headers and the key rule.** The headers of H6 on every response
   (CSP checked against the built UI so the UI still runs); the key-bearing routes require
   an admin token and a protected channel (loopback or admin TLS) instead of the bare
   loopback rule.
@@ -544,14 +544,32 @@ carry-over.
   *Done when:* HTTP-level tests cover each scope's set, update and clear, the field
   errors, the secret shown once, the event, the resolver output, and that each write is
   live in the data plane without a restart.
-- [ ] **A7 (S) Reload and status.** `POST /api/reload`; `GET /api/status` adds the auth
+- [x] **A7 (S) Reload and status.** `POST /api/reload`; `GET /api/status` adds the auth
   mode, whether the admin channel is protected, the active maintenance scopes and the
   number of tokens.
   *Done when:* tests cover both and a viewer being refused the reload.
-- [ ] **A8 (S) Startup rules.** The refusals of 5.1 (non-loopback without TLS and auth,
+- [x] **A8 (S) Startup rules.** The refusals of 5.1 (non-loopback without TLS and auth,
   `auth = "off"` off loopback), the bootstrap token printed once, and the warnings.
   *Done when:* tests cover every refusal with a message that names the key to set, and
   that the bootstrap token is printed once and never on a second start.
+
+**PR4 notes (decisions made while building):**
+- Every admin route is registered through `RouteTable` with an `Access` (`Open`, `Needs(action)` or
+  `Ticket(action)`); the per-route guard throttles, authenticates and authorizes, so a route cannot be
+  added without saying what it needs, and a test walks the recorded list (viewer on every write route,
+  no token on every protected route). The host check and security headers are global layers.
+- `PUT /api/certificates/{id}` is `Write`, with the protected-channel rule applied in the handler only
+  when the body carries a key, so a rename needs none. The other key routes are `Keys`.
+- Until **admin TLS (PR5)**, a non-loopback listener is refused unless `admin.allow_insecure_remote`
+  is set, and `auth = "off"` off loopback is refused outright; PR5 replaces the first rule with the TLS
+  requirement of H4.
+- A bearer token sent to the admin plane is the only credential; the throttle counts failures, not
+  successes. The access log names the actor (`actor=<name>`) and redacts the `/ws` query.
+- **The UI cannot sign in until PR8** (U1): with authentication on by default it shows errors after
+  this PR. For local UI work start with `--admin-auth off` (loopback only). `GET /api/config` is
+  protected like the rest.
+- Denials, validation failures and authentication events are audited by the middleware in **PR7** (A5);
+  committed changes are already audited since PR3.
 
 ### Workstream AT: Admin TLS
 
@@ -634,7 +652,7 @@ carry-over.
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (M) Test harness migration.** Authentication on in the HTTP-level tests
+- [x] **Q1 (M) Test harness migration.** Authentication on in the HTTP-level tests
   (`TestApp` with a token helper, plus a `TestApp::unauthenticated()` where a test is
   about the 401), `auth = "off"` on loopback in the binary tests' generated config, the
   UI mock API sending the header, and the getting-started examples updated. Keeps every

@@ -249,7 +249,7 @@ fn an_open_admin_websocket_does_not_block_shutdown() {
         .unwrap();
     write!(
         socket,
-        "GET /ws HTTP/1.1\r\nHost: admin\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        "GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
     )
     .unwrap();
     let mut buf = [0u8; 512];
@@ -308,7 +308,7 @@ fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
         ),
         Some(4.0)
     );
-    let (_, text) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    let (_, text) = http(proxy.admin, "GET", "/metrics", "localhost", None);
     assert!(
         !text.contains("nobody.example.com"),
         "raw hosts must not become labels"

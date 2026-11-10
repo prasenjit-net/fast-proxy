@@ -34,7 +34,8 @@ async fn an_api_write_is_audited_with_the_peer_and_its_action() {
     assert_eq!(entry.action, "subsystem.create");
     assert_eq!(entry.target, "shop");
     assert_eq!(entry.source, "192.0.2.9");
-    assert_eq!(entry.actor, "anonymous", "no authentication yet");
+    assert_eq!(entry.actor, "test-admin", "named by the token");
+    assert_eq!(entry.role, "admin");
     assert_eq!(entry.revision, body["version"].as_u64());
 }
 
@@ -74,4 +75,14 @@ async fn each_kind_of_write_names_its_own_action() {
         actions,
         ["subsystem.delete", "host.add", "subsystem.create"]
     );
+}
+
+#[tokio::test]
+async fn with_authentication_off_a_write_is_recorded_as_anonymous() {
+    let mut app = TestApp::with_auth_off().await;
+    app.sign_out();
+    let (status, _) = app.post("/api/subsystems", json!({ "name": "shop" })).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let entries = audit_entries(&app).await;
+    assert_eq!(entries[0].entry.actor, "anonymous");
 }

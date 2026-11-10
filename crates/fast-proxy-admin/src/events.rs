@@ -48,6 +48,15 @@ pub enum Event {
         timestamp_ms: i64,
     },
 
+    /// A token was created or revoked; only its name is sent. `change` is
+    /// `created` or `revoked`.
+    #[serde(rename_all = "camelCase")]
+    TokenChanged {
+        change: &'static str,
+        token: String,
+        timestamp_ms: i64,
+    },
+
     #[serde(rename_all = "camelCase")]
     Activity {
         kind: String,
@@ -95,6 +104,16 @@ mod tests {
         assert_eq!(cert["type"], "certState");
         assert_eq!(cert["change"], "uploaded");
         assert_eq!(cert["certificate"], "shop");
+
+        let token = serde_json::to_value(Event::TokenChanged {
+            change: "revoked",
+            token: "ci".into(),
+            timestamp_ms: 5,
+        })
+        .unwrap();
+        assert_eq!(token["type"], "tokenChanged");
+        assert_eq!(token["change"], "revoked");
+        assert_eq!(token["token"], "ci");
 
         let hello = serde_json::to_value(Event::Hello {
             message: "hi".into(),

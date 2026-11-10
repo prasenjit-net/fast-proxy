@@ -7,4 +7,6 @@ pub struct Principal {
     /// The token's name, which is what the audit log records.
     pub name: String,
     pub role: Role,
+    /// When the token stops working, if it ever does (a ticket inherits it).
+    pub expires_at_ms: Option<i64>,
 }

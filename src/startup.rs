@@ -5,8 +5,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo, TlsInfo};
-use fast_proxy_config_service::{AuditRetention, ConfigService, StartError, TlsSettings};
+use fast_proxy_admin::{
+    AdminSecurity, AdminState, ListenerInfo, RuntimeInfo, SecuritySettings, TlsInfo,
+};
+use fast_proxy_config_service::{
+    AuditRetention, Bootstrap, ConfigService, StartError, TlsSettings,
+};
 use fast_proxy_dataplane::{
     bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
     RequestPipeline, TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError,
@@ -20,8 +24,10 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AppConfig, TlsConfig};
+use crate::config::{AdminAuth, AdminConfig, AppConfig, TlsConfig};
 
+/// The environment variable that seeds the first admin token (for containers).
+const BOOTSTRAP_TOKEN_VARIABLE: &str = "FAST_PROXY_BOOTSTRAP_TOKEN";
 /// How often expired maintenance scopes are cleared.
 const MAINTENANCE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 /// How much audit history is kept until `[admin.audit]` settings exist.
@@ -67,6 +73,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let config_service = Arc::new(
         ConfigService::start_with_tls(store, metrics.clone(), tls_settings(&config)).await?,
     );
+    if config.admin.auth == AdminAuth::Required {
+        ensure_admin_token(&config_service).await?;
+    }
 
     let specs: Vec<ListenerSpec> = data_plane
         .listener
@@ -118,6 +127,15 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     // Endpoint health changes flow from the data plane and the health checks to
     // the admin plane's live view.
     let endpoint_events = EndpointEvents::new();
+    let security = AdminSecurity::new(
+        &SecuritySettings {
+            auth_required: config.admin.auth == AdminAuth::Required,
+            channel_protected: admin_addr.ip().is_loopback(),
+            listen: admin_addr,
+            allowed_hosts: config.admin.allowed_hosts.clone(),
+        },
+        config_service.token_cache(),
+    );
     let admin_state = Arc::new(AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
@@ -126,6 +144,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         runtime,
         metrics.clone(),
         endpoint_events.clone(),
+        security,
     ));
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
@@ -189,7 +208,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         database.display(),
         config_service.snapshot_holder().load().version
     );
-    if let Some(warning) = admin_exposure_warning(admin_addr) {
+    for warning in admin_warnings(&config.admin) {
         tracing::warn!("{warning}");
     }
 
@@ -291,34 +310,78 @@ async fn cancel_on_ctrl_c(shutdown: CancellationToken) {
     shutdown.cancel();
 }
 
-/// The admin plane has no authentication until M5, so anything but a
-/// loopback bind deserves a loud warning.
-fn admin_exposure_warning(addr: SocketAddr) -> Option<String> {
-    if addr.ip().is_loopback() {
-        return None;
+/// Makes sure the admin plane is never open and never locked out: with no
+/// usable admin token, stores the one in `FAST_PROXY_BOOTSTRAP_TOKEN` or
+/// generates one and prints it, once, on the console. The log gets only the
+/// marker `admin token created`, never the token.
+async fn ensure_admin_token(config_service: &ConfigService) -> Result<(), StoreError> {
+    let seed = std::env::var(BOOTSTRAP_TOKEN_VARIABLE).ok();
+    match config_service.ensure_admin_token(seed.as_deref()).await? {
+        Bootstrap::Created(token) => {
+            tracing::info!("admin token created");
+            println!("admin token (shown once, store it now): {}", token.reveal());
+        }
+        Bootstrap::Seeded => {
+            tracing::info!("admin token created from {BOOTSTRAP_TOKEN_VARIABLE}");
+        }
+        Bootstrap::NotNeeded => {}
     }
-    Some(format!(
-        "the admin plane is listening on {addr}, which is not a loopback address, \
-         and it has NO authentication: anyone who can reach it can reconfigure the proxy"
-    ))
+    Ok(())
+}
+
+/// Warnings for admin settings that are allowed but worth saying out loud.
+fn admin_warnings(admin: &AdminConfig) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if admin.auth == AdminAuth::Off {
+        warnings.push(
+            "admin authentication is OFF: anyone who can reach the admin plane can reconfigure \
+             the proxy (allowed only because it listens on loopback)"
+                .to_string(),
+        );
+    }
+    if !admin.listen.ip().is_loopback() {
+        warnings.push(format!(
+            "the admin plane is listening on {}, which is not a loopback address, without TLS \
+             (admin.allow_insecure_remote): admin tokens cross the network in clear text",
+            admin.listen
+        ));
+    }
+    warnings
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn loopback_admin_addresses_are_not_warned_about() {
-        assert!(admin_exposure_warning("127.0.0.1:9000".parse().unwrap()).is_none());
-        assert!(admin_exposure_warning("[::1]:9000".parse().unwrap()).is_none());
+    fn admin(listen: &str, auth: AdminAuth) -> AdminConfig {
+        AdminConfig {
+            listen: listen.parse().unwrap(),
+            auth,
+            allow_insecure_remote: true,
+            ..AdminConfig::default()
+        }
     }
 
     #[test]
-    fn exposed_admin_addresses_get_a_warning_naming_the_address() {
+    fn a_protected_loopback_admin_plane_has_nothing_to_warn_about() {
+        assert!(admin_warnings(&admin("127.0.0.1:9000", AdminAuth::Required)).is_empty());
+        assert!(admin_warnings(&admin("[::1]:9000", AdminAuth::Required)).is_empty());
+    }
+
+    #[test]
+    fn switching_authentication_off_is_warned_about_every_start() {
+        let warnings = admin_warnings(&admin("127.0.0.1:9000", AdminAuth::Off));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("authentication is OFF"));
+    }
+
+    #[test]
+    fn an_exposed_admin_address_without_tls_is_warned_about_naming_the_address() {
         for addr in ["0.0.0.0:9000", "192.168.1.5:9000", "[::]:9000"] {
-            let warning = admin_exposure_warning(addr.parse().unwrap()).unwrap();
-            assert!(warning.contains(addr), "{warning}");
-            assert!(warning.contains("NO authentication"));
+            let warnings = admin_warnings(&admin(addr, AdminAuth::Required));
+            assert_eq!(warnings.len(), 1, "{addr}");
+            assert!(warnings[0].contains(addr));
+            assert!(warnings[0].contains("clear text"));
         }
     }
 }

@@ -244,7 +244,7 @@ fn live_config_edits_under_load_drop_no_requests_and_serve_only_valid_backends()
 
     // 6. The proxy's own accounting agrees: no 5xx, no rejected change, and
     //    one config version per write.
-    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "localhost", None);
     assert!(
         !metrics.contains("status_class=\"5xx\""),
         "the proxy counted 5xx responses"
@@ -444,7 +444,7 @@ fn endpoint_changes_under_load_drop_no_requests_and_a_closed_endpoint_gets_nothi
 
     // The proxy's own accounting agrees: no 5xx, no rejected change, one
     // config version per write.
-    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "localhost", None);
     assert!(
         !metrics.contains("status_class=\"5xx\""),
         "the proxy counted 5xx responses"

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::config::AppConfig;
+use crate::config::{AdminAuth, AppConfig};
 
 /// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.
 ///
@@ -21,6 +21,10 @@ pub struct Cli {
     /// Override [admin].listen (for example 127.0.0.1:9000)
     #[arg(long)]
     pub admin_listen: Option<SocketAddr>,
+
+    /// Override [admin].auth (`off` is accepted only on a loopback admin address)
+    #[arg(long, value_enum)]
+    pub admin_auth: Option<AdminAuth>,
 
     /// Override [data_plane].database
     #[arg(long)]
@@ -61,6 +65,9 @@ impl Cli {
         if let Some(listen) = self.admin_listen {
             config.admin.listen = listen;
         }
+        if let Some(auth) = self.admin_auth {
+            config.admin.auth = auth;
+        }
         if let Some(path) = &self.database {
             config.data_plane.database = Some(path.clone());
         }
@@ -94,6 +101,16 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("fast-proxy").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn admin_auth_overrides_the_config_and_rejects_other_values() {
+        let mut config = AppConfig::default();
+        parse(&["--admin-auth", "off"]).apply(&mut config);
+        assert_eq!(config.admin.auth, AdminAuth::Off);
+        parse(&["--admin-auth", "required"]).apply(&mut config);
+        assert_eq!(config.admin.auth, AdminAuth::Required);
+        assert!(Cli::try_parse_from(["fast-proxy", "--admin-auth", "maybe"]).is_err());
     }
 
     #[test]

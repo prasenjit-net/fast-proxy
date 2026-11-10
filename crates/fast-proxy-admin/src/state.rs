@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::events::Event;
 use crate::runtime_info::RuntimeInfo;
+use crate::security::AdminSecurity;
 use crate::traffic::TrafficSnapshot;
 use crate::ui_config::UiConfig;
 
@@ -32,11 +33,15 @@ pub struct AdminState {
     pub metrics: Arc<Metrics>,
     /// Endpoint health and ejection changes, forwarded to the UI.
     pub endpoint_events: EndpointEvents,
+    /// Authentication, the `Host` allow-list, the throttle and WebSocket tickets.
+    pub security: AdminSecurity,
 }
 
 pub type SharedState = Arc<AdminState>;
 
 impl AdminState {
+    // Each argument is a distinct collaborator the admin plane is wired from.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ui: UiConfig,
         version: &'static str,
@@ -45,6 +50,7 @@ impl AdminState {
         runtime: RuntimeInfo,
         metrics: Arc<Metrics>,
         endpoint_events: EndpointEvents,
+        security: AdminSecurity,
     ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
@@ -60,6 +66,7 @@ impl AdminState {
             access_log,
             metrics,
             endpoint_events,
+            security,
         }
     }
 
@@ -81,6 +88,17 @@ impl AdminState {
             "certificate",
             format!("certificate {change}: {certificate}"),
         );
+    }
+
+    /// Tells every client a token was created or revoked, with a matching
+    /// activity entry. Only the token's name is sent.
+    pub fn token_changed(&self, change: &'static str, token: &str) {
+        self.broadcast(Event::TokenChanged {
+            change,
+            token: token.to_string(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        self.activity("token", format!("token {change}: {token}"));
     }
 
     /// Push a human-readable entry to every client's activity feed.

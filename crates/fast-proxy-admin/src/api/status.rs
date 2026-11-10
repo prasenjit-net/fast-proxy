@@ -42,6 +42,20 @@ pub struct TlsSummary {
     soonest_expiry: Option<SoonestExpiry>,
 }
 
+/// How the admin plane is protected, and what operators have switched on.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminSummary {
+    /// `required` or `off`.
+    auth: &'static str,
+    /// Whether private keys may be sent over the admin channel.
+    protected_channel: bool,
+    /// Tokens that are neither revoked nor expired.
+    active_tokens: usize,
+    /// Maintenance scopes that are on right now.
+    active_maintenance: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -53,6 +67,7 @@ pub struct Status {
     upstreams: UpstreamHealth,
     started_at_ms: i64,
     uptime_secs: u64,
+    admin: AdminSummary,
 }
 
 /// `GET /api/status`: what is running and which config version is live.
@@ -61,6 +76,22 @@ pub async fn status(State(state): State<SharedState>) -> AppResult<Json<Envelope
     let enabled = snapshot.subsystems.values().filter(|s| s.enabled).count();
     let certificates = state.config.list_certificates().await?;
     let now = chrono::Utc::now().timestamp_millis();
+    let active_tokens = state
+        .config
+        .list_tokens()
+        .await?
+        .iter()
+        .filter(|token| {
+            token.revoked_at_ms.is_none() && token.expires_at_ms.is_none_or(|at| at > now)
+        })
+        .count();
+    let active_maintenance = state
+        .config
+        .list_maintenance()
+        .await?
+        .iter()
+        .filter(|row| row.settings.is_active(now))
+        .count();
     let soonest_expiry = certificates
         .iter()
         .filter(|certificate| certificate.state.as_str() != "unreadable")
@@ -100,6 +131,12 @@ pub async fn status(State(state): State<SharedState>) -> AppResult<Json<Envelope
             upstreams: summarize(&snapshot),
             started_at_ms: state.started_at_ms,
             uptime_secs: state.started.elapsed().as_secs(),
+            admin: AdminSummary {
+                auth: state.security.auth_mode(),
+                protected_channel: state.security.channel_protected,
+                active_tokens,
+                active_maintenance,
+            },
         },
         version: snapshot.version,
     }))
