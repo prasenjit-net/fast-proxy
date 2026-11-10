@@ -17,6 +17,8 @@ mod ws;
 #[cfg(test)]
 mod api_tests;
 #[cfg(test)]
+mod audit_trail_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;

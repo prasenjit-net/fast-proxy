@@ -6,6 +6,7 @@ use fast_proxy_model::{CertificateId, SubsystemId};
 use serde::Deserialize;
 
 use super::certificate_dto::{now_ms, CertificateDto};
+use super::change::Change;
 use super::envelope::{Envelope, VersionOnly};
 use super::json::ApiJson;
 use super::key_safety::require_loopback_for_keys;
@@ -70,13 +71,14 @@ pub async fn list_certificates(
 /// `POST /api/certificates` (loopback only: the body carries a private key).
 pub async fn upload_certificate(
     State(state): State<SharedState>,
+    Change(context): Change,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     ApiJson(body): ApiJson<UploadRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
     require_loopback_for_keys(peer)?;
     let applied = state
         .config
-        .upload_certificate(&body.name, &body.cert_pem, &body.key_pem)
+        .upload_certificate(&context, &body.name, &body.cert_pem, &body.key_pem)
         .await?;
     state.certificate_changed("uploaded", &body.name);
     let data = certificate_dto(&state, applied.value.id, applied.value.warnings).await?;
@@ -92,13 +94,14 @@ pub async fn upload_certificate(
 /// `POST /api/certificates/self-signed` (loopback only, like every key-writing call).
 pub async fn generate_self_signed(
     State(state): State<SharedState>,
+    Change(context): Change,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     ApiJson(body): ApiJson<SelfSignedRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
     require_loopback_for_keys(peer)?;
     let applied = state
         .config
-        .generate_self_signed(&body.name, body.names)
+        .generate_self_signed(&context, &body.name, body.names)
         .await?;
     state.certificate_changed("generated", &body.name);
     let data = certificate_dto(&state, applied.value, Vec::new()).await?;
@@ -115,6 +118,7 @@ pub async fn generate_self_signed(
 /// body that carries a key is loopback only.
 pub async fn replace_certificate(
     State(state): State<SharedState>,
+    Change(context): Change,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<ReplaceRequest>,
@@ -126,6 +130,7 @@ pub async fn replace_certificate(
     let applied = state
         .config
         .replace_certificate(
+            &context,
             id,
             CertificateChange {
                 name: body.name,
@@ -145,6 +150,7 @@ pub async fn replace_certificate(
 /// `DELETE /api/certificates/{id}`: 409 while a subsystem uses it.
 pub async fn delete_certificate(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
 ) -> AppResult<Json<VersionOnly>> {
     let id = CertificateId(id);
@@ -156,7 +162,7 @@ pub async fn delete_certificate(
         .find(|summary| summary.id == id)
         .map(|summary| summary.name.as_str().to_string())
         .ok_or_else(|| AppError::NotFound(format!("certificate {} not found", id.0)))?;
-    let applied = state.config.delete_certificate(id).await?;
+    let applied = state.config.delete_certificate(&context, id).await?;
     state.certificate_changed("deleted", &name);
     Ok(Json(VersionOnly {
         version: applied.version,
@@ -167,6 +173,7 @@ pub async fn delete_certificate(
 /// (loopback only).
 pub async fn upload_subsystem_certificate(
     State(state): State<SharedState>,
+    Change(context): Change,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<UploadRequest>,
@@ -175,6 +182,7 @@ pub async fn upload_subsystem_certificate(
     let applied = state
         .config
         .upload_certificate_for_subsystem(
+            &context,
             SubsystemId(id),
             &body.name,
             &body.cert_pem,
@@ -197,6 +205,7 @@ pub async fn upload_subsystem_certificate(
 /// is enabled a development certificate takes over.
 pub async fn detach_subsystem_certificate(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
 ) -> AppResult<Json<VersionOnly>> {
     let id = SubsystemId(id);
@@ -209,7 +218,10 @@ pub async fn detach_subsystem_certificate(
         certificate_id: None,
         ..current.https
     };
-    let applied = state.config.set_subsystem_https(id, https).await?;
+    let applied = state
+        .config
+        .set_subsystem_https(&context, id, https)
+        .await?;
     Ok(Json(VersionOnly {
         version: applied.version,
     }))

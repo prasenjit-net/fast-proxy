@@ -5,6 +5,7 @@
 
 mod common;
 
+use fast_proxy_config_service::ChangeContext;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -66,7 +67,7 @@ async fn two_subsystems_can_share_one_wildcard_certificate() {
     };
     stack
         .service
-        .set_subsystem_https(blog, https)
+        .set_subsystem_https(&ChangeContext::system(), blog, https)
         .await
         .unwrap();
 
@@ -210,6 +211,7 @@ async fn a_replaced_certificate_reaches_the_next_handshake() {
     stack
         .service
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 cert_pem: Some(renewed.chain_pem),
@@ -239,7 +241,7 @@ async fn a_dev_certificate_is_served_the_moment_https_is_enabled() {
     };
     stack
         .service
-        .set_subsystem_https(site, https)
+        .set_subsystem_https(&ChangeContext::system(), site, https)
         .await
         .unwrap();
     let leaf = stack.leaf_seen("shop.example.com").await;

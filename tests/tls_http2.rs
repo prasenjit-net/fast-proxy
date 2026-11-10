@@ -3,6 +3,7 @@
 
 mod common;
 
+use fast_proxy_config_service::ChangeContext;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -334,7 +335,7 @@ async fn hosts_sharing_one_certificate_may_share_a_connection() {
     };
     stack
         .service
-        .set_subsystem_https(blog, https)
+        .set_subsystem_https(&ChangeContext::system(), blog, https)
         .await
         .unwrap();
     let mut client = h2(&stack, Some("shop.example.com"), &ca).await;
@@ -432,6 +433,7 @@ async fn replacing_a_certificate_mid_connection_does_not_misdirect_the_connectio
     stack
         .service
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             fast_proxy_config_service::CertificateChange {
                 cert_pem: Some(renewed.chain_pem),

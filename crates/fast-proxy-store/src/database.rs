@@ -136,29 +136,6 @@ impl Database {
             config,
         })
     }
-
-    /// Applies a change to data that is not configuration (tokens, audit
-    /// settings, maintenance) as a summary-only revision: the configuration
-    /// copy is unchanged, but the version moves, which is how other instances
-    /// sharing the database notice and reload.
-    pub fn write_outside_config<T>(
-        &mut self,
-        actor: &str,
-        mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
-    ) -> Result<Written<T>, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let Mutation { value, summary } = mutate(&tx)?;
-        let config = load::load_all(&tx)?;
-        let version = revision::append(&tx, actor, &summary, &config)?;
-        tx.commit()?;
-        Ok(Written {
-            value,
-            version,
-            config,
-        })
-    }
 }
 
 #[cfg(test)]

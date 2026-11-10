@@ -4,6 +4,7 @@
 mod common;
 
 use common::tls_stack::{Options, Stack};
+use fast_proxy_config_service::ChangeContext;
 use fast_proxy_model::{CertificateId, Hsts, HttpsPolicy, RedirectMode, SubsystemId};
 use fast_proxy_test_pki::{request, ClientHello, TestCa};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -73,7 +74,7 @@ async fn configure(stack: &Stack, shop: &Shop, redirect: RedirectMode, hsts: Hst
     };
     stack
         .service
-        .set_subsystem_https(shop.site, https)
+        .set_subsystem_https(&ChangeContext::system(), shop.site, https)
         .await
         .unwrap();
 }
@@ -177,7 +178,10 @@ async fn no_redirect_when_off_when_https_is_disabled_or_when_tls_is_off() {
         redirect: RedirectMode::Permanent308,
         ..HttpsPolicy::default()
     };
-    off.service.set_subsystem_https(site, https).await.unwrap();
+    off.service
+        .set_subsystem_https(&ChangeContext::system(), site, https)
+        .await
+        .unwrap();
     let answer = plain(&off, "shop.example.com", "/").await;
     assert_eq!(
         answer.status, 200,
@@ -202,7 +206,7 @@ async fn a_host_with_odd_characters_is_never_turned_into_a_location() {
     };
     stack
         .service
-        .set_subsystem_https(wild, https)
+        .set_subsystem_https(&ChangeContext::system(), wild, https)
         .await
         .unwrap();
 

@@ -14,6 +14,9 @@ const LAST_USED_GRANULARITY_MS: i64 = 60_000;
 
 /// A token to store.
 pub struct NewToken {
+    /// A fixed id, for a token whose full text the operator chose in advance;
+    /// `None` lets the database assign one.
+    pub id: Option<TokenId>,
     pub name: TokenName,
     pub role: Role,
     pub secret_hash: SecretHash,
@@ -52,9 +55,10 @@ const ROW_COLUMNS: &str =
 /// Stores a token created at `now_ms`; a duplicate name is a `Conflict`.
 pub fn create(conn: &Connection, token: &NewToken, now_ms: i64) -> Result<TokenId, StoreError> {
     conn.execute(
-        "INSERT INTO admin_token (name, role, secret_hash, created_at, created_by, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO admin_token (id, name, role, secret_hash, created_at, created_by, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
+            token.id.map(|id| id.0),
             token.name.as_str(),
             token.role.as_str(),
             token.secret_hash.as_bytes(),

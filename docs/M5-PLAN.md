@@ -415,7 +415,7 @@ carry-over.
 
 ### Workstream CS: Config service
 
-- [ ] **CS1 (L) The actor and the audit transaction.** `ChangeContext { actor, role,
+- [x] **CS1 (L) The actor and the audit transaction.** `ChangeContext { actor, role,
   source, request_id }` becomes part of `apply`; the audit row is written in the same
   transaction as the change and its revision, the revision names its actor, and the
   action name and target come from a small typed `Audited` description the mutation
@@ -423,13 +423,13 @@ carry-over.
   *Done when:* tests show a committed change always has exactly one audit row and one
   actor on its revision, a vetoed change has neither, and concurrent writes keep their
   own actors.
-- [ ] **CS2 (M) Token writes and the token set.** Create (returning the secret once),
+- [x] **CS2 (M) Token writes and the token set.** Create (returning the secret once),
   revoke and bootstrap through the one writer, each a summary-only revision with an audit
   entry; the in-memory token set is rebuilt on commit and on a sync reload.
   *Done when:* tests cover the last-admin protection, bootstrap only when no admin token
   exists, the environment bootstrap, and two services on one database seeing a new token
   and a revocation within the interval.
-- [ ] **CS3 (L) Maintenance writes, snapshot input and the sweeper.** Set, update and
+- [x] **CS3 (L) Maintenance writes, snapshot input and the sweeper.** Set, update and
   clear a scope through the one writer (summary-only revisions, audit entries); the
   compile step takes the active maintenance rows as an input; a sweeper clears expired
   rows with a normal write (clock passed in); an interval of zero in tests runs it on
@@ -437,15 +437,29 @@ carry-over.
   *Done when:* tests cover each scope, replacing, cascade on delete, expiry clearing once
   across two services on one database, a restart keeping state and expiry, and a veto
   leaving everything as it was.
-- [ ] **CS4 (M) Audit maintenance.** Retention pruning on a timer, and the audit entries
+- [x] **CS4 (M) Audit maintenance.** Retention pruning on a timer, and the audit entries
   of the sweeper (`system` actor).
   *Done when:* tests cover pruning by age and by count and that pruning never removes the
   newest entries.
-- [ ] **CS5 (S) Reload.** `reload()` re-reads the database and recompiles unconditionally
+- [x] **CS5 (S) Reload.** `reload()` re-reads the database and recompiles unconditionally
   (the sync reload without the version check), returning the live version; shares the
   code path of the sync poll.
   *Done when:* a test edits the database file behind the service's back and `reload()`
   makes it live, and a failing reload leaves the old snapshot.
+
+**PR3 notes (decisions made while building):**
+- `apply` takes a `ChangeContext` (who, from where) and an `Audited` (action, target) before the
+  mutation, so a write cannot be made unattributed; the audit row is written inside the same
+  transaction, the revision names the actor. Admin handlers get the context from a `Change`
+  extractor (`anonymous` with the peer address until A1 puts the token there).
+- Tokens and maintenance go through `apply` too (a revision with an unchanged configuration copy,
+  which bumps the cluster generation); the store's `write_outside_config` was therefore removed.
+- CS3's "a veto leaves everything as it was" needs the compile input of **R1** (PR6); the writes,
+  the sweeper and the cascade are done and tested here.
+- **Q1 moves to PR4**: the HTTP-level harness switch (`TestApp` token helper, `auth = "off"` in the
+  binary tests) has nothing to switch until the middleware (A1) exists. Config-service-level
+  callers and tests were migrated here.
+- C3: `reload_under_load` ran green 10 of 10 in a loop on this PR.
 
 ### Workstream R: Routing and compile
 

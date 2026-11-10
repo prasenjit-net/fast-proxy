@@ -11,6 +11,7 @@ fn db() -> Database {
 
 fn token(name: &str, role: Role) -> NewToken {
     NewToken {
+        id: None,
         name: TokenName::parse(name).unwrap(),
         role,
         secret_hash: SecretHash::new([name.len() as u8; 32]),

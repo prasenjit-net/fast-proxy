@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use super::change::Change;
 use super::envelope::{Envelope, VersionOnly};
 use super::json::ApiJson;
 use crate::state::SharedState;
@@ -70,9 +71,13 @@ pub async fn list_ca_bundles(
 /// `POST /api/ca-bundles`
 pub async fn upload_ca_bundle(
     State(state): State<SharedState>,
+    Change(context): Change,
     ApiJson(body): ApiJson<CaBundleRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CaBundleDto>>)> {
-    let applied = state.config.upload_ca_bundle(&body.name, &body.pem).await?;
+    let applied = state
+        .config
+        .upload_ca_bundle(&context, &body.name, &body.pem)
+        .await?;
     let dto = bundle_dtos(&state)
         .await?
         .into_iter()
@@ -90,9 +95,10 @@ pub async fn upload_ca_bundle(
 /// `DELETE /api/ca-bundles/{id}`: 409 while an upstream names the bundle.
 pub async fn delete_ca_bundle(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
 ) -> AppResult<Json<VersionOnly>> {
-    let applied = state.config.delete_ca_bundle(id).await?;
+    let applied = state.config.delete_ca_bundle(&context, id).await?;
     Ok(Json(VersionOnly {
         version: applied.version,
     }))

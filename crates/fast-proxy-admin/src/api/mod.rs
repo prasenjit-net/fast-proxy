@@ -3,6 +3,7 @@
 mod ca_bundles;
 mod certificate_dto;
 mod certificates;
+mod change;
 mod config_view;
 mod detail;
 mod effective_state;

@@ -4,6 +4,7 @@
 //! response, event or metric ever carries key material.
 
 use axum::http::{Method, StatusCode};
+use fast_proxy_config_service::{Audited, ChangeContext};
 use fast_proxy_routing::SniLookup;
 use fast_proxy_test_pki::{Issued, LeafSpec, TestCa};
 use serde_json::{json, Value};
@@ -588,24 +589,28 @@ async fn ca_bundles_are_uploaded_listed_and_deleted_with_409_while_named() {
         body["data"]["id"].as_i64().unwrap()
     };
     app.config
-        .apply(move |conn| {
-            let mut fields = fast_proxy_store::UpstreamFields {
-                name: "backend".into(),
-                policy: fast_proxy_model::GroupPolicy::default(),
-            };
-            fields.policy.tls.enabled = true;
-            fields.policy.tls.ca = "corp".into();
-            fast_proxy_store::repository::upstreams::update(
-                conn,
-                fast_proxy_model::SubsystemId(id),
-                fast_proxy_model::UpstreamGroupId(upstream_id),
-                &fields,
-            )?;
-            Ok(fast_proxy_store::Mutation {
-                value: (),
-                summary: "tls".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                let mut fields = fast_proxy_store::UpstreamFields {
+                    name: "backend".into(),
+                    policy: fast_proxy_model::GroupPolicy::default(),
+                };
+                fields.policy.tls.enabled = true;
+                fields.policy.tls.ca = "corp".into();
+                fast_proxy_store::repository::upstreams::update(
+                    conn,
+                    fast_proxy_model::SubsystemId(id),
+                    fast_proxy_model::UpstreamGroupId(upstream_id),
+                    &fields,
+                )?;
+                Ok(fast_proxy_store::Mutation {
+                    value: (),
+                    summary: "tls".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let (status, body) = app.delete(&format!("/api/ca-bundles/{bundle}")).await;
@@ -740,23 +745,27 @@ async fn the_resolver_shows_the_redirect_https_service_and_upstream_scheme() {
     assert_eq!(resolved["data"]["route"]["upstreamScheme"], "http");
 
     app.config
-        .apply(move |conn| {
-            let mut fields = fast_proxy_store::UpstreamFields {
-                name: "backend".into(),
-                policy: fast_proxy_model::GroupPolicy::default(),
-            };
-            fields.policy.tls.enabled = true;
-            fast_proxy_store::repository::upstreams::update(
-                conn,
-                fast_proxy_model::SubsystemId(id),
-                fast_proxy_model::UpstreamGroupId(upstream),
-                &fields,
-            )?;
-            Ok(fast_proxy_store::Mutation {
-                value: (),
-                summary: "tls".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                let mut fields = fast_proxy_store::UpstreamFields {
+                    name: "backend".into(),
+                    policy: fast_proxy_model::GroupPolicy::default(),
+                };
+                fields.policy.tls.enabled = true;
+                fast_proxy_store::repository::upstreams::update(
+                    conn,
+                    fast_proxy_model::SubsystemId(id),
+                    fast_proxy_model::UpstreamGroupId(upstream),
+                    &fields,
+                )?;
+                Ok(fast_proxy_store::Mutation {
+                    value: (),
+                    summary: "tls".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let (_, resolved) = app

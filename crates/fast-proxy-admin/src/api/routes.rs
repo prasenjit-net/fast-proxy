@@ -9,12 +9,14 @@ use fast_proxy_store::repository::{routes, subsystems};
 use fast_proxy_store::{Mutation, RouteFields};
 use serde::Deserialize;
 
+use super::change::Change;
 use super::detail::{millis_of, routes_in_match_order, subsystem_name, RetryDto, RouteDto};
 use super::envelope::{Envelope, VersionOnly};
 use super::input::FieldErrors;
 use super::json::ApiJson;
 use crate::state::SharedState;
 use crate::AppResult;
+use fast_proxy_config_service::Audited;
 
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_RESPONSE_TIMEOUT_MS: u64 = 30_000;
@@ -143,6 +145,7 @@ pub async fn list_routes(
 /// `POST /api/subsystems/{id}/routes`
 pub async fn create_route(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<RouteRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<RouteDto>>)> {
@@ -151,13 +154,17 @@ pub async fn create_route(
     let for_response = fields.clone();
     let applied = state
         .config
-        .apply(move |conn| {
-            let subsystem = subsystem_name(conn, id)?;
-            Ok(Mutation {
-                value: routes::create(conn, id, &fields)?,
-                summary: format!("route created: {} in {subsystem}", fields.prefix.as_str()),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new("route.create", format!("subsystem:{}", id.0)),
+            move |conn| {
+                let subsystem = subsystem_name(conn, id)?;
+                Ok(Mutation {
+                    value: routes::create(conn, id, &fields)?,
+                    summary: format!("route created: {} in {subsystem}", fields.prefix.as_str()),
+                })
+            },
+        )
         .await?;
     Ok((
         StatusCode::CREATED,
@@ -171,6 +178,7 @@ pub async fn create_route(
 /// `PUT /api/subsystems/{id}/routes/{route_id}`
 pub async fn update_route(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path((id, route_id)): Path<(i64, i64)>,
     ApiJson(body): ApiJson<RouteRequest>,
 ) -> AppResult<Json<Envelope<RouteDto>>> {
@@ -179,14 +187,21 @@ pub async fn update_route(
     let for_response = fields.clone();
     let applied = state
         .config
-        .apply(move |conn| {
-            let subsystem = subsystem_name(conn, id)?;
-            routes::update(conn, id, route_id, &fields)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("route updated: {} in {subsystem}", fields.prefix.as_str()),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new(
+                "route.update",
+                format!("subsystem:{}/route:{}", id.0, route_id.0),
+            ),
+            move |conn| {
+                let subsystem = subsystem_name(conn, id)?;
+                routes::update(conn, id, route_id, &fields)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("route updated: {} in {subsystem}", fields.prefix.as_str()),
+                })
+            },
+        )
         .await?;
     Ok(Json(Envelope {
         data: dto_from(route_id, &for_response),
@@ -197,19 +212,27 @@ pub async fn update_route(
 /// `DELETE /api/subsystems/{id}/routes/{route_id}`
 pub async fn delete_route(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path((id, route_id)): Path<(i64, i64)>,
 ) -> AppResult<Json<VersionOnly>> {
     let (id, route_id) = (SubsystemId(id), RouteId(route_id));
     let applied = state
         .config
-        .apply(move |conn| {
-            let subsystem = subsystem_name(conn, id)?;
-            routes::delete(conn, id, route_id)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("route deleted from {subsystem}"),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new(
+                "route.delete",
+                format!("subsystem:{}/route:{}", id.0, route_id.0),
+            ),
+            move |conn| {
+                let subsystem = subsystem_name(conn, id)?;
+                routes::delete(conn, id, route_id)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("route deleted from {subsystem}"),
+                })
+            },
+        )
         .await?;
     Ok(Json(VersionOnly {
         version: applied.version,

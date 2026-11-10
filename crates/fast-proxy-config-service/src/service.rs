@@ -1,18 +1,25 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
+use fast_proxy_auth::TokenCache;
 use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_routing::{compile_with_tls, Snapshot, SnapshotHolder};
-use fast_proxy_store::repository::{certificates, load, vault};
+use fast_proxy_store::repository::{audit, certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
 use fast_proxy_telemetry::{Metrics, ReloadOutcome, SyncResult};
 use fast_proxy_tls::certificate_readings;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::change_context::committed_entry;
 use crate::dev_certificates;
 use crate::metric_series::live_endpoints;
 use crate::tls_state::{Prepared, TlsSettings, TlsState, VaultStatus};
-use crate::StartError;
+use crate::{Audited, ChangeContext, StartError};
+
+/// The message of the `Conflict` a change returns when, on a second look inside
+/// its transaction, there is nothing left to do (another instance got there
+/// first). Callers translate it into success.
+pub(crate) const NOTHING_TO_DO: &str = "nothing to do";
 
 /// Broadcast after every applied change.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,13 +38,16 @@ pub struct Applied<T> {
 
 /// Owns the store and the live snapshot, and is the only writer of both.
 pub struct ConfigService {
-    store: Store,
+    pub(crate) store: Store,
     holder: Arc<SnapshotHolder>,
     /// Held across persist + swap so commit order always equals swap order.
     writer: Mutex<()>,
     changes: broadcast::Sender<ConfigChanged>,
     metrics: Arc<Metrics>,
     pub(crate) tls: Arc<TlsState>,
+    /// Names this process in audit entries, so a shared log says which instance wrote.
+    instance: String,
+    pub(crate) tokens: Arc<TokenCache>,
 }
 
 impl ConfigService {
@@ -104,7 +114,10 @@ impl ConfigService {
             changes,
             metrics,
             tls,
+            instance: new_instance_id(),
+            tokens: Arc::new(TokenCache::new()),
         };
+        service.refresh_tokens().await?;
         if tls_enabled {
             service.go_live_with_tls().await?;
         }
@@ -127,12 +140,16 @@ impl ConfigService {
             })
             .await?;
         if needs_certificates {
-            self.apply(|_| {
-                Ok(Mutation {
-                    value: (),
-                    summary: "startup: development certificates generated".into(),
-                })
-            })
+            self.apply(
+                &ChangeContext::system(),
+                Audited::new("certificate.generate", "development certificates"),
+                |_| {
+                    Ok(Mutation {
+                        value: (),
+                        summary: "startup: development certificates generated".into(),
+                    })
+                },
+            )
             .await?;
             return Ok(());
         }
@@ -216,10 +233,28 @@ impl ConfigService {
         publish_certificates(&self.metrics, &prepared);
         self.tls.install(prepared.cache);
         self.holder.swap(snapshot);
+        self.refresh_tokens().await?;
         Ok(ConfigChanged {
             version,
             summary: "configuration synchronized from the database".into(),
         })
+    }
+
+    /// Re-reads the database now and recompiles, whether or not its version is
+    /// ahead of the live one: for a database edited by hand, an instance that
+    /// does not poll, or a restore. Returns the version now live. A stored
+    /// configuration that does not compile leaves the old snapshot in place.
+    pub async fn reload(&self) -> Result<u64, StartError> {
+        let _writer = self.writer.lock().await;
+        let result = self.reload_from_database().await;
+        match &result {
+            Ok(changed) => {
+                self.metrics.config_reload(ReloadOutcome::Applied);
+                let _ = self.changes.send(changed.clone());
+            }
+            Err(_) => self.metrics.config_reload(ReloadOutcome::Rejected),
+        }
+        result.map(|changed| changed.version)
     }
 
     /// Polls for changes made by other instances every `interval` until
@@ -277,11 +312,18 @@ impl ConfigService {
     ///    violated rule (the transaction rolls back, the old snapshot stays),
     /// 4. commit and record the revision,
     /// 5. swap the new snapshot in and broadcast [`ConfigChanged`].
+    ///
+    /// `context` and `audited` say who made the change and what it was: the
+    /// revision names the actor, and the audit entry is written in the same
+    /// transaction, so a committed change always has exactly one entry and a
+    /// vetoed one has none.
     pub async fn apply<T: Send + 'static>(
         &self,
+        context: &ChangeContext,
+        audited: Audited,
         mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError> + Send + 'static,
     ) -> Result<Applied<T>, StoreError> {
-        let result = self.apply_under_lock(mutate).await;
+        let result = self.apply_under_lock(context, audited, mutate).await;
         match &result {
             Ok(applied) => {
                 self.metrics.set_config_version(applied.version);
@@ -294,6 +336,8 @@ impl ConfigService {
 
     async fn apply_under_lock<T: Send + 'static>(
         &self,
+        context: &ChangeContext,
+        audited: Audited,
         mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError> + Send + 'static,
     ) -> Result<Applied<T>, StoreError> {
         let _writer = self.writer.lock().await;
@@ -302,9 +346,28 @@ impl ConfigService {
         // snapshot from changing under us.
         let previous = self.holder.load().runtime_registry();
         let tls = self.tls.clone();
+        let context = context.clone();
+        let instance = self.instance.clone();
         let (written, compiled, summary, prepared) = self
             .store
-            .run(move |db| persist_and_compile(db, mutate, &previous, &tls))
+            .run(move |db| {
+                let actor = context.actor.clone();
+                let audited_mutate = move |conn: &Connection| {
+                    let mutation = mutate(conn)?;
+                    let version = revision::current_version(conn)? + 1;
+                    let entry = committed_entry(
+                        &context,
+                        &audited,
+                        &instance,
+                        &mutation.summary,
+                        version,
+                        now_ms(),
+                    );
+                    audit::append(conn, &entry)?;
+                    Ok(mutation)
+                };
+                persist_and_compile(db, &actor, audited_mutate, &previous, &tls)
+            })
             .await?;
         let mut snapshot = compiled.ok_or_else(|| {
             StoreError::Internal("a committed change produced no snapshot".into())
@@ -315,6 +378,7 @@ impl ConfigService {
         publish_certificates(&self.metrics, &prepared);
         self.tls.install(prepared.cache);
         self.holder.swap(snapshot);
+        self.refresh_tokens().await?;
         // send() only fails when nobody is subscribed, which is fine.
         let _ = self.changes.send(ConfigChanged {
             version: written.version,
@@ -327,14 +391,22 @@ impl ConfigService {
     }
 
     /// Re-applies the configuration stored in `version` as a new revision.
-    pub async fn rollback(&self, version: u64) -> Result<Applied<()>, StoreError> {
-        self.apply(move |conn| {
-            fast_proxy_store::revision::restore(conn, version)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("rollback to v{version}"),
-            })
-        })
+    pub async fn rollback(
+        &self,
+        context: &ChangeContext,
+        version: u64,
+    ) -> Result<Applied<()>, StoreError> {
+        self.apply(
+            context,
+            Audited::new("revision.rollback", format!("v{version}")),
+            move |conn| {
+                fast_proxy_store::revision::restore(conn, version)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("rollback to v{version}"),
+                })
+            },
+        )
         .await
     }
 }
@@ -355,6 +427,11 @@ fn publish_certificates(metrics: &Metrics, prepared: &Prepared) {
     metrics.set_certificate_readings(&certificate_readings(&prepared.cache, now_ms()));
 }
 
+/// A name for this process in audit entries: its pid and start time.
+fn new_instance_id() -> String {
+    format!("{}-{:x}", std::process::id(), now_ms())
+}
+
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -367,6 +444,7 @@ pub(crate) fn now_ms() -> i64 {
 /// veto (with the would-be certificates), commit.
 fn persist_and_compile<T>(
     db: &mut Database,
+    actor: &str,
     mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
     previous: &RuntimeRegistry,
     tls: &TlsState,
@@ -374,7 +452,8 @@ fn persist_and_compile<T>(
     let mut compiled = None;
     let mut summary = String::new();
     let prepared: RefCell<Option<Prepared>> = RefCell::new(None);
-    let written = db.write(
+    let written = db.write_as(
+        actor,
         |conn| {
             let mutation = mutate(conn)?;
             summary = mutation.summary.clone();

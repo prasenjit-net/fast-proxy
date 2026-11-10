@@ -7,7 +7,7 @@ use fast_proxy_store::repository::ca_bundles::{self, NewCaBundle};
 use fast_proxy_store::{Mutation, StoreError};
 use fast_proxy_tls::{parse_ca_bundle, CaCertInfo};
 
-use crate::{Applied, ConfigService};
+use crate::{Applied, Audited, ChangeContext, ConfigService};
 
 /// A stored CA bundle as the admin plane lists it.
 #[derive(Debug, Clone)]
@@ -22,6 +22,7 @@ impl ConfigService {
     /// Stores a CA bundle. Fails with `pem` when it holds no usable certificate.
     pub async fn upload_ca_bundle(
         &self,
+        context: &ChangeContext,
         name: &str,
         pem: &str,
     ) -> Result<Applied<i64>, StoreError> {
@@ -32,50 +33,71 @@ impl ConfigService {
             pem: pem.to_string(),
             cert_count: u32::try_from(infos.len()).unwrap_or(u32::MAX),
         };
-        self.apply(move |conn| {
-            Ok(Mutation {
-                value: ca_bundles::insert(conn, &bundle)?,
-                summary: format!("CA bundle uploaded: {}", name.as_str()),
-            })
-        })
+        self.apply(
+            context,
+            Audited::new("ca_bundle.upload", name.as_str()),
+            move |conn| {
+                Ok(Mutation {
+                    value: ca_bundles::insert(conn, &bundle)?,
+                    summary: format!("CA bundle uploaded: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 
     /// Replaces the PEM of a CA bundle, keeping its name and id. Groups that name
     /// it get a new client configuration, which new connections use.
-    pub async fn replace_ca_bundle(&self, id: i64, pem: &str) -> Result<Applied<()>, StoreError> {
+    pub async fn replace_ca_bundle(
+        &self,
+        context: &ChangeContext,
+        id: i64,
+        pem: &str,
+    ) -> Result<Applied<()>, StoreError> {
         let infos = parse_ca_bundle(pem)?;
         let pem = pem.to_string();
-        self.apply(move |conn| {
-            let current = ca_bundles::get(conn, id)?.bundle;
-            let name = current.name.clone();
-            ca_bundles::update(
-                conn,
-                id,
-                &NewCaBundle {
-                    name: current.name,
-                    pem,
-                    cert_count: u32::try_from(infos.len()).unwrap_or(u32::MAX),
-                },
-            )?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("CA bundle replaced: {}", name.as_str()),
-            })
-        })
+        self.apply(
+            context,
+            Audited::new("ca_bundle.replace", format!("ca_bundle:{id}")),
+            move |conn| {
+                let current = ca_bundles::get(conn, id)?.bundle;
+                let name = current.name.clone();
+                ca_bundles::update(
+                    conn,
+                    id,
+                    &NewCaBundle {
+                        name: current.name,
+                        pem,
+                        cert_count: u32::try_from(infos.len()).unwrap_or(u32::MAX),
+                    },
+                )?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("CA bundle replaced: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 
     /// Deletes a CA bundle; a `Conflict` while an upstream group names it.
-    pub async fn delete_ca_bundle(&self, id: i64) -> Result<Applied<()>, StoreError> {
-        self.apply(move |conn| {
-            let name = ca_bundles::get(conn, id)?.bundle.name;
-            ca_bundles::delete(conn, id)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("CA bundle deleted: {}", name.as_str()),
-            })
-        })
+    pub async fn delete_ca_bundle(
+        &self,
+        context: &ChangeContext,
+        id: i64,
+    ) -> Result<Applied<()>, StoreError> {
+        self.apply(
+            context,
+            Audited::new("ca_bundle.delete", format!("ca_bundle:{id}")),
+            move |conn| {
+                let name = ca_bundles::get(conn, id)?.bundle.name;
+                ca_bundles::delete(conn, id)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("CA bundle deleted: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 

@@ -551,6 +551,16 @@ mod outside_config {
     use crate::repository::maintenance;
     use crate::repository::tokens::{self, NewToken};
 
+    /// A change to data outside the configuration: the configuration copy in
+    /// the revision stays as it was.
+    fn write_outside<T>(
+        db: &mut Database,
+        actor: &str,
+        mutate: impl FnOnce(&rusqlite::Connection) -> Result<Mutation<T>, StoreError>,
+    ) -> Result<crate::Written<T>, StoreError> {
+        db.write_as(actor, mutate, |_| Ok(()))
+    }
+
     fn maintenance_settings() -> MaintenanceSettings {
         MaintenanceSettings {
             message: "down".into(),
@@ -565,6 +575,7 @@ mod outside_config {
 
     fn new_token(name: &str) -> NewToken {
         NewToken {
+            id: None,
             name: TokenName::parse(name).unwrap(),
             role: Role::Admin,
             secret_hash: SecretHash::new([0xAB; 32]),
@@ -603,15 +614,14 @@ mod outside_config {
         let mut db = db();
         seed(&mut db, "shop", "s.example.com");
         let before = db.load_all().unwrap();
-        let written = db
-            .write_outside_config("ann", |c| {
-                tokens::create(c, &new_token("ci"), 5)?;
-                Ok(Mutation {
-                    value: (),
-                    summary: "token created: ci".into(),
-                })
+        let written = write_outside(&mut db, "ann", |c| {
+            tokens::create(c, &new_token("ci"), 5)?;
+            Ok(Mutation {
+                value: (),
+                summary: "token created: ci".into(),
             })
-            .unwrap();
+        })
+        .unwrap();
         assert_eq!(written.version, 2);
         assert_eq!(written.config, before);
         let revision = db.read(|c| get(c, 2)).unwrap();
@@ -623,7 +633,7 @@ mod outside_config {
     #[test]
     fn a_failed_change_outside_config_leaves_nothing_behind() {
         let mut db = db();
-        let result: Result<_, _> = db.write_outside_config("ann", |c| {
+        let result: Result<_, _> = write_outside(&mut db, "ann", |c| {
             tokens::create(c, &new_token("ci"), 5)?;
             tokens::create(c, &new_token("ci"), 5)?;
             Ok(Mutation {
@@ -640,7 +650,7 @@ mod outside_config {
     fn a_rollback_leaves_tokens_and_maintenance_untouched() {
         let mut db = db();
         let fixture = seed(&mut db, "shop", "s.example.com");
-        db.write_outside_config("ann", |c| {
+        write_outside(&mut db, "ann", |c| {
             tokens::create(c, &new_token("ci"), 5)?;
             maintenance::set(c, MaintenanceTarget::Global, &maintenance_settings())?;
             maintenance::set(
@@ -668,7 +678,7 @@ mod outside_config {
         let mut db = db();
         let early = seed(&mut db, "shop", "s.example.com");
         let later = seed(&mut db, "blog", "b.example.com");
-        db.write_outside_config("ann", |c| {
+        write_outside(&mut db, "ann", |c| {
             maintenance::set(
                 c,
                 MaintenanceTarget::Subsystem(early.subsystem),
@@ -700,7 +710,7 @@ mod outside_config {
     #[test]
     fn no_revision_contains_a_secret_hash() {
         let mut db = db();
-        db.write_outside_config("ann", |c| {
+        write_outside(&mut db, "ann", |c| {
             tokens::create(c, &new_token("ci"), 5)?;
             Ok(Mutation {
                 value: (),

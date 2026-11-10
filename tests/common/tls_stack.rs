@@ -2,6 +2,7 @@
 //! for the TLS end-to-end tests: certificates issued by an in-memory CA are
 //! uploaded as PEM strings, so no files are involved.
 
+use fast_proxy_config_service::{Audited, ChangeContext};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -218,56 +219,60 @@ impl Stack {
     ) -> SubsystemId {
         let endpoints: Vec<SocketAddr> = endpoints.to_vec();
         self.service
-            .apply(move |conn| {
-                let id = subsystems::create(
-                    conn,
-                    &SubsystemFields {
-                        name: SubsystemName::parse(name).unwrap(),
-                        enabled: true,
-                        description: String::new(),
-                        https: HttpsPolicy::default(),
-                    },
-                )?;
-                hosts::add(conn, id, &HostPattern::parse(host).unwrap())?;
-                let group = upstreams::create(
-                    conn,
-                    id,
-                    &UpstreamFields {
-                        name: "backend".into(),
-                        policy: GroupPolicy {
-                            tls,
-                            ..GroupPolicy::default()
+            .apply(
+                &ChangeContext::system(),
+                Audited::new("test.change", "test"),
+                move |conn| {
+                    let id = subsystems::create(
+                        conn,
+                        &SubsystemFields {
+                            name: SubsystemName::parse(name).unwrap(),
+                            enabled: true,
+                            description: String::new(),
+                            https: HttpsPolicy::default(),
                         },
-                    },
-                    &endpoints
-                        .iter()
-                        .map(|addr| EndpointFields {
-                            addr: EndpointAddr::parse(&addr.to_string()).unwrap(),
-                            weight: 1,
-                            state: EndpointState::Enabled,
-                        })
-                        .collect::<Vec<_>>(),
-                )?;
-                routes::create(
-                    conn,
-                    id,
-                    &RouteFields {
-                        prefix: RoutePrefix::parse("/").unwrap(),
-                        upstream_group_id: group,
-                        strip_prefix: false,
-                        upstream_prefix: UpstreamPrefix::default(),
-                        preserve_host: true,
-                        connect_timeout: Duration::from_secs(5),
-                        response_timeout: Duration::from_secs(30),
-                        retry: RetryPolicy::default(),
-                        enabled: true,
-                    },
-                )?;
-                Ok(Mutation {
-                    value: id,
-                    summary: format!("site {name}"),
-                })
-            })
+                    )?;
+                    hosts::add(conn, id, &HostPattern::parse(host).unwrap())?;
+                    let group = upstreams::create(
+                        conn,
+                        id,
+                        &UpstreamFields {
+                            name: "backend".into(),
+                            policy: GroupPolicy {
+                                tls,
+                                ..GroupPolicy::default()
+                            },
+                        },
+                        &endpoints
+                            .iter()
+                            .map(|addr| EndpointFields {
+                                addr: EndpointAddr::parse(&addr.to_string()).unwrap(),
+                                weight: 1,
+                                state: EndpointState::Enabled,
+                            })
+                            .collect::<Vec<_>>(),
+                    )?;
+                    routes::create(
+                        conn,
+                        id,
+                        &RouteFields {
+                            prefix: RoutePrefix::parse("/").unwrap(),
+                            upstream_group_id: group,
+                            strip_prefix: false,
+                            upstream_prefix: UpstreamPrefix::default(),
+                            preserve_host: true,
+                            connect_timeout: Duration::from_secs(5),
+                            response_timeout: Duration::from_secs(30),
+                            retry: RetryPolicy::default(),
+                            enabled: true,
+                        },
+                    )?;
+                    Ok(Mutation {
+                        value: id,
+                        summary: format!("site {name}"),
+                    })
+                },
+            )
             .await
             .unwrap()
             .value
@@ -284,7 +289,12 @@ impl Stack {
         let issued = ca.issue(&LeafSpec::new(names));
         let id = self
             .service
-            .upload_certificate(name, &issued.chain_pem, &issued.key_pem)
+            .upload_certificate(
+                &ChangeContext::system(),
+                name,
+                &issued.chain_pem,
+                &issued.key_pem,
+            )
             .await
             .unwrap()
             .value
@@ -294,7 +304,10 @@ impl Stack {
             certificate_id: Some(id),
             ..HttpsPolicy::default()
         };
-        self.service.set_subsystem_https(site, https).await.unwrap();
+        self.service
+            .set_subsystem_https(&ChangeContext::system(), site, https)
+            .await
+            .unwrap();
         id
     }
 

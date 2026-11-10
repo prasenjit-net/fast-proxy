@@ -653,6 +653,7 @@ name = "fast-proxy-config-service"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
@@ -660,6 +661,7 @@ dependencies = [
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
  "fast-proxy-tls",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

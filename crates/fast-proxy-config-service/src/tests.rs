@@ -1,3 +1,4 @@
+use crate::{Audited, ChangeContext};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -99,11 +100,11 @@ async fn an_empty_database_starts_with_an_empty_snapshot_at_version_zero() {
 async fn an_applied_change_is_live_immediately() {
     let service = service().await;
     let applied = service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     assert_eq!(applied.version, 1);
@@ -118,19 +119,19 @@ async fn an_applied_change_is_live_immediately() {
 async fn two_subsystems_route_to_different_backends() {
     let service = service().await;
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     service
-        .apply(create_site(
-            "blog",
-            "blog.example.com".into(),
-            "127.0.0.1:3001",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("blog", "blog.example.com".into(), "127.0.0.1:3001"),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -148,11 +149,11 @@ async fn two_subsystems_route_to_different_backends() {
 async fn a_change_that_fails_to_compile_leaves_the_database_and_snapshot_untouched() {
     let service = service().await;
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     let before = stored_state(&service).await;
@@ -160,13 +161,17 @@ async fn a_change_that_fails_to_compile_leaves_the_database_and_snapshot_untouch
     // The store's own API cannot do this; raw SQL removes the group's only
     // endpoint, which the compiler rejects.
     let err = service
-        .apply(|conn| {
-            conn.execute("DELETE FROM upstream_endpoint", [])?;
-            Ok(Mutation {
-                value: (),
-                summary: "sneaky".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            |conn| {
+                conn.execute("DELETE FROM upstream_endpoint", [])?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "sneaky".into(),
+                })
+            },
+        )
         .await
         .unwrap_err();
 
@@ -186,19 +191,19 @@ async fn a_change_that_fails_to_compile_leaves_the_database_and_snapshot_untouch
 async fn a_store_error_leaves_the_snapshot_untouched() {
     let service = service().await;
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     let err = service
-        .apply(create_site(
-            "shop",
-            "other.example.com".into(),
-            "127.0.0.1:3001",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "other.example.com".into(), "127.0.0.1:3001"),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, StoreError::Conflict(_)));
@@ -210,27 +215,31 @@ async fn a_store_error_leaves_the_snapshot_untouched() {
 async fn rollback_makes_the_earlier_configuration_live_as_a_new_revision() {
     let service = service().await;
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     let shop = SubsystemId(1);
     service
-        .apply(move |conn| {
-            subsystems::delete(conn, shop)?;
-            Ok(Mutation {
-                value: (),
-                summary: "subsystem deleted".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                subsystems::delete(conn, shop)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "subsystem deleted".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     assert_eq!(backend_for(&service, "shop.example.com"), None);
 
-    let applied = service.rollback(1).await.unwrap();
+    let applied = service.rollback(&ChangeContext::system(), 1).await.unwrap();
     assert_eq!(applied.version, 3);
     assert_eq!(service.snapshot_holder().load().version, 3);
     assert_eq!(
@@ -242,7 +251,10 @@ async fn rollback_makes_the_earlier_configuration_live_as_a_new_revision() {
 #[tokio::test]
 async fn rolling_back_to_a_missing_revision_is_not_found_and_changes_nothing() {
     let service = service().await;
-    let err = service.rollback(42).await.unwrap_err();
+    let err = service
+        .rollback(&ChangeContext::system(), 42)
+        .await
+        .unwrap_err();
     assert!(matches!(err, StoreError::NotFound(_)));
     assert_eq!(service.snapshot_holder().load().version, 0);
 }
@@ -252,14 +264,14 @@ async fn every_applied_change_is_broadcast_with_its_summary() {
     let service = service().await;
     let mut events = service.subscribe();
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
-    service.rollback(1).await.unwrap();
+    service.rollback(&ChangeContext::system(), 1).await.unwrap();
 
     assert_eq!(
         events.recv().await.unwrap(),
@@ -281,7 +293,10 @@ async fn every_applied_change_is_broadcast_with_its_summary() {
 async fn failed_changes_are_not_broadcast() {
     let service = service().await;
     let mut events = service.subscribe();
-    service.rollback(9).await.unwrap_err();
+    service
+        .rollback(&ChangeContext::system(), 9)
+        .await
+        .unwrap_err();
     assert!(events.try_recv().is_err());
 }
 
@@ -294,11 +309,11 @@ async fn the_configuration_survives_a_restart() {
             .await
             .unwrap();
         service
-            .apply(create_site(
-                "shop",
-                "shop.example.com".into(),
-                "127.0.0.1:3000",
-            ))
+            .apply(
+                &ChangeContext::system(),
+                Audited::new("test.change", "test"),
+                create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+            )
             .await
             .unwrap();
     }
@@ -356,11 +371,11 @@ async fn concurrent_applies_are_serialized_and_the_snapshot_matches_the_database
             tokio::spawn(async move {
                 let name: &'static str = Box::leak(format!("site{n}").into_boxed_str());
                 service
-                    .apply(create_site(
-                        name,
-                        format!("{name}.example.com"),
-                        "127.0.0.1:3000",
-                    ))
+                    .apply(
+                        &ChangeContext::system(),
+                        Audited::new("test.change", "test"),
+                        create_site(name, format!("{name}.example.com"), "127.0.0.1:3000"),
+                    )
                     .await
                     .unwrap()
                     .version
@@ -408,11 +423,11 @@ async fn a_concurrent_reader_never_observes_a_partial_state() {
     for n in 0..20 {
         let name: &'static str = Box::leak(format!("site{n}").into_boxed_str());
         service
-            .apply(create_site(
-                name,
-                format!("{name}.example.com"),
-                "127.0.0.1:3000",
-            ))
+            .apply(
+                &ChangeContext::system(),
+                Audited::new("test.change", "test"),
+                create_site(name, format!("{name}.example.com"), "127.0.0.1:3000"),
+            )
             .await
             .unwrap();
     }
@@ -440,26 +455,29 @@ async fn the_config_version_and_reload_outcomes_are_reported_to_metrics() {
     assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(0.0));
 
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     assert_eq!(metric(&metrics, "fastproxy_config_version"), Some(1.0));
 
     // A conflicting change and a failed rollback are both rejected.
     service
-        .apply(create_site(
-            "shop",
-            "other.example.com".into(),
-            "127.0.0.1:3001",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "other.example.com".into(), "127.0.0.1:3001"),
+        )
         .await
         .unwrap_err();
-    service.rollback(99).await.unwrap_err();
-    service.rollback(1).await.unwrap();
+    service
+        .rollback(&ChangeContext::system(), 99)
+        .await
+        .unwrap_err();
+    service.rollback(&ChangeContext::system(), 1).await.unwrap();
 
     let applied = r#"fastproxy_config_reloads_total{outcome="applied"}"#;
     let rejected = r#"fastproxy_config_reloads_total{outcome="rejected"}"#;
@@ -477,11 +495,11 @@ async fn starting_on_stored_config_reports_its_version() {
             .await
             .unwrap();
         service
-            .apply(create_site(
-                "shop",
-                "shop.example.com".into(),
-                "127.0.0.1:3000",
-            ))
+            .apply(
+                &ChangeContext::system(),
+                Audited::new("test.change", "test"),
+                create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+            )
             .await
             .unwrap();
     }
@@ -504,11 +522,11 @@ fn live_runtime(service: &ConfigService, host: &str) -> Arc<fast_proxy_balancing
 async fn endpoint_state_survives_unrelated_changes_and_resets_when_the_address_changes() {
     let service = service().await;
     let site = service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap()
         .value;
@@ -517,15 +535,19 @@ async fn endpoint_state_survives_unrelated_changes_and_resets_when_the_address_c
     assert!(!runtime.is_active_healthy());
 
     service
-        .apply(move |conn| {
-            let mut fields = subsystem_fields_for("shop");
-            fields.description = "unrelated edit".into();
-            subsystems::update(conn, site, &fields)?;
-            Ok(Mutation {
-                value: (),
-                summary: "edit".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                let mut fields = subsystem_fields_for("shop");
+                fields.description = "unrelated edit".into();
+                subsystems::update(conn, site, &fields)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "edit".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     assert!(
@@ -535,25 +557,29 @@ async fn endpoint_state_survives_unrelated_changes_and_resets_when_the_address_c
     assert!(!live_runtime(&service, "shop.example.com").is_active_healthy());
 
     service
-        .apply(move |conn| {
-            let group = subsystems::get(conn, site)?.upstream_groups[0].clone();
-            let moved = EndpointFields {
-                addr: EndpointAddr::parse("127.0.0.1:3999").unwrap(),
-                weight: 1,
-                state: EndpointState::Enabled,
-            };
-            fast_proxy_store::repository::endpoints::update(
-                conn,
-                site,
-                group.id,
-                group.endpoints[0].id,
-                &moved,
-            )?;
-            Ok(Mutation {
-                value: (),
-                summary: "move".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                let group = subsystems::get(conn, site)?.upstream_groups[0].clone();
+                let moved = EndpointFields {
+                    addr: EndpointAddr::parse("127.0.0.1:3999").unwrap(),
+                    weight: 1,
+                    state: EndpointState::Enabled,
+                };
+                fast_proxy_store::repository::endpoints::update(
+                    conn,
+                    site,
+                    group.id,
+                    group.endpoints[0].id,
+                    &moved,
+                )?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "move".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let fresh = live_runtime(&service, "shop.example.com");
@@ -565,23 +591,27 @@ async fn endpoint_state_survives_unrelated_changes_and_resets_when_the_address_c
 async fn a_rejected_change_keeps_the_live_runtime_state() {
     let service = service().await;
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap();
     let runtime = live_runtime(&service, "shop.example.com");
     runtime.record_probe(false, 1, 1);
     let rejected = service
-        .apply(|conn| {
-            conn.execute("DELETE FROM upstream_endpoint", [])?;
-            Ok(Mutation {
-                value: (),
-                summary: "bad".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            |conn| {
+                conn.execute("DELETE FROM upstream_endpoint", [])?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "bad".into(),
+                })
+            },
+        )
         .await;
     assert!(rejected.is_err());
     let after = live_runtime(&service, "shop.example.com");
@@ -606,28 +636,32 @@ async fn removing_an_endpoint_deletes_its_metric_series() {
             .await
             .unwrap();
     let site = service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap()
         .value;
     let second = service
-        .apply(move |conn| {
-            let group = subsystems::get(conn, site)?.upstream_groups[0].id;
-            let added = EndpointFields {
-                addr: EndpointAddr::parse("127.0.0.1:3001").unwrap(),
-                weight: 1,
-                state: EndpointState::Enabled,
-            };
-            let id = fast_proxy_store::repository::endpoints::add(conn, site, group, &added)?;
-            Ok(Mutation {
-                value: (group, id),
-                summary: "add".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                let group = subsystems::get(conn, site)?.upstream_groups[0].id;
+                let added = EndpointFields {
+                    addr: EndpointAddr::parse("127.0.0.1:3001").unwrap(),
+                    weight: 1,
+                    state: EndpointState::Enabled,
+                };
+                let id = fast_proxy_store::repository::endpoints::add(conn, site, group, &added)?;
+                Ok(Mutation {
+                    value: (group, id),
+                    summary: "add".into(),
+                })
+            },
+        )
         .await
         .unwrap()
         .value;
@@ -642,13 +676,17 @@ async fn removing_an_endpoint_deletes_its_metric_series() {
     assert!(metrics.render().contains("127.0.0.1:3001"));
 
     service
-        .apply(move |conn| {
-            fast_proxy_store::repository::endpoints::delete(conn, site, second.0, second.1)?;
-            Ok(Mutation {
-                value: (),
-                summary: "remove".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                fast_proxy_store::repository::endpoints::delete(conn, site, second.0, second.1)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "remove".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let text = metrics.render();

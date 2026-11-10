@@ -3,9 +3,10 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo, TlsInfo};
-use fast_proxy_config_service::{ConfigService, StartError, TlsSettings};
+use fast_proxy_config_service::{AuditRetention, ConfigService, StartError, TlsSettings};
 use fast_proxy_dataplane::{
     bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
     RequestPipeline, TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError,
@@ -20,6 +21,16 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{AppConfig, TlsConfig};
+
+/// How often expired maintenance scopes are cleared.
+const MAINTENANCE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+/// How much audit history is kept until `[admin.audit]` settings exist.
+const AUDIT_RETENTION: AuditRetention = AuditRetention {
+    max_age: Duration::from_secs(90 * 86_400),
+    max_rows: 200_000,
+};
+/// How often the audit log is pruned.
+const AUDIT_PRUNE_INTERVAL: Duration = Duration::from_secs(3_600);
 
 /// Anything that stops the proxy from starting or keeps it from serving.
 #[derive(Debug, Error)]
@@ -134,6 +145,18 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             .clone()
             .run_sync(config.data_plane.config_poll_interval, data_stop.clone()),
     );
+    // Expired maintenance is cleared, and the audit log kept bounded, in the
+    // background; both stop with the data plane.
+    tokio::spawn(
+        config_service
+            .clone()
+            .run_maintenance_sweeper(MAINTENANCE_SWEEP_INTERVAL, data_stop.clone()),
+    );
+    tokio::spawn(config_service.clone().run_audit_pruner(
+        AUDIT_RETENTION,
+        AUDIT_PRUNE_INTERVAL,
+        data_stop.clone(),
+    ));
     tokio::spawn(run_status_gauges(
         config_service.snapshot_holder(),
         metrics.clone(),

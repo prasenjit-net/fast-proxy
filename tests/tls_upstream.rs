@@ -4,6 +4,7 @@
 
 mod common;
 
+use fast_proxy_config_service::ChangeContext;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -43,7 +44,7 @@ fn tls(ca: &str) -> UpstreamTls {
 async fn bundle(stack: &Stack, name: &str, ca: &TestCa) -> i64 {
     stack
         .service
-        .upload_ca_bundle(name, &ca.pem)
+        .upload_ca_bundle(&ChangeContext::system(), name, &ca.pem)
         .await
         .unwrap()
         .value
@@ -157,7 +158,11 @@ async fn a_replaced_bundle_takes_effect_for_new_connections() {
         502,
         "the old bundle does not trust it"
     );
-    stack.service.replace_ca_bundle(id, &new.pem).await.unwrap();
+    stack
+        .service
+        .replace_ca_bundle(&ChangeContext::system(), id, &new.pem)
+        .await
+        .unwrap();
     assert_eq!(
         through(&stack, "shop.example.com").await.0,
         200,
