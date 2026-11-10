@@ -470,17 +470,17 @@ from M2.
 
 ### Workstream MD: Model
 
-- [ ] **MD1 (M) Subsystem HTTPS policy.** `HttpsPolicy { enabled, certificate_id,
+- [x] **MD1 (M) Subsystem HTTPS policy.** `HttpsPolicy { enabled, certificate_id,
   redirect, hsts }`, `CertificateId`, `RedirectMode` (off, 301, 308), `Hsts {
   enabled, max_age, include_subdomains }` with bounds, and the rule that redirect
   and HSTS settings need `enabled`.
   *Done when:* table-driven tests accept and reject each case with a
   field-specific message (`https.hsts.maxAgeSecs`, `https.redirect`).
-- [ ] **MD2 (M) Upstream TLS settings.** `UpstreamTls { enabled, verify,
+- [x] **MD2 (M) Upstream TLS settings.** `UpstreamTls { enabled, verify,
   server_name, ca }` with a validated server name and CA name; the group policy
   gains it.
   *Done when:* tests cover every bound and the defaults match G3.
-- [ ] **MD3 (M) Certificate metadata, limits and `covers`.** `CertificateName`,
+- [x] **MD3 (M) Certificate metadata, limits and `covers`.** `CertificateName`,
   `CertificateSource`, the metadata record (names, subject, issuer, validity,
   fingerprint), the limits of F28, and the pure `covers(san, pattern)` rule of F11,
   all without PEM or key types.
@@ -490,12 +490,12 @@ from M2.
 
 ### Workstream S: Store
 
-- [ ] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2 (new subsystem and
+- [x] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2 (new subsystem and
   group columns, and the `certificate`, `ca_bundle` and `vault` tables); bump
   `SCHEMA_VERSION` to 3.
   *Done when:* a fresh database opens and a version-2 file is rejected with the
   existing clear error.
-- [ ] **S2 (M) Subsystem and upstream columns.** Repository create/update/load
+- [x] **S2 (M) Subsystem and upstream columns.** Repository create/update/load
   carry the HTTPS policy (including the certificate reference) and the TLS
   settings; load revalidates (corruption is `Internal`); the revision JSON carries
   both plus the certificate's name; rollback restores them, and a rollback that
@@ -503,19 +503,19 @@ from M2.
   *Done when:* a test edits both, rolls back to each prior revision and compares
   `load_all()` to the stored configuration, and the deleted-reference case is
   covered.
-- [ ] **S3 (M) Certificate and CA bundle repositories.** Insert, replace, rename,
+- [x] **S3 (M) Certificate and CA bundle repositories.** Insert, replace, rename,
   delete (409 while used), list and load for both tables, plus the vault row; keys
   are stored and returned as opaque ciphertext and nonce; limits enforced; unique
   names are a `Conflict`.
   *Done when:* success and failure tests cover uniqueness, the used-certificate
   refusal, cascade and limits, and a test proves no function in the crate decrypts.
-- [ ] **S4 (S) Summary-only revisions.** A way to append a **summary-only** revision
+- [x] **S4 (S) Summary-only revisions.** A way to append a **summary-only** revision
   (the configuration unchanged) from a certificate write; `restore` leaves the
   certificate tables alone.
   *Done when:* a test uploads and deletes certificates, rolls back across them,
   and shows the certificates untouched and every change present in the history
   with no PEM in any revision row.
-- [ ] **S5 (S) The storage boundary.** The `CertificateSource` read trait
+- [x] **S5 (S) The storage boundary.** The `CertificateSource` read trait
   (`load_all`, `version`) with the SQLite implementation, and a documented
   portability checklist for the certificate SQL (types, no SQLite-only features).
   *Done when:* the config service reads certificates only through the trait, and a

@@ -66,6 +66,7 @@ pub fn site_to_group(
         name: SubsystemName::parse(name).unwrap(),
         enabled: true,
         description: String::new(),
+        https: fast_proxy_model::HttpsPolicy::default(),
         hosts: vec![HostPattern::parse(host).unwrap()],
         upstream_groups: vec![UpstreamGroupConfig {
             id: UpstreamGroupId(1),

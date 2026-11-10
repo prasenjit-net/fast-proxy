@@ -18,6 +18,7 @@ pub fn subsystem_fields(name: &str) -> SubsystemFields {
         name: SubsystemName::parse(name).unwrap(),
         enabled: true,
         description: String::new(),
+        https: fast_proxy_model::HttpsPolicy::default(),
     }
 }
 

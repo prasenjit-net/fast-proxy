@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    EndpointConfig, GroupPolicy, HostPattern, RetryPolicy, RoutePrefix, SubsystemName,
+    EndpointConfig, GroupPolicy, HostPattern, HttpsPolicy, RetryPolicy, RoutePrefix, SubsystemName,
     UpstreamPrefix,
 };
 
@@ -36,6 +36,7 @@ pub struct SubsystemConfig {
     pub name: SubsystemName,
     pub enabled: bool,
     pub description: String,
+    pub https: HttpsPolicy,
     pub hosts: Vec<HostPattern>,
     pub upstream_groups: Vec<UpstreamGroupConfig>,
     pub routes: Vec<RouteConfig>,

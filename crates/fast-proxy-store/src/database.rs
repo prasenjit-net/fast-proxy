@@ -7,7 +7,7 @@ use crate::repository::load;
 use crate::{revision, StoreError};
 
 /// Bump together with `schema.sql`. Stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 /// The result of a successful write: the operation's value plus the
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn rejects_a_database_with_a_different_schema_version() {
-        for found in [1, 99] {
+        for found in [1, 2, 99] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("old.db");
             Connection::open(&path)

@@ -3,6 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::config_json;
 use crate::clock::now_ms;
+use crate::repository::certificates;
 use crate::StoreError;
 
 /// How many revisions are kept; older ones are pruned on every append.
@@ -45,7 +46,7 @@ pub fn append(conn: &Connection, summary: &str, config: &Config) -> Result<u64, 
             i64::try_from(version).unwrap_or(i64::MAX),
             now_ms(),
             summary,
-            config_json::to_json(config)?
+            config_json::to_json(config, &certificates::names(conn)?)?
         ],
     )?;
     conn.execute(
@@ -93,4 +94,21 @@ pub fn get(conn: &Connection, version: u64) -> Result<Revision, StoreError> {
         summary,
         config: config_json::from_json(&json)?,
     })
+}
+
+/// The certificates revision `version` references, as `(id, name)`, so a
+/// rollback can name one that was deleted since.
+pub fn referenced_certificates(
+    conn: &Connection,
+    version: u64,
+) -> Result<Vec<(fast_proxy_model::CertificateId, String)>, StoreError> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT config FROM revision WHERE version = ?1",
+            [i64::try_from(version).unwrap_or(i64::MAX)],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let json = json.ok_or_else(|| StoreError::NotFound(format!("revision {version}")))?;
+    config_json::referenced_certificates(&json)
 }

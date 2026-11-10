@@ -33,6 +33,7 @@ async fn populate(service: &ConfigService) {
                         name: SubsystemName::parse(&format!("site{s}")).unwrap(),
                         enabled: true,
                         description: String::new(),
+                        https: fast_proxy_model::HttpsPolicy::default(),
                     },
                 )?;
                 hosts::add(
@@ -134,6 +135,7 @@ async fn report_reload_cost_with_a_large_configuration() {
                         name: SubsystemName::parse("site0").unwrap(),
                         enabled: true,
                         description: format!("edit {round}"),
+                        https: fast_proxy_model::HttpsPolicy::default(),
                     };
                     fields.description.push('!');
                     subsystems::update(conn, target, &fields)?;

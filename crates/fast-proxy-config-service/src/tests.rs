@@ -33,6 +33,7 @@ fn create_site(
                 name: SubsystemName::parse(name).unwrap(),
                 enabled: true,
                 description: String::new(),
+                https: fast_proxy_model::HttpsPolicy::default(),
             },
         )?;
         hosts::add(conn, id, &HostPattern::parse(&host).unwrap())?;
@@ -592,6 +593,7 @@ fn subsystem_fields_for(name: &str) -> SubsystemFields {
         name: SubsystemName::parse(name).unwrap(),
         enabled: true,
         description: String::new(),
+        https: fast_proxy_model::HttpsPolicy::default(),
     }
 }
 

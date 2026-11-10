@@ -45,6 +45,7 @@ impl SubsystemRequest {
             name,
             enabled: self.enabled,
             description: self.description,
+            https: fast_proxy_model::HttpsPolicy::default(),
         })
     }
 }

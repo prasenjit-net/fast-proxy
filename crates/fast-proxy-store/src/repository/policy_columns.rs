@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use fast_proxy_model::{
     FailurePolicy, GroupPolicy, HashKey, HealthCheck, HealthKind, LbAlgorithm, LbPolicy,
-    PassiveHealth, RetryBudget,
+    PassiveHealth, RetryBudget, UpstreamTls,
 };
 use rusqlite::Row;
 
@@ -16,7 +16,8 @@ use crate::StoreError;
 pub const SELECT_LIST: &str = "lb_algorithm, lb_hash_key, failure_policy, health_check, \
      health_path, health_status_min, health_status_max, health_interval_ms, health_timeout_ms, \
      health_rise, health_fall, passive_failures, passive_base_ms, passive_max_ms, \
-     passive_max_percent, retry_budget_percent, retry_budget_min_per_sec";
+     passive_max_percent, retry_budget_percent, retry_budget_min_per_sec, tls_enabled, \
+     tls_verify, tls_server_name, tls_ca";
 
 /// Assignments for an UPDATE using the named parameters of [`Bound`].
 pub const UPDATE_SET: &str = "lb_algorithm = :lb_algorithm, lb_hash_key = :lb_hash_key, \
@@ -26,7 +27,8 @@ pub const UPDATE_SET: &str = "lb_algorithm = :lb_algorithm, lb_hash_key = :lb_ha
      health_rise = :health_rise, health_fall = :health_fall, passive_failures = :passive_failures, \
      passive_base_ms = :passive_base_ms, passive_max_ms = :passive_max_ms, \
      passive_max_percent = :passive_max_percent, retry_budget_percent = :retry_budget_percent, \
-     retry_budget_min_per_sec = :retry_budget_min_per_sec";
+     retry_budget_min_per_sec = :retry_budget_min_per_sec, tls_enabled = :tls_enabled, \
+     tls_verify = :tls_verify, tls_server_name = :tls_server_name, tls_ca = :tls_ca";
 
 /// Column list for an INSERT; pair with [`INSERT_VALUES`].
 pub const INSERT_COLUMNS: &str = SELECT_LIST;
@@ -35,7 +37,8 @@ pub const INSERT_COLUMNS: &str = SELECT_LIST;
 pub const INSERT_VALUES: &str = ":lb_algorithm, :lb_hash_key, :failure_policy, :health_check, \
      :health_path, :health_status_min, :health_status_max, :health_interval_ms, \
      :health_timeout_ms, :health_rise, :health_fall, :passive_failures, :passive_base_ms, \
-     :passive_max_ms, :passive_max_percent, :retry_budget_percent, :retry_budget_min_per_sec";
+     :passive_max_ms, :passive_max_percent, :retry_budget_percent, :retry_budget_min_per_sec, \
+     :tls_enabled, :tls_verify, :tls_server_name, :tls_ca";
 
 fn millis(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
@@ -60,6 +63,10 @@ pub struct Bound {
     passive_max_percent: u32,
     retry_budget_percent: u32,
     retry_budget_min_per_sec: u32,
+    tls_enabled: bool,
+    tls_verify: bool,
+    tls_server_name: String,
+    tls_ca: String,
 }
 
 impl Bound {
@@ -82,6 +89,10 @@ impl Bound {
             passive_max_percent: policy.passive.max_ejection_percent,
             retry_budget_percent: policy.retry_budget.percent,
             retry_budget_min_per_sec: policy.retry_budget.min_per_sec,
+            tls_enabled: policy.tls.enabled,
+            tls_verify: policy.tls.verify,
+            tls_server_name: policy.tls.server_name.clone(),
+            tls_ca: policy.tls.ca.clone(),
         }
     }
 
@@ -105,6 +116,10 @@ impl Bound {
             (":passive_max_percent", &self.passive_max_percent),
             (":retry_budget_percent", &self.retry_budget_percent),
             (":retry_budget_min_per_sec", &self.retry_budget_min_per_sec),
+            (":tls_enabled", &self.tls_enabled),
+            (":tls_verify", &self.tls_verify),
+            (":tls_server_name", &self.tls_server_name),
+            (":tls_ca", &self.tls_ca),
         ]
     }
 }
@@ -120,8 +135,14 @@ pub fn read(row: &Row<'_>, first: usize) -> rusqlite::Result<Result<GroupPolicy,
     let kind = text(3)?;
     let path = text(4)?;
     let numbers: Vec<i64> = (5..17).map(number).collect::<Result<_, _>>()?;
+    let tls = UpstreamTls {
+        enabled: row.get(first + 17)?,
+        verify: row.get(first + 18)?,
+        server_name: row.get(first + 19)?,
+        ca: row.get(first + 20)?,
+    };
     Ok(build(
-        &algorithm, &hash_key, &failure, &kind, path, &numbers,
+        &algorithm, &hash_key, &failure, &kind, path, &numbers, tls,
     ))
 }
 
@@ -132,6 +153,7 @@ fn build(
     kind: &str,
     path: String,
     n: &[i64],
+    tls: UpstreamTls,
 ) -> Result<GroupPolicy, StoreError> {
     let corrupt = |err: fast_proxy_model::FieldError| {
         StoreError::Internal(format!("stored upstream policy is invalid: {err}"))
@@ -165,6 +187,7 @@ fn build(
             percent: small(n[10]),
             min_per_sec: small(n[11]),
         },
+        tls,
     };
     policy.validate().map_err(corrupt)?;
     Ok(policy)

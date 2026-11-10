@@ -259,3 +259,285 @@ fn db_route(
 ) -> fast_proxy_model::RouteId {
     subsystems::get(conn, subsystem).unwrap().routes[0].id
 }
+
+mod tls_revisions {
+    use fast_proxy_model::{
+        CertificateId, CertificateMetadata, CertificateName, CertificateSource, HttpsPolicy,
+        RedirectMode, UpstreamTls,
+    };
+
+    use super::{db, restore_as_new_revision};
+    use crate::repository::ca_bundles::{self, NewCaBundle};
+    use crate::repository::certificates::{self, NewCertificate};
+    use crate::repository::{subsystems, upstreams};
+    use crate::revision::{get, list};
+    use crate::test_support::{commit, seed, subsystem_fields, upstream_fields};
+    use crate::{CertificateSource as _, Database, StoreError, SubsystemFields};
+
+    const PRIVATE_MARKER: &str = "PRIVATE-KEY-MARKER";
+
+    fn upload(db: &mut Database, name: &str) -> CertificateId {
+        commit(db, &format!("certificate uploaded: {name}"), |conn| {
+            let id = certificates::next_id(conn)?;
+            certificates::insert(
+                conn,
+                id,
+                &NewCertificate {
+                    name: CertificateName::parse(name).unwrap(),
+                    source: CertificateSource::Uploaded,
+                    chain_pem: "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+                        .into(),
+                    key_enc: PRIVATE_MARKER.as_bytes().to_vec(),
+                    key_nonce: vec![1; 12],
+                    metadata: CertificateMetadata {
+                        names: vec!["a.example.com".into()],
+                        subject: "CN=a".into(),
+                        issuer: "CN=a".into(),
+                        not_before_ms: 0,
+                        not_after_ms: 1,
+                        fingerprint: "00".into(),
+                    },
+                },
+            )?;
+            Ok(id)
+        })
+        .unwrap()
+        .value
+    }
+
+    fn bundle(name: &str) -> NewCaBundle {
+        NewCaBundle {
+            name: CertificateName::parse(name).unwrap(),
+            pem: "-----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n".into(),
+            cert_count: 1,
+        }
+    }
+
+    fn attach(db: &mut Database, site: &crate::test_support::Fixture, id: Option<CertificateId>) {
+        commit(db, "https edited", |conn| {
+            subsystems::update(
+                conn,
+                site.subsystem,
+                &SubsystemFields {
+                    https: HttpsPolicy {
+                        enabled: true,
+                        certificate_id: id,
+                        redirect: RedirectMode::Permanent308,
+                        ..HttpsPolicy::default()
+                    },
+                    ..subsystem_fields("shop")
+                },
+            )
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn rollback_restores_https_and_tls_settings_at_every_version() {
+        let mut db = db();
+        let certificate = upload(&mut db, "shop");
+        let site = seed(&mut db, "shop", "shop.example.com");
+        let mut stored = Vec::new();
+        stored.push((db.current_version().unwrap(), db.load_all().unwrap()));
+
+        attach(&mut db, &site, Some(certificate));
+        stored.push((db.current_version().unwrap(), db.load_all().unwrap()));
+
+        let mut fields = upstream_fields("backend");
+        fields.policy.tls = UpstreamTls {
+            enabled: true,
+            verify: false,
+            server_name: "backend.internal".into(),
+            ca: String::new(),
+        };
+        commit(&mut db, "tls", |conn| {
+            upstreams::update(conn, site.subsystem, site.group, &fields)
+        })
+        .unwrap();
+        stored.push((db.current_version().unwrap(), db.load_all().unwrap()));
+
+        for (version, expected) in stored.iter().rev() {
+            restore_as_new_revision(&mut db, *version);
+            assert_eq!(&db.load_all().unwrap(), expected, "v{version}");
+        }
+    }
+
+    #[test]
+    fn rollback_to_a_deleted_certificate_is_refused_naming_it() {
+        let mut db = db();
+        let certificate = upload(&mut db, "shop-cert");
+        let site = seed(&mut db, "shop", "shop.example.com");
+        attach(&mut db, &site, Some(certificate));
+        let with_certificate = db.current_version().unwrap();
+        commit(&mut db, "detach", |conn| {
+            subsystems::update(conn, site.subsystem, &subsystem_fields("shop"))
+        })
+        .unwrap();
+        commit(&mut db, "delete", |conn| {
+            certificates::delete(conn, certificate)
+        })
+        .unwrap();
+        let before = db.load_all().unwrap();
+
+        let err = commit(&mut db, "rollback", |conn| {
+            super::super::restore(conn, with_certificate)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::Conflict(m) if m.contains("shop-cert")),
+            "{err}"
+        );
+        assert_eq!(db.load_all().unwrap(), before, "nothing changed");
+    }
+
+    #[test]
+    fn a_reused_certificate_id_with_another_name_does_not_satisfy_a_rollback() {
+        let mut db = db();
+        let original = upload(&mut db, "first");
+        let site = seed(&mut db, "shop", "shop.example.com");
+        attach(&mut db, &site, Some(original));
+        let with_certificate = db.current_version().unwrap();
+        commit(&mut db, "detach", |conn| {
+            subsystems::update(conn, site.subsystem, &subsystem_fields("shop"))
+        })
+        .unwrap();
+        commit(&mut db, "delete", |conn| {
+            certificates::delete(conn, original)
+        })
+        .unwrap();
+        let reused = upload(&mut db, "second");
+        assert_eq!(reused, original, "SQLite reuses the highest id");
+
+        let err = commit(&mut db, "rollback", |conn| {
+            super::super::restore(conn, with_certificate)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::Conflict(m) if m.contains("first")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rollback_to_a_deleted_ca_bundle_is_refused_naming_it() {
+        let mut db = db();
+        let bundle_id = commit(&mut db, "bundle", |conn| {
+            ca_bundles::insert(conn, &bundle("corp"))
+        })
+        .unwrap()
+        .value;
+        let site = seed(&mut db, "shop", "shop.example.com");
+        let mut fields = upstream_fields("backend");
+        fields.policy.tls.enabled = true;
+        fields.policy.tls.ca = "corp".into();
+        commit(&mut db, "tls", |conn| {
+            upstreams::update(conn, site.subsystem, site.group, &fields)
+        })
+        .unwrap();
+        let with_bundle = db.current_version().unwrap();
+        commit(&mut db, "plain", |conn| {
+            upstreams::update(
+                conn,
+                site.subsystem,
+                site.group,
+                &upstream_fields("backend"),
+            )
+        })
+        .unwrap();
+        commit(&mut db, "delete", |conn| {
+            ca_bundles::delete(conn, bundle_id)
+        })
+        .unwrap();
+
+        let err = commit(&mut db, "rollback", |conn| {
+            super::super::restore(conn, with_bundle)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::Conflict(m) if m.contains("corp")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn certificate_changes_are_summary_only_revisions_and_rollback_leaves_material_alone() {
+        let mut db = db();
+        let site = seed(&mut db, "shop", "shop.example.com");
+        let before = db.current_version().unwrap();
+        let certificate = upload(&mut db, "shop");
+        let uploaded = db.current_version().unwrap();
+        assert_eq!(uploaded, before + 1);
+        assert_eq!(
+            db.read(|c| get(c, uploaded)).unwrap().config,
+            db.read(|c| get(c, before)).unwrap().config,
+            "a material change leaves the configuration as it was"
+        );
+
+        let material = db.read(certificates::list).unwrap();
+        restore_as_new_revision(&mut db, before);
+        let after = db.read(certificates::list).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            after[0].certificate.key_enc,
+            material[0].certificate.key_enc
+        );
+        assert_eq!(after[0].updated_at_ms, material[0].updated_at_ms);
+
+        commit(&mut db, "certificate deleted: shop", |conn| {
+            certificates::delete(conn, certificate)
+        })
+        .unwrap();
+        let summaries: Vec<String> = db
+            .read(|c| list(c, 10, None))
+            .unwrap()
+            .into_iter()
+            .map(|r| r.summary)
+            .collect();
+        assert!(summaries.iter().any(|s| s == "certificate uploaded: shop"));
+        assert!(summaries.iter().any(|s| s == "certificate deleted: shop"));
+        assert_eq!(
+            db.read(|c| subsystems::get(c, site.subsystem))
+                .unwrap()
+                .hosts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn no_revision_row_contains_pem_or_key_bytes() {
+        let mut db = db();
+        let certificate = upload(&mut db, "shop");
+        let site = seed(&mut db, "shop", "shop.example.com");
+        attach(&mut db, &site, Some(certificate));
+        let rows: Vec<String> = db
+            .read(|conn| {
+                let mut statement = conn.prepare("SELECT summary || config FROM revision")?;
+                let rows = statement.query_map([], |row| row.get(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .unwrap();
+        assert!(!rows.is_empty());
+        for row in rows {
+            assert!(!row.contains("BEGIN"), "no PEM in a revision");
+            assert!(!row.contains(PRIVATE_MARKER), "no key bytes in a revision");
+        }
+        let last = db.read(|c| get(c, db.current_version().unwrap())).unwrap();
+        assert!(last.config.subsystems[0].https.certificate_id.is_some());
+        let json_has_name = db
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT config FROM revision ORDER BY version DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?)
+            })
+            .unwrap()
+            .contains("\"certificate_name\":\"shop\"");
+        assert!(
+            json_has_name,
+            "the certificate's name is recorded for rollback messages"
+        );
+        let _ = db.version();
+    }
+}

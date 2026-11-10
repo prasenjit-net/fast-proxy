@@ -266,6 +266,7 @@ fn parse_policy(request: &UpstreamRequest, errors: &mut FieldErrors) -> Option<G
         health: health?,
         passive: passive?,
         retry_budget: budget?,
+        tls: fast_proxy_model::UpstreamTls::default(),
     })
 }
 
