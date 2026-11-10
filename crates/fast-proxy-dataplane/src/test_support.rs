@@ -13,7 +13,7 @@ use fast_proxy_model::{
     UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
 };
 use fast_proxy_routing::{compile, SnapshotHolder};
-use fast_proxy_telemetry::{AccessLog, Metrics};
+use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
@@ -93,13 +93,14 @@ pub struct Harness {
     pub addr: SocketAddr,
     pub shutdown: CancellationToken,
     pub metrics: Arc<Metrics>,
+    pub events: EndpointEvents,
     pub access_log: Arc<AccessLog>,
 }
 
 impl Harness {
     /// Serves `config` with a custom forwarder (no real upstream).
     pub async fn start<F: Forward>(config: Config, forwarder: F) -> Self {
-        Self::start_full(config, |_| forwarder, None).await
+        Self::start_full(config, |_, _| forwarder, None).await
     }
 
     /// Serves `config` through the real upstream client.
@@ -117,16 +118,17 @@ impl Harness {
         let trusted = TrustedProxies::parse(&entries).unwrap();
         Self::start_full(
             config,
-            |metrics| UpstreamClient::new(trusted, metrics),
+            |metrics, events| UpstreamClient::new(trusted, metrics, events),
             log_path,
         )
         .await
     }
 
-    /// The general form: `make_forwarder` receives the metrics the pipeline reports to.
+    /// The general form: `make_forwarder` receives the metrics and the endpoint
+    /// event bus the pipeline reports to.
     pub async fn start_full<F: Forward>(
         config: Config,
-        make_forwarder: impl FnOnce(Arc<Metrics>) -> F,
+        make_forwarder: impl FnOnce(Arc<Metrics>, EndpointEvents) -> F,
         log_path: Option<&Path>,
     ) -> Self {
         let holder = Arc::new(SnapshotHolder::new());
@@ -138,6 +140,7 @@ impl Harness {
         let bound = bind(&specs).await.unwrap();
         let shutdown = CancellationToken::new();
         let metrics = Arc::new(Metrics::new());
+        let events = EndpointEvents::new();
         let access_log = Arc::new(AccessLog::open(log_path).await);
         let observability = Observability {
             metrics: metrics.clone(),
@@ -145,7 +148,7 @@ impl Harness {
         };
         let pipeline = Arc::new(RequestPipeline::new(
             holder.clone(),
-            make_forwarder(metrics.clone()),
+            make_forwarder(metrics.clone(), events.clone()),
             observability,
         ));
         let plane = DataPlane::start(bound, pipeline, shutdown.clone());
@@ -156,6 +159,7 @@ impl Harness {
             addr,
             shutdown,
             metrics,
+            events,
             access_log,
         }
     }

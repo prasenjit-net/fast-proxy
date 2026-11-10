@@ -828,3 +828,41 @@ async fn status_reports_what_is_running() {
     assert!(data["startedAtMs"].as_i64().unwrap() > 0);
     assert!(data["uptimeSecs"].is_u64());
 }
+
+#[tokio::test]
+async fn status_summarizes_which_endpoints_are_in_rotation_and_why_not() {
+    let app = TestApp::new().await;
+    create_site(&app, "shop", "shop.example.com", "127.0.0.1:3000").await;
+    create_site(&app, "blog", "blog.example.com", "127.0.0.1:3001").await;
+
+    let (_, body) = app.get("/api/status").await;
+    assert_eq!(
+        body["data"]["upstreams"],
+        json!({ "total": 2, "healthy": 2, "unhealthy": [] })
+    );
+
+    // Fail the first endpoint's health checks, as the health engine would.
+    let live = app.config.snapshot_holder().load();
+    let shop = live
+        .subsystems
+        .values()
+        .find(|s| s.name.as_str() == "shop")
+        .unwrap();
+    shop.upstreams.values().next().unwrap().candidates[0]
+        .runtime
+        .record_probe(false, 1, 1);
+
+    let (_, body) = app.get("/api/status").await;
+    let upstreams = &body["data"]["upstreams"];
+    assert_eq!(upstreams["total"], 2);
+    assert_eq!(upstreams["healthy"], 1);
+    assert_eq!(
+        upstreams["unhealthy"],
+        json!([{
+            "subsystem": "shop",
+            "upstream": "backend",
+            "endpoint": "127.0.0.1:3000",
+            "reason": "failed health checks"
+        }])
+    );
+}

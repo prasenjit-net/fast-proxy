@@ -269,3 +269,42 @@ async fn a_response_timeout_counts_against_the_endpoint() {
     assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 504);
     assert!(proxy.metrics.render().contains(r#"outcome="timeout""#));
 }
+
+#[tokio::test]
+async fn ejection_and_recovery_are_announced_on_the_event_bus() {
+    use fast_proxy_telemetry::EndpointChange;
+
+    let (backends, proxy) = pair(policy(2, 150)).await;
+    let mut events = proxy.events.subscribe();
+    backends[0].kill();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let dead = runtime(&proxy, 0);
+    drive(&proxy, || dead.is_ejected(monotonic_ms())).await;
+
+    let ejected = next_event(&mut events).await;
+    assert_eq!(ejected.subsystem, "shop");
+    assert_eq!(ejected.upstream, "backend");
+    assert_eq!(ejected.endpoint, backends[0].addr.to_string());
+    assert!(
+        matches!(ejected.change, EndpointChange::Ejected { times: 1, .. }),
+        "{ejected:?}"
+    );
+
+    backends[0].revive().await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    for _ in 0..10 {
+        get(proxy.addr, HOST, "/", "").await;
+    }
+    let recovered = next_event(&mut events).await;
+    assert_eq!(recovered.change, EndpointChange::Recovered);
+}
+
+/// The next event, failing the test instead of hanging if none comes.
+async fn next_event(
+    events: &mut tokio::sync::broadcast::Receiver<fast_proxy_telemetry::EndpointEvent>,
+) -> fast_proxy_telemetry::EndpointEvent {
+    tokio::time::timeout(Duration::from_secs(3), events.recv())
+        .await
+        .expect("an event should have been published")
+        .unwrap()
+}

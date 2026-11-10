@@ -7,7 +7,8 @@ use fast_proxy_balancing::{
 };
 use fast_proxy_routing::{build_upstream_uri, CompiledEndpoint};
 use fast_proxy_telemetry::{
-    EndpointLabels, Metrics, RetryReason, UpstreamErrorKind, UpstreamOutcome,
+    EndpointChange, EndpointEvent, EndpointEvents, EndpointLabels, Metrics, RetryReason,
+    UpstreamErrorKind, UpstreamOutcome,
 };
 use http::{Request, Response, StatusCode};
 use hyper::body::Incoming;
@@ -41,14 +42,20 @@ const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 pub struct UpstreamClient {
     trusted_proxies: TrustedProxies,
     metrics: Arc<Metrics>,
+    events: EndpointEvents,
     clients: Mutex<HashMap<Duration, HttpClient>>,
 }
 
 impl UpstreamClient {
-    pub fn new(trusted_proxies: TrustedProxies, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        trusted_proxies: TrustedProxies,
+        metrics: Arc<Metrics>,
+        events: EndpointEvents,
+    ) -> Self {
         Self {
             trusted_proxies,
             metrics,
+            events,
             clients: Mutex::new(HashMap::new()),
         }
     }
@@ -120,8 +127,17 @@ impl UpstreamClient {
             &upstream.policy.passive,
             monotonic_ms(),
         );
+        let announce = |change| {
+            self.events.publish(EndpointEvent {
+                subsystem: labels.subsystem.to_string(),
+                upstream: labels.upstream.to_string(),
+                endpoint: addr.clone(),
+                change,
+            });
+        };
         match transition {
             Some(Transition::Ejected { until_ms, times }) => {
+                announce(EndpointChange::Ejected { until_ms, times });
                 self.metrics.endpoint_ejected(labels);
                 tracing::warn!(
                     upstream = %upstream.name, endpoint = %addr, times, until_ms,
@@ -129,6 +145,7 @@ impl UpstreamClient {
                 );
             }
             Some(Transition::Recovered) => {
+                announce(EndpointChange::Recovered);
                 tracing::info!(upstream = %upstream.name, endpoint = %addr, "endpoint recovered");
             }
             None => {}
@@ -402,7 +419,11 @@ mod tests {
 
     #[test]
     fn one_client_is_kept_per_distinct_connect_timeout() {
-        let client = UpstreamClient::new(TrustedProxies::default(), Arc::new(Metrics::new()));
+        let client = UpstreamClient::new(
+            TrustedProxies::default(),
+            Arc::new(Metrics::new()),
+            EndpointEvents::new(),
+        );
         client.client_for(Duration::from_secs(1));
         client.client_for(Duration::from_secs(1));
         client.client_for(Duration::from_secs(2));

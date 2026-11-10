@@ -432,24 +432,24 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream H: Health (new crate)
 
-- [ ] **H1 (M) Prober engine.** One task per endpoint of a group with active
+- [x] **H1 (M) Prober engine.** One task per endpoint of a group with active
   checks, started and stopped as snapshots change (a removed endpoint or a
   changed check config cancels its task), start jitter so probes do not
   synchronize, and a bound on concurrent probes.
   *Done when:* tests show probers appear, change and disappear with config
   edits and stop at shutdown.
-- [ ] **H2 (M) HTTP and TCP probes.** HTTP (path, expected status range, timeout)
+- [x] **H2 (M) HTTP and TCP probes.** HTTP (path, expected status range, timeout)
   and TCP connect, feeding the rise/fall state machine.
   *Done when:* a backend toggled between healthy and failing is marked
   unhealthy after `fall` probes and healthy after `rise`, with bounded timing.
-- [ ] **H3 (S) State change events.** Broadcast every endpoint state change
+- [~] **H3 (S) State change events.** (the `EndpointEvents` bus carries health and ejection changes; the admin plane forwards them in PR9/A4. Admin-state changes already arrive as `ConfigChanged`.) Broadcast every endpoint state change
   (health, ejection, admin state) for the admin plane, metrics and logs.
-- [ ] **H4 (S) Startup behaviour.** New endpoints start healthy and are demoted
+- [x] **H4 (S) Startup behaviour.** New endpoints start healthy and are demoted
   after `fall` failures (section 4.2); a restart rebuilds state from scratch.
 
 ### Workstream T: Telemetry
 
-- [~] **T1 (M) Upstream metrics.** (done in PR6: `upstream_requests_total` by outcome, `endpoint_ejections_total`, `upstream_panic_total`, series deleted for removed endpoints; PR7 adds `upstream_retries_total` and `retry_budget_exhausted_total`; still to come: `endpoint_healthy`, `in_flight`, `health_checks_total`) `fastproxy_upstream_endpoint_healthy`,
+- [x] **T1 (M) Upstream metrics.** (all of the listed metrics exist; labels from config only, series of removed endpoints and groups are deleted)
   `..._in_flight`, `fastproxy_upstream_requests_total` (by outcome),
   `fastproxy_upstream_retries_total` (by reason),
   `fastproxy_retry_budget_exhausted_total`, `fastproxy_health_checks_total`,
@@ -457,7 +457,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   labels from config only (E14); series for removed endpoints are deleted.
   *Done when:* a scrape after known traffic asserts the counters, and removing an
   endpoint removes its series.
-- [ ] **T2 (S) Status and traffic.** Add an upstream-health summary (healthy and
+- [~] **T2 (S) Status and traffic.** (`GET /api/status` has the upstream-health summary; the live traffic snapshot for the dashboard comes with U5) Add an upstream-health summary (healthy and
   total endpoints, the unhealthy list) to `GET /api/status` and the live traffic
   snapshot for the dashboard.
 
@@ -611,7 +611,7 @@ Suggested slicing into pull requests, each leaving `main` green and releasable
 5. **PR5** D2, D6, D7 and the rest of D4 (accounting, access log, drain) with Q1
 6. **PR6** D3 (passive health), T1's passive metrics and the panic-pick counter from D4
 7. **PR7** D5 (retries and budget)
-8. **PR8** H1-H4, rest of T1, T2 (active health crate)
+8. **PR8** H1-H4, rest of T1, T2 (active health crate); events reach the admin WebSocket in PR9
 9. **PR9** A1-A5 (admin API)
 10. **PR10** U1-U7 (UI)
 11. **PR11** Q2-Q6, W1-W4, C1-C3, release `v0.3.0`

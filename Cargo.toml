@@ -25,6 +25,7 @@ http-body-util = "0.1"
 fast-proxy-admin = { path = "crates/fast-proxy-admin" }
 fast-proxy-config-service = { path = "crates/fast-proxy-config-service" }
 fast-proxy-dataplane = { path = "crates/fast-proxy-dataplane" }
+fast-proxy-health = { path = "crates/fast-proxy-health" }
 fast-proxy-store = { path = "crates/fast-proxy-store" }
 fast-proxy-telemetry = { path = "crates/fast-proxy-telemetry" }
 axum = { workspace = true }

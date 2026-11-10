@@ -12,6 +12,7 @@ mod routes;
 mod status;
 mod subsystems;
 pub mod system;
+mod upstream_health;
 mod upstreams;
 
 pub use hosts::{add_host, remove_host};

@@ -443,6 +443,7 @@ dependencies = [
  "fast-proxy-admin",
  "fast-proxy-config-service",
  "fast-proxy-dataplane",
+ "fast-proxy-health",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "humantime",
@@ -521,6 +522,21 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "fast-proxy-health"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-balancing",
+ "fast-proxy-config-service",
+ "fast-proxy-model",
+ "fast-proxy-routing",
+ "fast-proxy-telemetry",
+ "rand 0.8.7",
+ "tokio",
  "tokio-util",
  "tracing",
 ]

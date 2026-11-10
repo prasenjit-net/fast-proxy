@@ -10,8 +10,9 @@ use fast_proxy_dataplane::{
     bind, BindError, DataPlane, ListenerSpec, Observability, RequestPipeline, TrustedProxies,
     TrustedProxyError, UpstreamClient,
 };
+use fast_proxy_health::{run_status_gauges, HealthEngine};
 use fast_proxy_store::{Store, StoreError};
-use fast_proxy_telemetry::{AccessLog, Metrics};
+use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -95,9 +96,24 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
+    // Active health checks and the endpoint gauges follow the live
+    // configuration; they stop with the data plane.
+    let endpoint_events = EndpointEvents::new();
+    let health = HealthEngine::new(
+        config_service.snapshot_holder(),
+        metrics.clone(),
+        endpoint_events.clone(),
+    );
+    tokio::spawn(health.run(config_service.subscribe(), data_stop.clone()));
+    tokio::spawn(run_status_gauges(
+        config_service.snapshot_holder(),
+        metrics.clone(),
+        data_stop.clone(),
+    ));
+
     let pipeline = Arc::new(RequestPipeline::new(
         config_service.snapshot_holder(),
-        UpstreamClient::new(trusted_proxies, metrics.clone()),
+        UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
         Observability {
             metrics,
             access_log: access_log.clone(),

@@ -188,6 +188,17 @@ impl Metrics {
         self.upstream.request(endpoint, outcome);
     }
 
+    /// Counts one active health probe of an endpoint.
+    pub fn health_check(&self, endpoint: EndpointLabels<'_>, ok: bool) {
+        self.upstream.health_check(endpoint, ok);
+    }
+
+    /// Publishes an endpoint's routability and in-flight count as gauges.
+    pub fn set_endpoint_state(&self, endpoint: EndpointLabels<'_>, healthy: bool, in_flight: i64) {
+        self.upstream
+            .set_endpoint_state(endpoint, healthy, in_flight);
+    }
+
     /// Counts one ejection of an endpoint.
     pub fn endpoint_ejected(&self, endpoint: EndpointLabels<'_>) {
         self.upstream.ejected(endpoint);

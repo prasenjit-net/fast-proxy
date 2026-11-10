@@ -4,9 +4,11 @@
 
 use std::collections::HashSet;
 
-use prometheus::{IntCounterVec, Opts, Registry};
+use prometheus::core::Collector;
+use prometheus::{IntCounterVec, IntGaugeVec, Opts, Registry};
 
 const ENDPOINT_REQUEST_LABELS: [&str; 4] = ["subsystem", "upstream", "endpoint", "outcome"];
+const HEALTH_CHECK_LABELS: [&str; 4] = ["subsystem", "upstream", "endpoint", "result"];
 const ENDPOINT_LABELS: [&str; 3] = ["subsystem", "upstream", "endpoint"];
 const GROUP_LABELS: [&str; 2] = ["subsystem", "upstream"];
 const RETRY_LABELS: [&str; 3] = ["subsystem", "upstream", "reason"];
@@ -78,6 +80,9 @@ pub(crate) struct UpstreamMetrics {
     panics: IntCounterVec,
     retries: IntCounterVec,
     budget_exhausted: IntCounterVec,
+    health_checks: IntCounterVec,
+    endpoint_healthy: IntGaugeVec,
+    endpoint_in_flight: IntGaugeVec,
 }
 
 fn counter(registry: &Registry, name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
@@ -86,6 +91,14 @@ fn counter(registry: &Registry, name: &str, help: &str, labels: &[&str]) -> IntC
         .register(Box::new(counter.clone()))
         .expect(REGISTRATION);
     counter
+}
+
+fn gauge(registry: &Registry, name: &str, help: &str, labels: &[&str]) -> IntGaugeVec {
+    let gauge = IntGaugeVec::new(Opts::new(name, help), labels).expect(REGISTRATION);
+    registry
+        .register(Box::new(gauge.clone()))
+        .expect(REGISTRATION);
+    gauge
 }
 
 impl UpstreamMetrics {
@@ -101,6 +114,24 @@ impl UpstreamMetrics {
                 registry,
                 "fastproxy_endpoint_ejections_total",
                 "Times an endpoint was taken out of rotation after repeated failures",
+                &ENDPOINT_LABELS,
+            ),
+            health_checks: counter(
+                registry,
+                "fastproxy_health_checks_total",
+                "Active health probes, by result",
+                &HEALTH_CHECK_LABELS,
+            ),
+            endpoint_healthy: gauge(
+                registry,
+                "fastproxy_upstream_endpoint_healthy",
+                "1 if the endpoint is healthy and not ejected, else 0",
+                &ENDPOINT_LABELS,
+            ),
+            endpoint_in_flight: gauge(
+                registry,
+                "fastproxy_upstream_endpoint_in_flight",
+                "Requests currently in flight on the endpoint",
                 &ENDPOINT_LABELS,
             ),
             retries: counter(
@@ -141,6 +172,33 @@ impl UpstreamMetrics {
             .inc();
     }
 
+    pub(crate) fn health_check(&self, endpoint: EndpointLabels<'_>, ok: bool) {
+        let result = if ok { "ok" } else { "fail" };
+        self.health_checks
+            .with_label_values(&[
+                endpoint.subsystem,
+                endpoint.upstream,
+                endpoint.endpoint,
+                result,
+            ])
+            .inc();
+    }
+
+    pub(crate) fn set_endpoint_state(
+        &self,
+        endpoint: EndpointLabels<'_>,
+        healthy: bool,
+        in_flight: i64,
+    ) {
+        let labels = [endpoint.subsystem, endpoint.upstream, endpoint.endpoint];
+        self.endpoint_healthy
+            .with_label_values(&labels)
+            .set(i64::from(healthy));
+        self.endpoint_in_flight
+            .with_label_values(&labels)
+            .set(in_flight);
+    }
+
     pub(crate) fn retry(&self, subsystem: &str, upstream: &str, reason: RetryReason) {
         self.retries
             .with_label_values(&[subsystem, upstream, reason.label()])
@@ -157,48 +215,84 @@ impl UpstreamMetrics {
         self.panics.with_label_values(&[subsystem, upstream]).inc();
     }
 
-    /// Deletes every series whose endpoint (or group, for panic picks) is
-    /// not in `live`.
+    /// Deletes every series whose endpoint (or group, for group-level
+    /// series) is not in `live`.
     pub(crate) fn retain(&self, live: &HashSet<(String, String, String)>) {
         let live_groups: HashSet<(&str, &str)> = live
             .iter()
             .map(|(subsystem, upstream, _)| (subsystem.as_str(), upstream.as_str()))
             .collect();
-        let per_endpoint = [
-            (&self.requests, &ENDPOINT_REQUEST_LABELS[..]),
-            (&self.ejections, &ENDPOINT_LABELS[..]),
-        ];
-        for (vec, names) in per_endpoint {
-            for labels in label_sets(vec, names) {
-                let key = (labels[0].clone(), labels[1].clone(), labels[2].clone());
-                if !live.contains(&key) {
-                    let values: Vec<&str> = labels.iter().map(String::as_str).collect();
-                    // The series was just read, so removal can only fail if a
-                    // concurrent retain already took it.
-                    let _ = vec.remove_label_values(&values);
-                }
-            }
-        }
-        let per_group = [
-            (&self.panics, &GROUP_LABELS[..]),
-            (&self.budget_exhausted, &GROUP_LABELS[..]),
-            (&self.retries, &RETRY_LABELS[..]),
-        ];
-        for (vec, names) in per_group {
-            for labels in label_sets(vec, names) {
-                if !live_groups.contains(&(labels[0].as_str(), labels[1].as_str())) {
-                    let values: Vec<&str> = labels.iter().map(String::as_str).collect();
-                    let _ = vec.remove_label_values(&values);
-                }
-            }
+        let endpoint_live = |labels: &[String]| {
+            live.contains(&(labels[0].clone(), labels[1].clone(), labels[2].clone()))
+        };
+        let group_live =
+            |labels: &[String]| live_groups.contains(&(labels[0].as_str(), labels[1].as_str()));
+        prune(
+            &self.requests,
+            &ENDPOINT_REQUEST_LABELS,
+            endpoint_live,
+            |v| {
+                let _ = self.requests.remove_label_values(v);
+            },
+        );
+        prune(
+            &self.health_checks,
+            &HEALTH_CHECK_LABELS,
+            endpoint_live,
+            |v| {
+                let _ = self.health_checks.remove_label_values(v);
+            },
+        );
+        prune(&self.ejections, &ENDPOINT_LABELS, endpoint_live, |v| {
+            let _ = self.ejections.remove_label_values(v);
+        });
+        prune(
+            &self.endpoint_healthy,
+            &ENDPOINT_LABELS,
+            endpoint_live,
+            |v| {
+                let _ = self.endpoint_healthy.remove_label_values(v);
+            },
+        );
+        prune(
+            &self.endpoint_in_flight,
+            &ENDPOINT_LABELS,
+            endpoint_live,
+            |v| {
+                let _ = self.endpoint_in_flight.remove_label_values(v);
+            },
+        );
+        prune(&self.panics, &GROUP_LABELS, group_live, |v| {
+            let _ = self.panics.remove_label_values(v);
+        });
+        prune(&self.budget_exhausted, &GROUP_LABELS, group_live, |v| {
+            let _ = self.budget_exhausted.remove_label_values(v);
+        });
+        prune(&self.retries, &RETRY_LABELS, group_live, |v| {
+            let _ = self.retries.remove_label_values(v);
+        });
+    }
+}
+
+/// Removes every series of `vec` whose labels `keep` rejects. A removal can
+/// only fail if the series is already gone.
+fn prune(
+    vec: &impl Collector,
+    names: &[&str],
+    keep: impl Fn(&[String]) -> bool,
+    remove: impl Fn(&[&str]),
+) {
+    for labels in label_sets(vec, names) {
+        if !keep(&labels) {
+            let values: Vec<&str> = labels.iter().map(String::as_str).collect();
+            remove(&values);
         }
     }
 }
 
 /// The label values of every series currently in `vec`, ordered like `names`
 /// (the gathered labels come back sorted by name, not in declaration order).
-fn label_sets(vec: &IntCounterVec, names: &[&str]) -> Vec<Vec<String>> {
-    use prometheus::core::Collector;
+fn label_sets(vec: &impl Collector, names: &[&str]) -> Vec<Vec<String>> {
     vec.collect()
         .iter()
         .flat_map(|family| family.get_metric())
@@ -282,6 +376,30 @@ mod tests {
         let text = metrics.render();
         assert!(!text.contains(r#"upstream="gone""#), "{text}");
         assert!(text.contains(r#"upstream="backend""#));
+    }
+
+    #[test]
+    fn health_checks_and_endpoint_gauges_are_reported_and_pruned() {
+        let metrics = Metrics::new();
+        metrics.health_check(labels("a:1"), true);
+        metrics.health_check(labels("a:1"), false);
+        metrics.health_check(labels("b:2"), true);
+        metrics.set_endpoint_state(labels("a:1"), true, 3);
+        metrics.set_endpoint_state(labels("b:2"), false, 0);
+        let text = metrics.render();
+        for expected in [
+            r#"fastproxy_health_checks_total{endpoint="a:1",result="ok",subsystem="shop",upstream="backend"} 1"#,
+            r#"fastproxy_health_checks_total{endpoint="a:1",result="fail",subsystem="shop",upstream="backend"} 1"#,
+            r#"fastproxy_upstream_endpoint_healthy{endpoint="a:1",subsystem="shop",upstream="backend"} 1"#,
+            r#"fastproxy_upstream_endpoint_healthy{endpoint="b:2",subsystem="shop",upstream="backend"} 0"#,
+            r#"fastproxy_upstream_endpoint_in_flight{endpoint="a:1",subsystem="shop",upstream="backend"} 3"#,
+        ] {
+            assert!(text.contains(expected), "missing {expected}\n{text}");
+        }
+        metrics.retain_upstream_series(&live(&["a:1"]));
+        let text = metrics.render();
+        assert!(!text.contains(r#"endpoint="b:2""#), "{text}");
+        assert!(text.contains(r#"endpoint="a:1""#));
     }
 
     #[test]
