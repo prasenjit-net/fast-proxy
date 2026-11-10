@@ -12,6 +12,7 @@ mod listener;
 mod pending_request;
 mod pipeline;
 mod protocol_switch;
+mod redirect;
 mod replay_body;
 mod request_id;
 mod responses;

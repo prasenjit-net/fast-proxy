@@ -50,6 +50,7 @@ impl TestApp {
                 .then(|| SocketAddr::from(([127, 0, 0, 1], 8443))),
             http2: false,
             min_version: "1.2".into(),
+            redirect_port: 8443,
         };
         let metrics = Arc::new(Metrics::new());
         let config = Arc::new(

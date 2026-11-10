@@ -33,6 +33,10 @@ pub struct Options {
     pub http2: Http2Limits,
     pub offer_http2: bool,
     pub max_handshakes: usize,
+    /// TLS on for the process (the HTTPS listener runs). Off: no HTTPS listener.
+    pub tls: bool,
+    /// The port redirects name; defaults to the HTTPS listener's own.
+    pub public_port: Option<u16>,
 }
 
 impl Default for Options {
@@ -44,6 +48,8 @@ impl Default for Options {
             http2: Http2Limits::default(),
             offer_http2: true,
             max_handshakes: 64,
+            tls: true,
+            public_port: None,
         }
     }
 }
@@ -112,7 +118,7 @@ impl Stack {
         let metrics = Arc::new(Metrics::new());
         let store = Store::open(&dir.path().join("fast-proxy.db")).unwrap();
         let settings = TlsSettings {
-            enabled: true,
+            enabled: options.tls,
             master_key_file: Some(dir.path().join("master.key")),
             env_master_key: None,
         };
@@ -130,11 +136,6 @@ impl Stack {
             metrics.clone(),
             EndpointEvents::new(),
         );
-        let pipeline = Arc::new(RequestPipeline::new(
-            service.snapshot_holder(),
-            forwarder,
-            observability,
-        ));
         let loopback: SocketAddr = ([127, 0, 0, 1], 0).into();
         let http = bind(&[ListenerSpec {
             name: "http".into(),
@@ -149,24 +150,33 @@ impl Stack {
         .await
         .unwrap()
         .remove(0);
-        let tls = TlsPlane::new(
-            https,
-            service.snapshot_holder(),
-            TlsPlaneSettings {
-                policy: ServerTlsPolicy {
-                    min_version: options.min_version,
-                    http2: options.offer_http2,
+        let public_port = options
+            .public_port
+            .unwrap_or_else(|| https.local_addr().port());
+        let pipeline = Arc::new(
+            RequestPipeline::new(service.snapshot_holder(), forwarder, observability)
+                .with_https_port(public_port),
+        );
+        let tls = options.tls.then(|| {
+            TlsPlane::new(
+                https,
+                service.snapshot_holder(),
+                TlsPlaneSettings {
+                    policy: ServerTlsPolicy {
+                        min_version: options.min_version,
+                        http2: options.offer_http2,
+                    },
+                    handshake_timeout: options.handshake_timeout,
+                    max_concurrent_handshakes: options.max_handshakes,
+                    reject_unknown_sni: options.reject_unknown_sni,
+                    http2: options.http2,
                 },
-                handshake_timeout: options.handshake_timeout,
-                max_concurrent_handshakes: options.max_handshakes,
-                reject_unknown_sni: options.reject_unknown_sni,
-                http2: options.http2,
-            },
-            metrics.clone(),
-        )
-        .unwrap();
+                metrics.clone(),
+            )
+            .unwrap()
+        });
         let shutdown = CancellationToken::new();
-        let plane = DataPlane::start_with_tls(http, Some(tls), pipeline, shutdown.clone());
+        let plane = DataPlane::start_with_tls(http, tls, pipeline, shutdown.clone());
         let addr_of = |name: &str| {
             plane
                 .local_addrs()
@@ -175,7 +185,8 @@ impl Stack {
                 .map(|(_, addr)| *addr)
                 .unwrap()
         };
-        let (http, https) = (addr_of("http"), addr_of("https"));
+        let http = addr_of("http");
+        let https = if options.tls { addr_of("https") } else { http };
         Self {
             service,
             metrics,

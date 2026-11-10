@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, TlsConfig};
 
 /// Anything that stops the proxy from starting or keeps it from serving.
 #[derive(Debug, Error)]
@@ -91,6 +91,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             enabled: config.data_plane.tls.enabled,
             listen: https.as_ref().map(|plane| plane.listener().local_addr()),
             http2: config.data_plane.tls.http2,
+            redirect_port: redirect_port(&config.data_plane.tls, https.as_ref()),
             min_version: match config.data_plane.tls.min_version {
                 MinTlsVersion::V1_2 => "1.2",
                 MinTlsVersion::V1_3 => "1.3",
@@ -139,14 +140,17 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         data_stop.clone(),
     ));
 
-    let pipeline = Arc::new(RequestPipeline::new(
-        config_service.snapshot_holder(),
-        UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
-        Observability {
-            metrics,
-            access_log: access_log.clone(),
-        },
-    ));
+    let pipeline = Arc::new(
+        RequestPipeline::new(
+            config_service.snapshot_holder(),
+            UpstreamClient::new(trusted_proxies, metrics.clone(), endpoint_events),
+            Observability {
+                metrics,
+                access_log: access_log.clone(),
+            },
+        )
+        .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref())),
+    );
     let plane = DataPlane::start_with_tls(bound, https, pipeline, data_stop.clone());
 
     for (name, addr) in plane.local_addrs() {
@@ -196,6 +200,14 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
+}
+
+/// The port a redirect to HTTPS names: `public_port` when set (NAT, containers),
+/// else the port the HTTPS listener is bound to, else the default 443.
+fn redirect_port(tls: &TlsConfig, https: Option<&TlsPlane>) -> u16 {
+    tls.public_port
+        .or_else(|| https.map(|plane| plane.listener().local_addr().port()))
+        .unwrap_or(443)
 }
 
 /// The name of the HTTPS listener in logs, metrics and the admin runtime view.

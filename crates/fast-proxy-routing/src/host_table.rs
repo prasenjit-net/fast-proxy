@@ -42,6 +42,18 @@ impl HostTable {
     }
 }
 
+/// The DNS name of a `Host` header value: lowercased, port and trailing dot
+/// removed, and every character checked to be a letter, digit, `-` or `.`. A
+/// value that is anything else (a wildcard pattern matches any suffix, so the
+/// table alone does not vouch for the characters) is `None`. Use it when the
+/// host is put into something else, such as a redirect `Location`.
+pub fn dns_host(host_header: &str) -> Option<String> {
+    let host = normalize_host(host_header)?;
+    host.bytes()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+        .then_some(host)
+}
+
 /// Lowercases, strips a port and one trailing dot. Returns `None` for
 /// values that can never match a DNS-name pattern.
 fn normalize_host(raw: &str) -> Option<String> {
@@ -79,6 +91,29 @@ mod tests {
             .map(|(raw, id)| (pattern(raw), SubsystemId(*id)))
             .collect();
         HostTable::build(parsed.iter().map(|(p, id)| (p, *id)))
+    }
+
+    #[test]
+    fn dns_host_accepts_only_plain_names() {
+        assert_eq!(
+            dns_host("Shop.Example.com:8080").as_deref(),
+            Some("shop.example.com")
+        );
+        assert_eq!(
+            dns_host("shop.example.com.").as_deref(),
+            Some("shop.example.com")
+        );
+        for bad in [
+            "a@evil.com",
+            "a/b.example.com",
+            "a b",
+            "[::1]",
+            "",
+            "a_b.example.com",
+            "x\\y",
+        ] {
+            assert_eq!(dns_host(bad), None, "{bad}");
+        }
     }
 
     #[test]

@@ -688,3 +688,171 @@ async fn an_oversized_body_is_refused() {
         .await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+async fn route_to_backend(app: &TestApp, id: i64) -> i64 {
+    let (status, body) = app
+        .post(
+            &format!("/api/subsystems/{id}/upstreams"),
+            json!({ "name": "backend", "endpoints": [{ "addr": "127.0.0.1:3000" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let upstream = body["data"]["id"].as_i64().unwrap();
+    let (status, body) = app
+        .post(
+            &format!("/api/subsystems/{id}/routes"),
+            json!({ "prefix": "/", "upstreamGroupId": upstream }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    upstream
+}
+
+#[tokio::test]
+async fn the_resolver_shows_the_redirect_https_service_and_upstream_scheme() {
+    let app = TestApp::with_tls(true).await;
+    let id = site(&app, "shop", "shop.example.com").await;
+    let upstream = route_to_backend(&app, id).await;
+    let (status, body) = app
+        .put(
+            &format!("/api/subsystems/{id}"),
+            json!({
+                "name": "shop",
+                "https": { "enabled": true, "redirect": "308" }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, resolved) = app
+        .post(
+            "/api/resolve",
+            json!({ "host": "shop.example.com", "path": "/cart?x=1" }),
+        )
+        .await;
+    let https = &resolved["data"]["https"];
+    assert_eq!(https["servedOverHttps"], true);
+    assert_eq!(https["plainHttpRedirect"]["status"], 308);
+    assert_eq!(
+        https["plainHttpRedirect"]["location"],
+        "https://shop.example.com:8443/cart?x=1"
+    );
+    assert_eq!(resolved["data"]["route"]["upstreamScheme"], "http");
+
+    app.config
+        .apply(move |conn| {
+            let mut fields = fast_proxy_store::UpstreamFields {
+                name: "backend".into(),
+                policy: fast_proxy_model::GroupPolicy::default(),
+            };
+            fields.policy.tls.enabled = true;
+            fast_proxy_store::repository::upstreams::update(
+                conn,
+                fast_proxy_model::SubsystemId(id),
+                fast_proxy_model::UpstreamGroupId(upstream),
+                &fields,
+            )?;
+            Ok(fast_proxy_store::Mutation {
+                value: (),
+                summary: "tls".into(),
+            })
+        })
+        .await
+        .unwrap();
+    let (_, resolved) = app
+        .post(
+            "/api/resolve",
+            json!({ "host": "shop.example.com", "path": "/x" }),
+        )
+        .await;
+    assert_eq!(resolved["data"]["route"]["upstreamScheme"], "https");
+    assert_eq!(
+        resolved["data"]["route"]["endpoints"][0]["upstreamUrl"],
+        "https://127.0.0.1:3000/x"
+    );
+
+    let (_, unknown) = app
+        .post(
+            "/api/resolve",
+            json!({ "host": "nobody.example.com", "path": "/" }),
+        )
+        .await;
+    assert!(unknown["data"]["https"].is_null());
+}
+
+#[tokio::test]
+async fn the_resolver_reports_no_redirect_when_tls_is_off_or_the_mode_is_off() {
+    let off = TestApp::with_tls(false).await;
+    let id = site(&off, "shop", "shop.example.com").await;
+    route_to_backend(&off, id).await;
+    off.put(
+        &format!("/api/subsystems/{id}"),
+        json!({
+            "name": "shop", "https": { "enabled": true, "redirect": "308" }
+        }),
+    )
+    .await;
+    let (_, resolved) = off
+        .post(
+            "/api/resolve",
+            json!({ "host": "shop.example.com", "path": "/" }),
+        )
+        .await;
+    assert_eq!(resolved["data"]["https"]["servedOverHttps"], false);
+    assert!(resolved["data"]["https"]["plainHttpRedirect"].is_null());
+
+    let on = TestApp::with_tls(true).await;
+    let id = site(&on, "shop", "shop.example.com").await;
+    route_to_backend(&on, id).await;
+    on.put(
+        &format!("/api/subsystems/{id}"),
+        json!({
+            "name": "shop", "https": { "enabled": true }
+        }),
+    )
+    .await;
+    let (_, resolved) = on
+        .post(
+            "/api/resolve",
+            json!({ "host": "shop.example.com", "path": "/" }),
+        )
+        .await;
+    assert_eq!(resolved["data"]["https"]["servedOverHttps"], true);
+    assert!(resolved["data"]["https"]["plainHttpRedirect"].is_null());
+}
+
+#[tokio::test]
+async fn the_status_reports_the_tls_state_and_the_soonest_certificate_expiry() {
+    let app = TestApp::with_tls(true).await;
+    let (_, empty) = app.get("/api/status").await;
+    assert_eq!(empty["data"]["tls"]["enabled"], true);
+    assert_eq!(empty["data"]["tls"]["listen"], "127.0.0.1:8443");
+    assert_eq!(
+        empty["data"]["tls"]["vault"], "ok",
+        "a key is loaded; nothing is sealed yet"
+    );
+    assert_eq!(empty["data"]["tls"]["certificates"], 0);
+    assert!(empty["data"]["tls"]["soonestExpiry"].is_null());
+
+    let ca = TestCa::new("ca");
+    let later = ca.issue(&LeafSpec::new(&["a.example.com"]).expiring_in_days(200));
+    let sooner = ca.issue(&LeafSpec::new(&["b.example.com"]).expiring_in_days(20));
+    app.post("/api/certificates", upload_body("later", &later))
+        .await;
+    app.post("/api/certificates", upload_body("sooner", &sooner))
+        .await;
+    let (_, status) = app.get("/api/status").await;
+    let tls = &status["data"]["tls"];
+    assert_eq!(tls["certificates"], 2);
+    assert_eq!(tls["unreadable"], 0);
+    assert_eq!(tls["vault"], "ok");
+    assert_eq!(tls["soonestExpiry"]["name"], "sooner");
+    let left = tls["soonestExpiry"]["secondsLeft"].as_i64().unwrap();
+    assert!(left > 19 * 86_400 && left <= 20 * 86_400, "{left}");
+
+    let off = TestApp::new().await;
+    assert_eq!(
+        off.get("/api/status").await.1["data"]["tls"]["enabled"],
+        false
+    );
+}

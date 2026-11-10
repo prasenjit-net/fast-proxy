@@ -585,6 +585,12 @@ from M2.
 
 ### Workstream CS: Config service
 
+_Landed in PR8: D5 (the plain-HTTP redirect and HSTS; the redirect decision lives in
+`fast-proxy-routing` so the data plane and the admin resolver share it) and A8 (the
+resolver shows HTTPS service, the redirect and the upstream scheme; `GET /api/status`
+adds the TLS state and the soonest certificate expiry; the `certState` event came
+with PR5)._
+
 _Landed in PR7: D2 (HTTP/2 with limits, GOAWAY drain, the process `http2` switch and
 four config knobs), D3 (the 421 rules), D4 (the scheme from the connection; the plan's
 `Forwarded` header is not implemented since the proxy only ever set `X-Forwarded-*`),
@@ -675,7 +681,7 @@ loopback checks come with PR5._
   from the connection; client-supplied values are still not trusted unless the
   peer is trusted; the upstream URI scheme follows the group.
   *Done when:* the forwarded-header tests cover http and https and trusted peers.
-- [ ] **D5 (M) Redirect and HSTS.** The redirect for plain-HTTP requests (F13), with
+- [x] **D5 (M) Redirect and HSTS.** The redirect for plain-HTTP requests (F13), with
   the `public_port` rule, only while TLS is on, and a single function the ACME
   challenge can bypass in M4; `Strict-Transport-Security` on HTTPS responses only.
   *Done when:* tests cover 308 and 301, the path and query preserved byte for
@@ -735,7 +741,7 @@ capture test). A7 and A8 follow with upstream TLS and the redirect work._
   enabling generates a dev certificate when none is attached.
 - [ ] **A7 (M) Upstream TLS settings** in the group API (`tls` object); an unknown
   CA name is a 400 naming `tls.ca`.
-- [ ] **A8 (S) Resolver, status and events.** The resolver shows the scheme the
+- [x] **A8 (S) Resolver, status and events.** The resolver shows the scheme the
   proxy will use to the upstream, whether a request on plain HTTP would be
   redirected, and whether the host is served over HTTPS; `GET /api/status` adds the
   process TLS state and the soonest certificate expiry; the `certState` WebSocket

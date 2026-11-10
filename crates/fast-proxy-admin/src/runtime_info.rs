@@ -18,6 +18,8 @@ pub struct TlsInfo {
     pub http2: bool,
     /// The lowest TLS version accepted: `1.2` or `1.3`.
     pub min_version: String,
+    /// The port a redirect to HTTPS names (443 is left out of the URL).
+    pub redirect_port: u16,
 }
 
 /// Facts about the running process that only the binary knows, reported by

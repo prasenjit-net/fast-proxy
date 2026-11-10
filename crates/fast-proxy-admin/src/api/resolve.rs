@@ -2,7 +2,9 @@ use axum::extract::State;
 use axum::http::Uri;
 use axum::Json;
 use fast_proxy_balancing::monotonic_ms;
-use fast_proxy_routing::{build_upstream_uri, CompiledRoute, CompiledSubsystem, Lookup};
+use fast_proxy_routing::{
+    build_upstream_uri, redirect_target, CompiledRoute, CompiledSubsystem, Lookup, Snapshot,
+};
 use serde::{Deserialize, Serialize};
 
 use super::envelope::Envelope;
@@ -42,6 +44,9 @@ pub struct MatchedRoute {
     strip_prefix: bool,
     upstream_prefix: String,
     preserve_host: bool,
+    /// `https` when the group has TLS on, else `http`: the scheme the proxy
+    /// uses to reach its endpoints.
+    upstream_scheme: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +70,25 @@ pub struct Resolution {
     reason: Option<&'static str>,
     subsystem: Option<NamedRef>,
     route: Option<MatchedRoute>,
+    /// How the matched subsystem is reached over HTTPS; `None` for an unknown host.
+    https: Option<HttpsResolution>,
+}
+
+/// What HTTPS means for the request's host, as the data plane would act.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpsResolution {
+    /// HTTPS is enabled on the subsystem and TLS is on for the process.
+    served_over_https: bool,
+    /// Set when a request for this host on a plain-HTTP listener would be
+    /// redirected (TLS on, HTTPS enabled, a redirect mode set).
+    plain_http_redirect: Option<RedirectDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RedirectDto {
+    status: u16,
+    location: String,
 }
 
 impl Resolution {
@@ -74,7 +98,26 @@ impl Resolution {
             reason: Some(reason),
             subsystem,
             route: None,
+            https: None,
         }
+    }
+}
+
+fn https_resolution(
+    snapshot: &Snapshot,
+    subsystem: &CompiledSubsystem,
+    host: &str,
+    uri: &Uri,
+    redirect_port: u16,
+) -> HttpsResolution {
+    HttpsResolution {
+        served_over_https: snapshot.tls_enabled && subsystem.https.enabled,
+        plain_http_redirect: redirect_target(snapshot, subsystem, host, uri, redirect_port).map(
+            |(status, location)| RedirectDto {
+                status: status.as_u16(),
+                location,
+            },
+        ),
     }
 }
 
@@ -120,14 +163,21 @@ pub async fn resolve(
     let snapshot = state.config.snapshot_holder().load();
     let path = uri.path();
 
-    let resolution = match snapshot.lookup(body.host.trim(), path) {
+    let host = body.host.trim();
+    let port = state.runtime.tls.redirect_port;
+    let https = |subsystem: &CompiledSubsystem| {
+        Some(https_resolution(&snapshot, subsystem, host, &uri, port))
+    };
+    let resolution = match snapshot.lookup(host, path) {
         Lookup::UnknownHost => Resolution::unmatched("unknown_host", None),
-        Lookup::SubsystemDisabled { id, subsystem } => {
-            Resolution::unmatched("subsystem_disabled", Some(named(id.0, subsystem)))
-        }
-        Lookup::NoRoute { id, subsystem } => {
-            Resolution::unmatched("no_route", Some(named(id.0, subsystem)))
-        }
+        Lookup::SubsystemDisabled { id, subsystem } => Resolution {
+            https: https(subsystem),
+            ..Resolution::unmatched("subsystem_disabled", Some(named(id.0, subsystem)))
+        },
+        Lookup::NoRoute { id, subsystem } => Resolution {
+            https: https(subsystem),
+            ..Resolution::unmatched("no_route", Some(named(id.0, subsystem)))
+        },
         Lookup::Matched {
             id,
             subsystem,
@@ -139,6 +189,7 @@ pub async fn resolve(
                 reason: None,
                 subsystem: Some(named(id.0, subsystem)),
                 route: Some(matched_route(route.route, &uri, consumed)),
+                https: https(subsystem),
             }
         }
     };
@@ -174,5 +225,10 @@ fn matched_route(compiled: &CompiledRoute, uri: &Uri, consumed: usize) -> Matche
         strip_prefix: compiled.strip_prefix,
         upstream_prefix: compiled.upstream_prefix.as_str().to_string(),
         preserve_host: compiled.preserve_host,
+        upstream_scheme: if upstream.policy.tls.enabled {
+            "https"
+        } else {
+            "http"
+        },
     }
 }
