@@ -183,8 +183,15 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = EndpointAddr::parse(&listener.local_addr().unwrap().to_string()).unwrap();
         drop(listener);
+        // Windows takes about a second to report a refused connection, so
+        // allow far longer than the other tests' timeout; Linux and macOS
+        // answer at once.
+        let patient = |kind| ProbeSpec {
+            timeout: Duration::from_secs(10),
+            ..spec(kind)
+        };
         for kind in [HealthKind::Tcp, HealthKind::Http] {
-            let err = run_probe(&spec(kind), &addr).await.unwrap_err();
+            let err = run_probe(&patient(kind), &addr).await.unwrap_err();
             assert!(err.contains("connect failed"), "{err}");
         }
     }
