@@ -105,6 +105,21 @@ pub fn apply_forwarded(headers: &mut HeaderMap, client: &ClientInfo) {
     }
 }
 
+/// Gives a request that carries its host only in the URI (an HTTP/2 `:authority`,
+/// or an absolute-form request line) a `Host` header, so the upstream and the
+/// `X-Forwarded-Host` header see it.
+pub fn ensure_host(head: &mut http::request::Parts) {
+    if head.headers.contains_key(header::HOST) {
+        return;
+    }
+    let Some(authority) = head.uri.authority() else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(authority.as_str()) {
+        head.headers.insert(header::HOST, value);
+    }
+}
+
 /// Applies the route's `preserve_host` choice: either keep the client's
 /// `Host`, or replace it with the upstream endpoint's address.
 pub fn apply_host(headers: &mut HeaderMap, preserve_host: bool, endpoint: &str) {
@@ -280,6 +295,61 @@ mod tests {
         let mut headers = map(&[("x-forwarded-host", "evil.example")]);
         apply_forwarded(&mut headers, &client(false));
         assert!(!headers.contains_key("x-forwarded-host"));
+    }
+
+    #[test]
+    fn a_host_carried_only_in_the_uri_becomes_a_host_header() {
+        let (mut head, ()) = http::Request::builder()
+            .uri("https://shop.example.com:8443/cart")
+            .body(())
+            .unwrap()
+            .into_parts();
+        ensure_host(&mut head);
+        assert_eq!(value(&head.headers, "host"), Some("shop.example.com:8443"));
+
+        let (mut kept, ()) = http::Request::builder()
+            .uri("https://other.example.com/")
+            .header("host", "shop.example.com")
+            .body(())
+            .unwrap()
+            .into_parts();
+        ensure_host(&mut kept);
+        assert_eq!(value(&kept.headers, "host"), Some("shop.example.com"));
+
+        let (mut neither, ()) = http::Request::builder()
+            .uri("/")
+            .body(())
+            .unwrap()
+            .into_parts();
+        ensure_host(&mut neither);
+        assert!(!neither.headers.contains_key("host"));
+    }
+
+    #[test]
+    fn the_scheme_comes_from_the_connection() {
+        let mut headers = map(&[("host", "shop.example.com")]);
+        apply_forwarded(
+            &mut headers,
+            &ClientInfo {
+                scheme: "https",
+                ..client(false)
+            },
+        );
+        assert_eq!(value(&headers, "x-forwarded-proto"), Some("https"));
+        let mut trusted = map(&[("host", "edge"), ("x-forwarded-proto", "https")]);
+        apply_forwarded(&mut trusted, &client(true));
+        assert_eq!(
+            value(&trusted, "x-forwarded-proto"),
+            Some("https"),
+            "a trusted peer's value is kept"
+        );
+        let mut spoofed = map(&[("host", "edge"), ("x-forwarded-proto", "https")]);
+        apply_forwarded(&mut spoofed, &client(false));
+        assert_eq!(
+            value(&spoofed, "x-forwarded-proto"),
+            Some("http"),
+            "an untrusted one is replaced"
+        );
     }
 
     #[test]

@@ -47,6 +47,11 @@ http2 = true
 reject_unknown_sni = false
 handshake_timeout = "10s"
 max_concurrent_handshakes = 256
+# HTTP/2 limits (applied when a client negotiates h2).
+http2_max_concurrent_streams = 128
+http2_max_header_list_size = 65536
+http2_keep_alive_interval = "30s"
+http2_keep_alive_timeout = "20s"
 
 [admin]
 # The admin plane (UI, REST API, /metrics) has no authentication yet.

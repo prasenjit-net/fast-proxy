@@ -185,11 +185,12 @@ names and endpoint addresses); traffic for an unknown host is counted as `subsys
 and requests with no route as `route="_none"`. An access-log line looks like:
 
 ```
-127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 attempts=1 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 total_ms=3.2
+127.0.0.1:50110 - [2026-11-09T19:56:46.075Z] "GET /index.html HTTP/1.1" 200 plane=data subsystem=shop route=/ upstream=127.0.0.1:3001 attempts=1 request_id=f9cce2d6… upstream_ms=3.0 bytes_out=16 proto=http/1.1 tls=- total_ms=3.2
 ```
 
 `upstream` is the endpoint that answered (the last one tried) and `attempts` how
-many were tried: 2 means the first failed and a retry succeeded. A request whose
+many were tried: 2 means the first failed and a retry succeeded. `proto` is the client protocol (`http/1.1` or `h2`) and `tls` the negotiated TLS
+version on the HTTPS listener (`-` on plain HTTP). A request whose
 client left before the response is logged with status `499` and counted in
 `fastproxy_requests_cancelled_total`.
 

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 pub mod flaky;
 pub mod groups;
 pub mod load;
+pub mod tls_stack;
 
 use serde_json::{json, Value};
 

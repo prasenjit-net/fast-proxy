@@ -14,6 +14,10 @@ pub enum FixedResponse {
     SubsystemDisabled,
     /// The subsystem has no route for the path.
     NoRoute,
+    /// The request reached a connection whose certificate was not meant for its
+    /// host (or a host not served over HTTPS): the client should open another
+    /// connection (RFC 9110, 421).
+    MisdirectedRequest,
     /// The route's upstream group has no endpoint that may take the request.
     NoHealthyUpstream,
     /// The upstream refused or dropped the connection.
@@ -27,6 +31,7 @@ impl FixedResponse {
         match self {
             Self::UnknownHost | Self::NoRoute => StatusCode::NOT_FOUND,
             Self::SubsystemDisabled | Self::NoHealthyUpstream => StatusCode::SERVICE_UNAVAILABLE,
+            Self::MisdirectedRequest => StatusCode::MISDIRECTED_REQUEST,
             Self::BadGateway => StatusCode::BAD_GATEWAY,
             Self::GatewayTimeout => StatusCode::GATEWAY_TIMEOUT,
         }
@@ -38,6 +43,7 @@ impl FixedResponse {
             Self::SubsystemDisabled => "subsystem_disabled",
             Self::NoRoute => "no_route",
             Self::NoHealthyUpstream => "no_healthy_upstream",
+            Self::MisdirectedRequest => "misdirected_request",
             Self::BadGateway => "bad_gateway",
             Self::GatewayTimeout => "gateway_timeout",
         }
@@ -49,6 +55,7 @@ impl FixedResponse {
             Self::SubsystemDisabled => "service unavailable",
             Self::NoRoute => "no route matches this path",
             Self::NoHealthyUpstream => "no healthy upstream",
+            Self::MisdirectedRequest => "this host is not served on this connection",
             Self::BadGateway => "bad gateway",
             Self::GatewayTimeout => "gateway timeout",
         }
@@ -106,11 +113,12 @@ mod tests {
 
     use super::*;
 
-    const ALL: [FixedResponse; 6] = [
+    const ALL: [FixedResponse; 7] = [
         FixedResponse::UnknownHost,
         FixedResponse::SubsystemDisabled,
         FixedResponse::NoRoute,
         FixedResponse::NoHealthyUpstream,
+        FixedResponse::MisdirectedRequest,
         FixedResponse::BadGateway,
         FixedResponse::GatewayTimeout,
     ];
@@ -123,7 +131,7 @@ mod tests {
     #[test]
     fn maps_each_kind_to_its_status() {
         let statuses: Vec<u16> = ALL.iter().map(|r| r.status().as_u16()).collect();
-        assert_eq!(statuses, [404, 503, 404, 503, 502, 504]);
+        assert_eq!(statuses, [404, 503, 404, 503, 421, 502, 504]);
     }
 
     #[tokio::test]

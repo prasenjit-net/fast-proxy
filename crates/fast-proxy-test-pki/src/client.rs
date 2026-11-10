@@ -62,7 +62,9 @@ pub async fn request(
     Ok(String::from_utf8_lossy(&answer).into_owned())
 }
 
-async fn connect(
+/// Completes a handshake and returns the encrypted stream with what was negotiated,
+/// for tests that speak a protocol (HTTP/2) over it themselves.
+pub async fn connect(
     addr: SocketAddr,
     hello: &ClientHello,
 ) -> Result<(tokio_rustls::client::TlsStream<TcpStream>, Negotiated), HandshakeError> {

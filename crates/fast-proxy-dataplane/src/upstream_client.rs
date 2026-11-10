@@ -296,6 +296,11 @@ impl Forward for UpstreamClient {
         let client_upgrade = upgrading.then(|| hyper::upgrade::on(&mut request));
 
         let (mut head, body) = request.into_parts();
+        headers::ensure_host(&mut head);
+        // Upstream connections speak HTTP/1.1, whatever the client used.
+        if head.version == http::Version::HTTP_2 {
+            head.version = http::Version::HTTP_11;
+        }
         if upgrading {
             headers::strip_hop_by_hop_keeping_upgrade(&mut head.headers);
         } else {

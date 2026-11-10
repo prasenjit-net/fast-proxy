@@ -28,6 +28,16 @@ pub struct TlsConfig {
     pub handshake_timeout: Duration,
     /// How many handshakes may run at once.
     pub max_concurrent_handshakes: usize,
+    /// Concurrent HTTP/2 streams one client connection may open.
+    pub http2_max_concurrent_streams: u32,
+    /// The largest HTTP/2 request header list accepted, in bytes.
+    pub http2_max_header_list_size: u32,
+    /// How often an idle HTTP/2 connection is pinged.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub http2_keep_alive_interval: Duration,
+    /// How long an HTTP/2 ping may go unanswered before the connection closes.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub http2_keep_alive_timeout: Duration,
 }
 
 impl Default for TlsConfig {
@@ -41,6 +51,10 @@ impl Default for TlsConfig {
             reject_unknown_sni: false,
             handshake_timeout: Duration::from_secs(10),
             max_concurrent_handshakes: 256,
+            http2_max_concurrent_streams: 128,
+            http2_max_header_list_size: 64 * 1024,
+            http2_keep_alive_interval: Duration::from_secs(30),
+            http2_keep_alive_timeout: Duration::from_secs(20),
         }
     }
 }

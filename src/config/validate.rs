@@ -63,6 +63,24 @@ fn validate_tls(config: &AppConfig) -> Result<(), ConfigError> {
     if !(1..=65_536).contains(&tls.max_concurrent_handshakes) {
         return invalid("data_plane.tls.max_concurrent_handshakes must be between 1 and 65536");
     }
+    if !(1..=1000).contains(&tls.http2_max_concurrent_streams) {
+        return invalid("data_plane.tls.http2_max_concurrent_streams must be between 1 and 1000");
+    }
+    if !(1024..=1_048_576).contains(&tls.http2_max_header_list_size) {
+        return invalid(
+            "data_plane.tls.http2_max_header_list_size must be between 1024 and 1048576 bytes",
+        );
+    }
+    for (key, value) in [
+        ("http2_keep_alive_interval", tls.http2_keep_alive_interval),
+        ("http2_keep_alive_timeout", tls.http2_keep_alive_timeout),
+    ] {
+        if value.is_zero() || value > Duration::from_secs(3600) {
+            return invalid(format!(
+                "data_plane.tls.{key} must be above 0s and at most 1h"
+            ));
+        }
+    }
     check_master_key_file(&config.data_plane.master_key_path())?;
     if !tls.enabled {
         return Ok(());
@@ -239,7 +257,7 @@ mod tests {
     fn tls_limits_are_range_checked() {
         let dir = tempfile::tempdir().unwrap();
         type Change = fn(&mut AppConfig);
-        let cases: [(Change, &str); 5] = [
+        let cases: [(Change, &str); 9] = [
             (|c| c.data_plane.tls.public_port = Some(0), "public_port"),
             (
                 |c| c.data_plane.tls.handshake_timeout = Duration::ZERO,
@@ -256,6 +274,22 @@ mod tests {
             (
                 |c| c.data_plane.tls.max_concurrent_handshakes = 70_000,
                 "max_concurrent_handshakes",
+            ),
+            (
+                |c| c.data_plane.tls.http2_max_concurrent_streams = 0,
+                "http2_max_concurrent_streams",
+            ),
+            (
+                |c| c.data_plane.tls.http2_max_header_list_size = 100,
+                "http2_max_header_list_size",
+            ),
+            (
+                |c| c.data_plane.tls.http2_keep_alive_interval = Duration::ZERO,
+                "http2_keep_alive_interval",
+            ),
+            (
+                |c| c.data_plane.tls.http2_keep_alive_timeout = Duration::from_secs(7200),
+                "http2_keep_alive_timeout",
             ),
         ];
         for (change, key) in cases {

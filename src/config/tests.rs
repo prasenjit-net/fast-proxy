@@ -141,6 +141,7 @@ fn tls_and_cluster_settings_default_to_off_and_five_seconds() {
     assert_eq!(tls.min_version, fast_proxy_tls::MinTlsVersion::V1_2);
     assert_eq!(tls.handshake_timeout, Duration::from_secs(10));
     assert_eq!(tls.max_concurrent_handshakes, 256);
+    assert_eq!(tls.http2_max_concurrent_streams, 128);
     assert_eq!(
         config.data_plane.config_poll_interval,
         Duration::from_secs(5)
@@ -168,6 +169,10 @@ fn parses_the_tls_section_and_cluster_settings() {
         reject_unknown_sni = true
         handshake_timeout = "3s"
         max_concurrent_handshakes = 64
+        http2_max_concurrent_streams = 32
+        http2_max_header_list_size = 16384
+        http2_keep_alive_interval = "10s"
+        http2_keep_alive_timeout = "5s"
         "#,
     )
     .unwrap();
@@ -177,6 +182,10 @@ fn parses_the_tls_section_and_cluster_settings() {
     assert_eq!(tls.min_version, fast_proxy_tls::MinTlsVersion::V1_3);
     assert_eq!(tls.handshake_timeout, Duration::from_secs(3));
     assert_eq!(tls.max_concurrent_handshakes, 64);
+    assert_eq!(tls.http2_max_concurrent_streams, 32);
+    assert_eq!(tls.http2_max_header_list_size, 16_384);
+    assert_eq!(tls.http2_keep_alive_interval, Duration::from_secs(10));
+    assert_eq!(tls.http2_keep_alive_timeout, Duration::from_secs(5));
     assert_eq!(config.data_plane.config_poll_interval, Duration::ZERO);
     assert_eq!(
         config.data_plane.master_key_path(),

@@ -338,6 +338,8 @@ fn metrics_the_access_log_and_live_traffic_reflect_real_traffic() {
         "request_id=",
         "upstream_ms=",
         "bytes_out=",
+        "proto=http/1.1",
+        "tls=-",
         "total_ms=",
     ] {
         assert!(line.contains(field), "{field} missing from {line}");

@@ -64,6 +64,16 @@ impl Drop for ConnectionGuard {
     }
 }
 
+/// What a TLS handshake settled, kept for the life of the connection: the SNI
+/// the client sent, the certificate presented (`None` for the placeholder) and
+/// the negotiated TLS version such as `TLSv1_3`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TlsConnection {
+    pub sni: Option<String>,
+    pub certificate_id: Option<fast_proxy_model::CertificateId>,
+    pub version: String,
+}
+
 /// What a request needs to know about the connection it arrived on. The
 /// server attaches it to every request so an upgraded tunnel can keep the
 /// connection counted and be closed when the drain deadline passes.
@@ -75,6 +85,8 @@ pub struct ConnectionContext {
     pub force_close: CancellationToken,
     /// `http` or `https`: how the client reached us, for `X-Forwarded-Proto`.
     pub scheme: &'static str,
+    /// Set on the HTTPS listener only.
+    pub tls: Option<Arc<TlsConnection>>,
 }
 
 #[cfg(test)]

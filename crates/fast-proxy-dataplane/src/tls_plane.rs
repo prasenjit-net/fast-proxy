@@ -11,6 +11,7 @@ use fast_proxy_telemetry::{HandshakeResult, Metrics};
 use fast_proxy_tls::{
     build_server_config, ephemeral_unknown_host, ServerConfigError, ServerTlsPolicy,
 };
+use rustls::sign::CertifiedKey;
 use rustls::ServerConfig;
 use thiserror::Error;
 use tokio::net::TcpStream;
@@ -18,8 +19,34 @@ use tokio::sync::Semaphore;
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::LazyConfigAcceptor;
 
-use crate::tls_resolver::{select_certificate, Selection, SnapshotCertResolver};
+use crate::connections::TlsConnection;
+use crate::tls_resolver::{select_certificate, FixedCertificate, NoCertificate, Selection};
 use crate::BoundListener;
+
+/// Limits on HTTP/2 connections from clients (ADR 0009): bounded streams and
+/// header lists, and a keep-alive ping so dead peers are dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Http2Limits {
+    /// Concurrent streams the client may open on one connection.
+    pub max_concurrent_streams: u32,
+    /// The largest request header list accepted, in bytes.
+    pub max_header_list_size: u32,
+    /// How often an idle connection is pinged.
+    pub keep_alive_interval: Duration,
+    /// How long a ping may go unanswered before the connection is closed.
+    pub keep_alive_timeout: Duration,
+}
+
+impl Default for Http2Limits {
+    fn default() -> Self {
+        Self {
+            max_concurrent_streams: 128,
+            max_header_list_size: 64 * 1024,
+            keep_alive_interval: Duration::from_secs(30),
+            keep_alive_timeout: Duration::from_secs(20),
+        }
+    }
+}
 
 /// The process-wide TLS settings of the data plane.
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +58,8 @@ pub struct TlsPlaneSettings {
     pub max_concurrent_handshakes: usize,
     /// Fail the handshake for an unknown name instead of presenting a placeholder.
     pub reject_unknown_sni: bool,
+    /// Limits applied when a client negotiates HTTP/2.
+    pub http2: Http2Limits,
 }
 
 /// Why the HTTPS listener could not be prepared.
@@ -46,6 +75,7 @@ pub enum TlsPlaneError {
 pub struct TlsPlane {
     pub(crate) listener: BoundListener,
     config: Arc<ServerConfig>,
+    placeholder: Arc<CertifiedKey>,
     snapshots: Arc<SnapshotHolder>,
     settings: TlsPlaneSettings,
     handshakes: Arc<Semaphore>,
@@ -55,6 +85,7 @@ pub struct TlsPlane {
 /// A completed handshake.
 pub(crate) struct Accepted {
     pub stream: TlsStream<TcpStream>,
+    pub connection: TlsConnection,
 }
 
 impl TlsPlane {
@@ -67,15 +98,14 @@ impl TlsPlane {
         metrics: Arc<Metrics>,
     ) -> Result<Self, TlsPlaneError> {
         let placeholder = ephemeral_unknown_host(now_ms()).map_err(TlsPlaneError::Placeholder)?;
-        let resolver = Arc::new(SnapshotCertResolver::new(
-            snapshots.clone(),
-            placeholder,
-            settings.reject_unknown_sni,
-        ));
-        let config = Arc::new(build_server_config(&settings.policy, resolver)?);
+        let config = Arc::new(build_server_config(
+            &settings.policy,
+            Arc::new(NoCertificate),
+        )?);
         Ok(Self {
             listener,
             config,
+            placeholder,
             snapshots,
             handshakes: Arc::new(Semaphore::new(settings.max_concurrent_handshakes)),
             settings,
@@ -110,38 +140,57 @@ impl TlsPlane {
                 self.metrics.tls_handshake(name, result, "-");
                 None
             }
-            Ok(Ok(stream)) => {
-                let version = stream
-                    .get_ref()
-                    .1
-                    .protocol_version()
-                    .map_or_else(|| "-".to_string(), |version| format!("{version:?}"));
+            Ok(Ok((stream, connection))) => {
                 self.metrics
-                    .tls_handshake(name, HandshakeResult::Success, &version);
-                Some(Accepted { stream })
+                    .tls_handshake(name, HandshakeResult::Success, &connection.version);
+                Some(Accepted { stream, connection })
             }
         }
     }
 
-    async fn handshake(&self, stream: TcpStream) -> Result<TlsStream<TcpStream>, HandshakeResult> {
+    /// Reads the ClientHello, chooses the certificate once from the live
+    /// snapshot, and finishes the handshake presenting exactly that one.
+    async fn handshake(
+        &self,
+        stream: TcpStream,
+    ) -> Result<(TlsStream<TcpStream>, TlsConnection), HandshakeResult> {
         let start = LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream)
             .await
             .map_err(|_| HandshakeResult::Failed)?;
         let sni = start.client_hello().server_name().map(str::to_string);
-        if matches!(
-            select_certificate(
-                &self.snapshots.load(),
-                sni.as_deref(),
-                self.settings.reject_unknown_sni
-            ),
-            Selection::Reject
+        let (key, certificate_id) = match select_certificate(
+            &self.snapshots.load(),
+            sni.as_deref(),
+            self.settings.reject_unknown_sni,
         ) {
-            return Err(HandshakeResult::RejectedSni);
-        }
-        start
-            .into_stream(self.config.clone())
+            Selection::Reject => return Err(HandshakeResult::RejectedSni),
+            Selection::Placeholder => (Arc::clone(&self.placeholder), None),
+            Selection::Subsystem { id, key } => (key, Some(id)),
+        };
+        let mut config = (*self.config).clone();
+        config.cert_resolver = Arc::new(FixedCertificate(key));
+        let stream = start
+            .into_stream(Arc::new(config))
             .await
-            .map_err(|_| HandshakeResult::Failed)
+            .map_err(|_| HandshakeResult::Failed)?;
+        let version = stream
+            .get_ref()
+            .1
+            .protocol_version()
+            .map_or_else(|| "-".to_string(), |version| format!("{version:?}"));
+        Ok((
+            stream,
+            TlsConnection {
+                sni,
+                certificate_id,
+                version,
+            },
+        ))
+    }
+
+    /// The HTTP/2 limits to apply to connections of this listener.
+    pub(crate) fn http2_limits(&self) -> Http2Limits {
+        self.settings.http2
     }
 }
 

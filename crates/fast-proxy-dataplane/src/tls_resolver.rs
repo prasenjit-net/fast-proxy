@@ -1,11 +1,13 @@
 //! Choosing the certificate for a TLS handshake from the routing snapshot:
-//! SNI to subsystem to its certificate (ADR 0010). The snapshot is loaded per
-//! handshake, so a swap changes what the next handshake gets and never touches
-//! one in flight.
+//! SNI to subsystem to its certificate (ADR 0010). The snapshot is loaded once
+//! per handshake, so a swap changes what the next handshake gets and never
+//! touches one in flight. The choice is made once and fixed for the connection,
+//! so the 421 rule compares the certificate that was actually presented.
 
 use std::sync::Arc;
 
-use fast_proxy_routing::{Snapshot, SnapshotHolder, SniLookup};
+use fast_proxy_model::CertificateId;
+use fast_proxy_routing::{Snapshot, SniLookup};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 
@@ -13,7 +15,10 @@ use rustls::sign::CertifiedKey;
 #[derive(Debug, Clone)]
 pub(crate) enum Selection {
     /// The certificate of the subsystem the name belongs to.
-    Subsystem(Arc<CertifiedKey>),
+    Subsystem {
+        id: CertificateId,
+        key: Arc<CertifiedKey>,
+    },
     /// The in-memory placeholder: the name is unknown, or its subsystem has no
     /// usable HTTPS certificate. The HTTP layer then answers 404 or 421.
     Placeholder,
@@ -40,54 +45,32 @@ pub(crate) fn select_certificate(
     match snapshot.sni_lookup(name) {
         SniLookup::Unknown => unknown(),
         SniLookup::Subsystem { https, .. } => match &https.certificate {
-            Some(handle) if snapshot.tls_enabled && https.enabled => {
-                Selection::Subsystem(Arc::clone(&handle.key))
-            }
+            Some(handle) if snapshot.tls_enabled && https.enabled => Selection::Subsystem {
+                id: handle.id,
+                key: Arc::clone(&handle.key),
+            },
             _ => Selection::Placeholder,
         },
     }
 }
 
-/// The rustls resolver over the live snapshot.
-pub(crate) struct SnapshotCertResolver {
-    snapshots: Arc<SnapshotHolder>,
-    placeholder: Arc<CertifiedKey>,
-    reject_unknown_sni: bool,
-}
+/// Presents one fixed certificate: the one chosen for this connection.
+#[derive(Debug)]
+pub(crate) struct FixedCertificate(pub Arc<CertifiedKey>);
 
-impl std::fmt::Debug for SnapshotCertResolver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SnapshotCertResolver")
-            .field("reject_unknown_sni", &self.reject_unknown_sni)
-            .finish_non_exhaustive()
+impl ResolvesServerCert for FixedCertificate {
+    fn resolve(&self, _: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(Arc::clone(&self.0))
     }
 }
 
-impl SnapshotCertResolver {
-    pub(crate) fn new(
-        snapshots: Arc<SnapshotHolder>,
-        placeholder: Arc<CertifiedKey>,
-        reject_unknown_sni: bool,
-    ) -> Self {
-        Self {
-            snapshots,
-            placeholder,
-            reject_unknown_sni,
-        }
-    }
-}
+/// The resolver of the shared base configuration: it never answers, because
+/// every connection replaces it with [`FixedCertificate`] before handshaking.
+#[derive(Debug)]
+pub(crate) struct NoCertificate;
 
-impl ResolvesServerCert for SnapshotCertResolver {
-    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        let snapshot = self.snapshots.load();
-        match select_certificate(
-            &snapshot,
-            client_hello.server_name(),
-            self.reject_unknown_sni,
-        ) {
-            Selection::Subsystem(key) => Some(key),
-            Selection::Placeholder => Some(Arc::clone(&self.placeholder)),
-            Selection::Reject => None,
-        }
+impl ResolvesServerCert for NoCertificate {
+    fn resolve(&self, _: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        None
     }
 }

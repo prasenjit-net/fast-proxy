@@ -7,8 +7,9 @@ use std::sync::Arc;
 use fast_proxy_admin::{AdminState, ListenerInfo, RuntimeInfo, TlsInfo};
 use fast_proxy_config_service::{ConfigService, StartError, TlsSettings};
 use fast_proxy_dataplane::{
-    bind, BindError, BoundListener, DataPlane, ListenerSpec, Observability, RequestPipeline,
-    TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError, UpstreamClient,
+    bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
+    RequestPipeline, TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError,
+    UpstreamClient,
 };
 use fast_proxy_health::{run_status_gauges, HealthEngine};
 use fast_proxy_store::{Store, StoreError};
@@ -89,8 +90,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         tls: TlsInfo {
             enabled: config.data_plane.tls.enabled,
             listen: https.as_ref().map(|plane| plane.listener().local_addr()),
-            // HTTP/2 stays off until the data plane serves it (plan task D2).
-            http2: false,
+            http2: config.data_plane.tls.http2,
             min_version: match config.data_plane.tls.min_version {
                 MinTlsVersion::V1_2 => "1.2",
                 MinTlsVersion::V1_3 => "1.3",
@@ -212,7 +212,6 @@ fn tls_settings(config: &AppConfig) -> TlsSettings {
 }
 
 /// Binds the HTTPS listener and prepares its handshakes when TLS is on.
-/// HTTP/2 stays off until the data plane serves it (plan task D2).
 async fn bind_https(
     config: &AppConfig,
     config_service: &ConfigService,
@@ -233,11 +232,17 @@ async fn bind_https(
         TlsPlaneSettings {
             policy: ServerTlsPolicy {
                 min_version: tls.min_version,
-                http2: false,
+                http2: tls.http2,
             },
             handshake_timeout: tls.handshake_timeout,
             max_concurrent_handshakes: tls.max_concurrent_handshakes,
             reject_unknown_sni: tls.reject_unknown_sni,
+            http2: Http2Limits {
+                max_concurrent_streams: tls.http2_max_concurrent_streams,
+                max_header_list_size: tls.http2_max_header_list_size,
+                keep_alive_interval: tls.http2_keep_alive_interval,
+                keep_alive_timeout: tls.http2_keep_alive_timeout,
+            },
         },
         metrics.clone(),
     )?;

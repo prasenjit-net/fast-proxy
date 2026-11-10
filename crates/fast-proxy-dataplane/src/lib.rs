@@ -53,7 +53,7 @@ pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use responses::FixedResponse;
 pub use server::{DataPlane, DrainReport};
-pub use tls_plane::{TlsPlane, TlsPlaneError, TlsPlaneSettings};
+pub use tls_plane::{Http2Limits, TlsPlane, TlsPlaneError, TlsPlaneSettings};
 pub use tracked_body::Observability;
 pub use trusted_proxies::{TrustedProxies, TrustedProxyError};
 pub use upstream_client::UpstreamClient;

@@ -585,6 +585,12 @@ from M2.
 
 ### Workstream CS: Config service
 
+_Landed in PR7: D2 (HTTP/2 with limits, GOAWAY drain, the process `http2` switch and
+four config knobs), D3 (the 421 rules), D4 (the scheme from the connection; the plan's
+`Forwarded` header is not implemented since the proxy only ever set `X-Forwarded-*`),
+D7 (`proto` and `tls` access-log fields) and D8 (handshake bound, timeout and flood
+tests). Since D2 landed, the PR4b note below about HTTP/1.1 only no longer applies._
+
 _Landed in PR4b: CS1 (without the `certState` broadcast, which arrives with the
 admin events in PR5), CS2, CS4. D1 serves HTTP/1.1 only: ALPN offers `http/1.1`
 until D2 (the process `http2` setting is wired then). The data plane already
@@ -653,19 +659,19 @@ loopback checks come with PR5._
   `reject_unknown_sni`, failed handshakes counted by reason, a stalled handshake cut
   off at the timeout, and a certificate swapped by a new snapshot reaching the next
   handshake only.
-- [ ] **D2 (L) HTTP/2 to clients.** Enable h2 in the auto builder with the limits
+- [x] **D2 (L) HTTP/2 to clients.** Enable h2 in the auto builder with the limits
   in F20, GOAWAY on graceful shutdown, and the connection tracker counting h2
   connections (and not each stream) for draining.
   *Done when:* tests show multiplexed requests on one connection, a stream limit
   enforced, a header-list limit answered, a rapid-reset attempt contained, and a
   drain letting open streams finish before the connection closes.
-- [ ] **D3 (M) The 421 rules.** F14: a host of a subsystem with HTTPS disabled, and a
+- [x] **D3 (M) The 421 rules.** F14: a host of a subsystem with HTTPS disabled, and a
   host served by a different certificate than the connection's; no-SNI connections
   skip the second rule.
   *Done when:* tests cover the same name, two subsystems sharing one certificate
   (allowed), different certificates (421), HTTPS disabled (421), no SNI, an
   absolute-form URI, and a certificate replaced mid-connection.
-- [ ] **D4 (S) Scheme-aware forwarding.** `X-Forwarded-Proto` and `Forwarded`
+- [x] **D4 (S) Scheme-aware forwarding.** `X-Forwarded-Proto` and `Forwarded`
   from the connection; client-supplied values are still not trusted unless the
   peer is trusted; the upstream URI scheme follows the group.
   *Done when:* the forwarded-header tests cover http and https and trusted peers.
@@ -683,10 +689,10 @@ loopback checks come with PR5._
   untrusted one (502 and a failure counted), a name mismatch, an uploaded CA
   bundle, an override name for an IP endpoint, a replaced bundle taking effect for
   new connections, and a retry across a TLS and a dead endpoint.
-- [ ] **D7 (S) Access log and metrics.** `proto` (`http/1.1`, `h2`) and `tls`
+- [x] **D7 (S) Access log and metrics.** `proto` (`http/1.1`, `h2`) and `tls`
   (version, or `-`) fields on data-plane lines; the exit-criteria and
   getting-started examples updated.
-- [ ] **D8 (M) Handshake and connection hygiene.** Slowloris-style stalls,
+- [x] **D8 (M) Handshake and connection hygiene.** Slowloris-style stalls,
   oversized client hellos, and a flood of failing handshakes cannot starve
   established traffic.
   *Done when:* a test holds many stalled handshakes and shows an established

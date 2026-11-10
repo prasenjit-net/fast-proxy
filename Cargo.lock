@@ -576,6 +576,7 @@ name = "fast-proxy"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "clap",
  "fast-proxy-admin",
  "fast-proxy-config-service",
@@ -586,7 +587,10 @@ dependencies = [
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
  "fast-proxy-tls",
+ "http-body-util",
  "humantime",
+ "hyper",
+ "hyper-util",
  "rustls",
  "serde",
  "serde_json",

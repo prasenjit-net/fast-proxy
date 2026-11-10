@@ -6,6 +6,6 @@ mod client;
 mod issue;
 mod key_formats;
 
-pub use client::{handshake, request, ClientHello, HandshakeError, Negotiated};
+pub use client::{connect, handshake, request, ClientHello, HandshakeError, Negotiated};
 pub use issue::{Issued, LeafSpec, TestCa};
 pub use key_formats::pkcs8_pem_to_sec1_pem;
