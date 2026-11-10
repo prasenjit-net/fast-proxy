@@ -442,7 +442,7 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
   and TCP connect, feeding the rise/fall state machine.
   *Done when:* a backend toggled between healthy and failing is marked
   unhealthy after `fall` probes and healthy after `rise`, with bounded timing.
-- [~] **H3 (S) State change events.** (the `EndpointEvents` bus carries health and ejection changes; the admin plane forwards them in PR9/A4. Admin-state changes already arrive as `ConfigChanged`.) Broadcast every endpoint state change
+- [x] **H3 (S) State change events.** (the `EndpointEvents` bus carries health and ejection changes and the admin plane forwards them as `endpointState` WebSocket events and activity entries; admin-state changes arrive as `ConfigChanged`) Broadcast every endpoint state change
   (health, ejection, admin state) for the admin plane, metrics and logs.
 - [x] **H4 (S) Startup behaviour.** New endpoints start healthy and are demoted
   after `fall` failures (section 4.2); a restart rebuilds state from scratch.
@@ -463,16 +463,16 @@ admin UI, **Q** quality, **W** docs, **C** carry-over from M1.
 
 ### Workstream A: Admin API
 
-- [ ] **A1 (M) Upstream group resource.** Create with endpoints; update name and
+- [x] **A1 (M) Upstream group resource.** Create with endpoints; update name and
   policies; validation errors name nested fields (`endpoints.0.addr`,
   `health.intervalMs`).
-- [ ] **A2 (M) Endpoint resource.** Add, update, remove, and `state`
+- [x] **A2 (M) Endpoint resource.** Add, update, remove, and `state`
   (enable/drain/disable); removing the last endpoint is a `409`.
-- [ ] **A3 (S) Route retry settings** in the route API.
-- [ ] **A4 (M) Runtime status.** `GET .../upstreams/{uid}/status` with the
+- [x] **A3 (S) Route retry settings** in the route API.
+- [x] **A4 (M) Runtime status.** `GET .../upstreams/{uid}/status` with the
   effective state and reason per endpoint, in-flight, EWMA, last probe; and the
   `endpointState` WebSocket event plus an activity entry.
-- [ ] **A5 (S) Resolver** shows the group and its eligible endpoints (E13).
+- [x] **A5 (S) Resolver** shows the group and its eligible endpoints (E13).
 
 *Done for A1-A5:* every endpoint has HTTP-level tests in the style of
 `crates/fast-proxy-admin/src/api_tests.rs` (success, validation `fields`, 404,

@@ -85,6 +85,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     // stays usable while requests finish).
     let data_stop = CancellationToken::new();
     let admin_stop = CancellationToken::new();
+    // Endpoint health changes flow from the data plane and the health checks to
+    // the admin plane's live view.
+    let endpoint_events = EndpointEvents::new();
     let admin_state = Arc::new(AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
@@ -92,13 +95,13 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         config_service.clone(),
         runtime,
         metrics.clone(),
+        endpoint_events.clone(),
     ));
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
     // Active health checks and the endpoint gauges follow the live
     // configuration; they stop with the data plane.
-    let endpoint_events = EndpointEvents::new();
     let health = HealthEngine::new(
         config_service.snapshot_holder(),
         metrics.clone(),

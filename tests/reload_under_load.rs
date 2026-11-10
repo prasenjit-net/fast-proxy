@@ -158,7 +158,10 @@ fn live_config_edits_under_load_drop_no_requests_and_serve_only_valid_backends()
         &proxy,
         "POST",
         &format!("{base}/upstreams"),
-        Some(json!({ "name": "b", "addr": format!("127.0.0.1:{backend_b}") })),
+        Some(json!({
+            "name": "b",
+            "endpoints": [{ "addr": format!("127.0.0.1:{backend_b}") }]
+        })),
     );
     assert_eq!(status, 201, "{reply}");
     let upstream_b = reply["data"]["id"].as_i64().unwrap();

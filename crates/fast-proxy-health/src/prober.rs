@@ -1,4 +1,4 @@
-use fast_proxy_balancing::EndpointRuntime;
+use fast_proxy_balancing::{monotonic_ms, EndpointRuntime};
 use fast_proxy_model::{EndpointAddr, HealthCheck};
 use fast_proxy_telemetry::{
     EndpointChange, EndpointEvent, EndpointEvents, EndpointLabels, Metrics,
@@ -86,6 +86,7 @@ fn record(
     result: Result<(), String>,
 ) {
     let ok = result.is_ok();
+    runtime.note_probe(ok, monotonic_ms());
     context.metrics.health_check(spec.name.labels(), ok);
     let Some(healthy) = runtime.record_probe(ok, spec.check.rise, spec.check.fall) else {
         return;

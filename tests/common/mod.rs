@@ -223,7 +223,10 @@ pub fn create_site(proxy: &Proxy, name: &str, host: &str, backend_port: u16) -> 
         proxy,
         "POST",
         &format!("{base}/upstreams"),
-        Some(json!({ "name": "backend", "addr": format!("127.0.0.1:{backend_port}") })),
+        Some(json!({
+            "name": "backend",
+            "endpoints": [{ "addr": format!("127.0.0.1:{backend_port}") }]
+        })),
     );
     assert_eq!(status, 201, "{body}");
     let upstream = body["data"]["id"].as_i64().unwrap();

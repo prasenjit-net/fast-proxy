@@ -59,13 +59,13 @@ J='Content-Type: application/json'
 # shop
 curl -s -H "$J" -d '{"name":"shop"}' $A/subsystems
 curl -s -H "$J" -d '{"pattern":"shop.example.com"}' $A/subsystems/1/hosts
-curl -s -H "$J" -d '{"name":"backend","addr":"127.0.0.1:3001"}' $A/subsystems/1/upstreams
+curl -s -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
 curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":1}' $A/subsystems/1/routes
 
 # blog
 curl -s -H "$J" -d '{"name":"blog"}' $A/subsystems
 curl -s -H "$J" -d '{"pattern":"blog.example.com"}' $A/subsystems/2/hosts
-curl -s -H "$J" -d '{"name":"backend","addr":"127.0.0.1:3002"}' $A/subsystems/2/upstreams
+curl -s -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3002"}]}' $A/subsystems/2/upstreams
 curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":2}' $A/subsystems/2/routes
 ```
 
@@ -95,7 +95,7 @@ curl -s $A/subsystems/1        # detail: hosts, upstreams, routes (longest prefi
 Point the shop at the blog's backend, and watch the very next request change:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"name":"backend","addr":"127.0.0.1:3002"}' $A/subsystems/1/upstreams/1
+curl -s -X PUT -H "$J" -d '{"addr":"127.0.0.1:3002"}' $A/subsystems/1/upstreams/1/endpoints/1
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # hello from blog
 ```
 
@@ -103,7 +103,7 @@ Add a path-based route with a rewrite (here `/old/x` is sent to the backend as `
 The new upstream gets id `3`:
 
 ```sh
-curl -s -H "$J" -d '{"name":"legacy","addr":"127.0.0.1:3001"}' $A/subsystems/1/upstreams
+curl -s -H "$J" -d '{"name":"legacy","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
 curl -s -H "$J" -d '{"prefix":"/old","upstreamGroupId":3,"stripPrefix":true}' $A/subsystems/1/routes
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/old/index.html   # hello from shop
 ```

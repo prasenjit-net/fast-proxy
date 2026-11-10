@@ -1,7 +1,8 @@
 use fast_proxy_model::{Config, SubsystemConfig};
 use serde::Serialize;
 
-use super::detail::{routes_in_match_order, upstream_dto, RouteDto, UpstreamDto};
+use super::detail::{routes_in_match_order, RouteDto};
+use super::upstream_dto::{upstream_dto, UpstreamDto};
 
 /// A whole configuration as shown when viewing a revision.
 #[derive(Debug, Serialize)]

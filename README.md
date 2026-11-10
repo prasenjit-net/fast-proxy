@@ -173,16 +173,20 @@ message.
 |---|---|---|
 | GET | `/api/health` | Liveness + version |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
-| GET | `/api/status` | Listeners, database path, subsystem counts, uptime, live config version |
+| GET | `/api/status` | Listeners, database path, subsystem counts, upstream health summary, uptime, live config version |
 | GET | `/api/traffic` | Latest live traffic sample: requests/s, 5xx error rate, connections, per subsystem |
 | GET | `/metrics` | Prometheus text exposition (admin listener only) |
 | GET, POST | `/api/subsystems` | List (host patterns, route counts) / create |
 | GET, PUT, DELETE | `/api/subsystems/{id}` | Detail (hosts, upstreams, routes in match order) / replace / delete |
 | POST | `/api/subsystems/{id}/hosts` | Add a host pattern (`pattern`) |
 | DELETE | `/api/subsystems/{id}/hosts/{host_id}` | Remove a host pattern |
-| GET, POST | `/api/subsystems/{id}/upstreams` | List / create (`name`, `addr`, `weight`) |
-| PUT, DELETE | `/api/subsystems/{id}/upstreams/{upstream_id}` | Replace / delete (409 while a route uses it) |
-| GET, POST | `/api/subsystems/{id}/routes` | List in match order / create |
+| GET, POST | `/api/subsystems/{id}/upstreams` | List / create a group: `name`, `endpoints` (`addr`, `weight`, `state`), and optional `lb`, `failurePolicy`, `health`, `passive`, `retryBudget` |
+| PUT, DELETE | `/api/subsystems/{id}/upstreams/{upstream_id}` | Replace the name and policy (endpoints are separate) / delete (409 while a route uses it) |
+| POST | `/api/subsystems/{id}/upstreams/{upstream_id}/endpoints` | Add an endpoint (`addr`, `weight`, `state`) |
+| PUT, DELETE | `.../endpoints/{endpoint_id}` | Replace / remove (409 for the last endpoint of a group) |
+| PUT | `.../endpoints/{endpoint_id}/state` | `{ "state": "enabled" \| "draining" \| "disabled" }`: takes effect for the next request |
+| GET | `.../upstreams/{upstream_id}/status` | Live state per endpoint: effective state and why, in-flight, latency, last probe |
+| GET, POST | `/api/subsystems/{id}/routes` | List in match order / create (optional `retry`: `maxAttempts`, `idempotentOn5xx`, `onTimeout`) |
 | PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete |
 | GET | `/api/revisions?limit=&before=` | Revision history, newest first (paged) |
 | GET | `/api/revisions/{version}` | The full configuration as of that revision |

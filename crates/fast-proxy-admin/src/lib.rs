@@ -3,6 +3,7 @@
 mod access_middleware;
 mod api;
 mod config_bridge;
+mod endpoint_bridge;
 mod error;
 mod events;
 mod router;
@@ -27,8 +28,9 @@ pub use state::{AdminState, SharedState};
 pub use ui_config::UiConfig;
 
 /// Starts the admin plane's background work: the live traffic sampler and
-/// the bridge from applied config changes to the UI.
+/// the bridges from applied config changes and endpoint state changes to the UI.
 pub fn spawn_background_tasks(state: SharedState) {
     traffic::spawn_sampler(state.clone());
-    config_bridge::spawn_config_bridge(state);
+    config_bridge::spawn_config_bridge(state.clone());
+    endpoint_bridge::spawn_endpoint_bridge(state);
 }

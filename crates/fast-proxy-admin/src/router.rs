@@ -38,6 +38,22 @@ pub fn router(state: SharedState) -> Router {
             put(api::update_upstream).delete(api::delete_upstream),
         )
         .route(
+            "/api/subsystems/{id}/upstreams/{upstream_id}/status",
+            get(api::upstream_status),
+        )
+        .route(
+            "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints",
+            post(api::add_endpoint),
+        )
+        .route(
+            "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints/{endpoint_id}",
+            put(api::update_endpoint).delete(api::delete_endpoint),
+        )
+        .route(
+            "/api/subsystems/{id}/upstreams/{upstream_id}/endpoints/{endpoint_id}/state",
+            put(api::set_endpoint_state),
+        )
+        .route(
             "/api/subsystems/{id}/routes",
             get(api::list_routes).post(api::create_route),
         )

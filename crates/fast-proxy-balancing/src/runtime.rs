@@ -21,6 +21,9 @@ pub struct EndpointRuntime {
     pub(crate) trial_in_flight: AtomicBool,
     ewma_us: AtomicU64,
     ewma_at_ms: AtomicU64,
+    /// When the last active probe finished (0 before the first).
+    last_probe_ms: AtomicU64,
+    last_probe_ok: AtomicBool,
 }
 
 /// A point-in-time copy of an endpoint's state, for status pages and metrics.
@@ -52,6 +55,8 @@ impl EndpointRuntime {
             trial_in_flight: AtomicBool::new(false),
             ewma_us: AtomicU64::new(0),
             ewma_at_ms: AtomicU64::new(0),
+            last_probe_ms: AtomicU64::new(0),
+            last_probe_ok: AtomicBool::new(false),
         }
     }
 
@@ -104,6 +109,21 @@ impl EndpointRuntime {
     /// example the client left first), so the next request may try instead.
     pub fn release_trial(&self) {
         self.trial_in_flight.store(false, Relaxed);
+    }
+
+    /// Remembers the outcome and time of the latest active probe, for status
+    /// displays.
+    pub fn note_probe(&self, ok: bool, now_ms: u64) {
+        self.last_probe_ok.store(ok, Relaxed);
+        self.last_probe_ms.store(now_ms.max(1), Relaxed);
+    }
+
+    /// The latest active probe's outcome and finish time, if any ran.
+    pub fn last_probe(&self) -> Option<(bool, u64)> {
+        match self.last_probe_ms.load(Relaxed) {
+            0 => None,
+            at => Some((self.last_probe_ok.load(Relaxed), at)),
+        }
     }
 
     /// Feeds one active probe result through the rise/fall hysteresis.
@@ -224,6 +244,20 @@ mod tests {
         assert!(
             runtime.ewma_us() < 1_100,
             "long after, the new sample dominates"
+        );
+    }
+
+    #[test]
+    fn the_latest_probe_is_remembered() {
+        let runtime = EndpointRuntime::new();
+        assert_eq!(runtime.last_probe(), None);
+        runtime.note_probe(false, 40);
+        assert_eq!(runtime.last_probe(), Some((false, 40)));
+        runtime.note_probe(true, 0);
+        assert_eq!(
+            runtime.last_probe(),
+            Some((true, 1)),
+            "time zero is stored as 1"
         );
     }
 

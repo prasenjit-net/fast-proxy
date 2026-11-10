@@ -132,3 +132,55 @@ async fn rejected_changes_produce_no_events() {
         "no event should be sent for a rejected change"
     );
 }
+
+#[tokio::test]
+async fn endpoint_state_changes_reach_websocket_clients_as_events_and_activity() {
+    use crate::events::Event;
+    use fast_proxy_telemetry::{EndpointChange, EndpointEvent};
+
+    let app = TestApp::new().await;
+    crate::endpoint_bridge::spawn_endpoint_bridge(app.state.clone());
+    let mut events = app.state.events.subscribe();
+
+    app.state.endpoint_events.publish(EndpointEvent {
+        subsystem: "shop".into(),
+        upstream: "backend".into(),
+        endpoint: "10.0.0.1:80".into(),
+        change: EndpointChange::Unhealthy {
+            reason: "status 500 outside 200-399".into(),
+        },
+    });
+
+    let wait = std::time::Duration::from_secs(2);
+    let Ok(Ok(Event::EndpointState {
+        subsystem,
+        upstream,
+        endpoint,
+        change,
+        detail,
+        ..
+    })) = tokio::time::timeout(wait, events.recv()).await
+    else {
+        panic!("expected an endpointState event first");
+    };
+    assert_eq!(
+        (
+            subsystem.as_str(),
+            upstream.as_str(),
+            endpoint.as_str(),
+            change
+        ),
+        ("shop", "backend", "10.0.0.1:80", "unhealthy")
+    );
+    assert_eq!(detail.as_deref(), Some("status 500 outside 200-399"));
+    let Ok(Ok(Event::Activity { kind, message, .. })) =
+        tokio::time::timeout(wait, events.recv()).await
+    else {
+        panic!("expected an activity entry second");
+    };
+    assert_eq!(kind, "health");
+    assert!(
+        message.contains("10.0.0.1:80") && message.contains("is unhealthy"),
+        "{message}"
+    );
+}

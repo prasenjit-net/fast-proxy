@@ -1,7 +1,8 @@
 use fast_proxy_balancing::monotonic_ms;
-use fast_proxy_model::EndpointState;
 use fast_proxy_routing::Snapshot;
 use serde::Serialize;
+
+use super::effective_state::Effective;
 
 /// An endpoint that is not taking requests, and why.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -33,17 +34,8 @@ pub fn summarize(snapshot: &Snapshot) -> UpstreamHealth {
         for upstream in subsystem.upstreams.values() {
             for (endpoint, candidate) in upstream.endpoints.iter().zip(&upstream.candidates) {
                 summary.total += 1;
-                let reason = match endpoint.state {
-                    EndpointState::Draining => Some("draining"),
-                    EndpointState::Disabled => Some("disabled"),
-                    EndpointState::Enabled if !candidate.runtime.is_active_healthy() => {
-                        Some("failed health checks")
-                    }
-                    EndpointState::Enabled if candidate.runtime.is_ejected(now) => {
-                        Some("ejected after repeated failures")
-                    }
-                    EndpointState::Enabled => None,
-                };
+                let reason =
+                    Effective::classify(endpoint.state, &candidate.runtime, now).summary_reason();
                 match reason {
                     None => summary.healthy += 1,
                     Some(reason) => summary.unhealthy.push(UnhealthyEndpoint {
@@ -68,7 +60,7 @@ mod tests {
 
     use fast_proxy_balancing::RuntimeRegistry;
     use fast_proxy_model::{
-        Config, EndpointAddr, EndpointConfig, EndpointId, GroupPolicy, HostPattern,
+        Config, EndpointAddr, EndpointConfig, EndpointId, EndpointState, GroupPolicy, HostPattern,
         SubsystemConfig, SubsystemId, SubsystemName, UpstreamGroupConfig, UpstreamGroupId,
     };
     use fast_proxy_routing::compile;

@@ -93,6 +93,10 @@ async fn a_prober_flips_health_only_after_exactly_fall_failures_and_rise_success
     );
     assert_eq!(event.endpoint, backend.addr.to_string());
     assert!(!runtime.is_active_healthy());
+    assert!(
+        matches!(runtime.last_probe(), Some((false, _))),
+        "the latest probe is on record"
+    );
     assert_eq!(
         probes(&context.metrics, "fail"),
         3,
