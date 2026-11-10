@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ProtocolVersion, RootCertStore};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 
@@ -41,6 +41,31 @@ pub async fn handshake(
     addr: SocketAddr,
     hello: &ClientHello,
 ) -> Result<Negotiated, HandshakeError> {
+    let (mut tls, negotiated) = connect(addr, hello).await?;
+    let _ = tls.shutdown().await;
+    Ok(negotiated)
+}
+
+/// Completes a handshake, then sends `raw` (one HTTP/1.1 request that asks for
+/// `Connection: close`) and returns everything the server answers.
+pub async fn request(
+    addr: SocketAddr,
+    hello: &ClientHello,
+    raw: &[u8],
+) -> Result<String, HandshakeError> {
+    let (mut tls, _) = connect(addr, hello).await?;
+    let fail = |err: std::io::Error| HandshakeError(err.to_string());
+    tls.write_all(raw).await.map_err(fail)?;
+    let mut answer = Vec::new();
+    // A server closing without a TLS close_notify is an error here but not for the answer.
+    let _ = tls.read_to_end(&mut answer).await;
+    Ok(String::from_utf8_lossy(&answer).into_owned())
+}
+
+async fn connect(
+    addr: SocketAddr,
+    hello: &ClientHello,
+) -> Result<(tokio_rustls::client::TlsStream<TcpStream>, Negotiated), HandshakeError> {
     let fail = |err: &dyn std::fmt::Display| HandshakeError(err.to_string());
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let versions: Vec<&'static rustls::SupportedProtocolVersion> = match hello.only_version {
@@ -71,7 +96,7 @@ pub async fn handshake(
     let server_name = ServerName::try_from(name).map_err(|err| fail(&err))?;
     let stream = TcpStream::connect(addr).await.map_err(|err| fail(&err))?;
     stream.set_nodelay(true).map_err(|err| fail(&err))?;
-    let mut tls = TlsConnector::from(Arc::new(config))
+    let tls = TlsConnector::from(Arc::new(config))
         .connect(server_name, stream)
         .await
         .map_err(|err| fail(&err))?;
@@ -85,8 +110,7 @@ pub async fn handshake(
             .map(|der| der.as_ref().to_vec())
             .unwrap_or_default(),
     };
-    let _ = tls.shutdown().await;
-    Ok(negotiated)
+    Ok((tls, negotiated))
 }
 
 /// Decodes every certificate in a PEM string (the helpers in this crate only

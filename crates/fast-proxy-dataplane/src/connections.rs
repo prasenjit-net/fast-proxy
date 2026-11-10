@@ -73,6 +73,8 @@ pub struct ConnectionContext {
     pub guard: Arc<ConnectionGuard>,
     /// Cancelled when the drain deadline passes: close everything now.
     pub force_close: CancellationToken,
+    /// `http` or `https`: how the client reached us, for `X-Forwarded-Proto`.
+    pub scheme: &'static str,
 }
 
 #[cfg(test)]

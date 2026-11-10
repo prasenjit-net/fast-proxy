@@ -53,8 +53,17 @@ pub fn validate_upload(
     key_pem: &str,
     now_ms: i64,
 ) -> Result<ValidatedCertificate, FieldError> {
+    validate_with_key(chain_pem, parse_key(key_pem)?, now_ms)
+}
+
+/// Like [`validate_upload`] for a key that is already parsed (for example one
+/// opened from the vault when a certificate is renewed with the same key).
+pub fn validate_with_key(
+    chain_pem: &str,
+    key: KeyMaterial,
+    now_ms: i64,
+) -> Result<ValidatedCertificate, FieldError> {
     let chain = parse_chain(chain_pem)?;
-    let key = parse_key(key_pem)?;
     let leaf = chain
         .first()
         .ok_or_else(|| FieldError::new("certPem", "contains no certificate"))?;

@@ -306,7 +306,7 @@ impl Forward for UpstreamClient {
             &ClientInfo {
                 ip: target.client_addr.ip(),
                 trusted: self.trusted_proxies.contains(target.client_addr.ip()),
-                scheme: "http",
+                scheme: context.as_ref().map_or("http", |context| context.scheme),
             },
         );
         headers::apply_request_id(&mut head.headers, target.request_id);

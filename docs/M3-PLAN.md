@@ -585,7 +585,14 @@ from M2.
 
 ### Workstream CS: Config service
 
-- [ ] **CS1 (L) Certificate and HTTPS writes.** Through the single writer: seal and
+_Landed in PR4b: CS1 (without the `certState` broadcast, which arrives with the
+admin events in PR5), CS2, CS4. D1 serves HTTP/1.1 only: ALPN offers `http/1.1`
+until D2 (the process `http2` setting is wired then). The data plane already
+uses the real scheme for `X-Forwarded-Proto` (part of D4). Q7 is partly covered
+(database bytes, wrong key, key file created once and reused); its API, log and
+loopback checks come with PR5._
+
+- [x] **CS1 (L) Certificate and HTTPS writes.** Through the single writer: seal and
   store keys, apply HTTPS settings, **veto by compiling the would-be snapshot with
   the would-be certificates**, commit (summary-only revision for pure material
   changes), swap, broadcast `certState`. Covers upload, replace, rename, attach,
@@ -593,7 +600,7 @@ from M2.
   *Done when:* tests cover each operation, a veto leaving everything as it was
   (including the cache), concurrent writes serialising with other configuration
   writes, and the swap being visible to a handshake already waiting.
-- [ ] **CS2 (M) The certificate guarantee.** The reconciler of F6: enabling HTTPS
+- [x] **CS2 (M) The certificate guarantee.** The reconciler of F6: enabling HTTPS
   generates and attaches a dev certificate when none is attached, host add/remove
   regenerates a dev certificate that stops covering the hosts, detaching falls back
   to a dev certificate, startup fills gaps (only while TLS is on), the hourly sweep
@@ -611,7 +618,7 @@ from M2.
   subsystem edit, a certificate upload, a renewal and a deletion on one appearing on
   the other within the interval, endpoint runtime state surviving the reload, no
   reload when nothing changed, and an interval of zero doing nothing.
-- [ ] **CS4 (M) Startup.** Unlock the vault when needed, build the cache from the
+- [x] **CS4 (M) Startup.** Unlock the vault when needed, build the cache from the
   rows (skipping and reporting unreadable ones), reconcile, compile, and expose the
   vault state (`ok`, `key mismatch`, `not created`).
   *Done when:* tests cover a fresh database, a database with certificates, a wrong
@@ -634,7 +641,7 @@ from M2.
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (L) TLS accept path and resolver.** When TLS is on, start the HTTPS
+- [x] **D1 (L) TLS accept path and resolver.** When TLS is on, start the HTTPS
   listener; wrap accepted connections in a handshake (timeout, concurrency bound);
   the snapshot-based resolver (SNI to subsystem to certificate, the ephemeral
   certificate for an unknown name, `reject_unknown_sni`); build the connection

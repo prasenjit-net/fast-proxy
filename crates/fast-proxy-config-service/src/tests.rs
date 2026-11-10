@@ -21,7 +21,7 @@ async fn service() -> ConfigService {
 }
 
 /// One transaction creating a subsystem with a host, an upstream and a `/` route.
-fn create_site(
+pub(crate) fn create_site(
     name: &'static str,
     host: String,
     backend: &'static str,

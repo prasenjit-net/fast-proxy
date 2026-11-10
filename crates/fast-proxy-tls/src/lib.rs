@@ -32,7 +32,7 @@ pub use self_signed::{ephemeral_unknown_host, generate_self_signed, GeneratedCer
 pub use server_config::{build_server_config, MinTlsVersion, ServerConfigError, ServerTlsPolicy};
 pub use status::{certificate_readings, CertificateState, EXPIRING_SOON_DAYS};
 pub use validate::{
-    expiry_state, parse_chain, parse_key, read_metadata, validate_upload, ExpiryState,
-    ValidatedCertificate,
+    expiry_state, parse_chain, parse_key, read_metadata, validate_upload, validate_with_key,
+    ExpiryState, ValidatedCertificate,
 };
 pub use vault::{load_master_key, LoadedMasterKey, MasterKey, Sealed, Vault, VaultError};

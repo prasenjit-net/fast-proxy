@@ -6,12 +6,12 @@ use std::time::Duration;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::connections::{ConnectionContext, ConnectionTracker};
-use crate::{BoundListener, Forward, RequestPipeline};
+use crate::{BoundListener, Forward, RequestPipeline, TlsPlane};
 
 /// How long a client may take to send complete request headers.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,17 +52,29 @@ impl DataPlane {
         pipeline: Arc<RequestPipeline<F>>,
         shutdown: CancellationToken,
     ) -> Self {
+        Self::start_with_tls(listeners, None, pipeline, shutdown)
+    }
+
+    /// Like [`DataPlane::start`], with an HTTPS listener beside the plain ones
+    /// when TLS is on. The HTTPS listener is listed among
+    /// [`DataPlane::local_addrs`] and drains like the others.
+    pub fn start_with_tls<F: Forward>(
+        listeners: Vec<BoundListener>,
+        tls: Option<TlsPlane>,
+        pipeline: Arc<RequestPipeline<F>>,
+        shutdown: CancellationToken,
+    ) -> Self {
         let connections = ConnectionTracker::new(pipeline.metrics());
         let force_close = CancellationToken::new();
         let signals = Signals {
             shutdown,
             force_close: force_close.clone(),
         };
-        let local_addrs = listeners
+        let mut local_addrs: Vec<(String, SocketAddr)> = listeners
             .iter()
             .map(|bound| (bound.name.clone(), bound.local_addr()))
             .collect();
-        let accept_loops = listeners
+        let mut accept_loops: Vec<JoinHandle<()>> = listeners
             .into_iter()
             .map(|bound| {
                 tokio::spawn(accept_loop(
@@ -73,6 +85,15 @@ impl DataPlane {
                 ))
             })
             .collect();
+        if let Some(tls) = tls {
+            local_addrs.push((tls.listener.name.clone(), tls.listener.local_addr()));
+            accept_loops.push(tokio::spawn(tls_accept_loop(
+                Arc::new(tls),
+                pipeline,
+                connections.clone(),
+                signals,
+            )));
+        }
         Self {
             local_addrs,
             accept_loops,
@@ -129,6 +150,7 @@ async fn accept_loop<F: Forward>(
                 let context = ConnectionContext {
                     guard: Arc::new(connections.open()),
                     force_close: signals.force_close.clone(),
+                    scheme: "http",
                 };
                 tokio::spawn(serve_connection(
                     stream,
@@ -148,8 +170,51 @@ async fn accept_loop<F: Forward>(
     }
 }
 
-async fn serve_connection<F: Forward>(
-    stream: TcpStream,
+/// Accepts TCP connections on the HTTPS listener and finishes each handshake
+/// in its own task, so a slow handshake never delays the accept loop.
+async fn tls_accept_loop<F: Forward>(
+    tls: Arc<TlsPlane>,
+    pipeline: Arc<RequestPipeline<F>>,
+    connections: Arc<ConnectionTracker>,
+    signals: Signals,
+) {
+    loop {
+        let accepted = tokio::select! {
+            () = signals.shutdown.cancelled() => return,
+            accepted = tls.listener.listener.accept() => accepted,
+        };
+        match accepted {
+            Ok((stream, peer)) => {
+                let (tls, pipeline) = (tls.clone(), pipeline.clone());
+                let context = ConnectionContext {
+                    guard: Arc::new(connections.open()),
+                    force_close: signals.force_close.clone(),
+                    scheme: "https",
+                };
+                let shutdown = signals.shutdown.clone();
+                tokio::spawn(async move {
+                    let force_close = context.force_close.clone();
+                    let handshake = tls.accept(stream);
+                    let accepted = tokio::select! {
+                        accepted = handshake => accepted,
+                        () = shutdown.cancelled() => None,
+                        () = force_close.cancelled() => None,
+                    };
+                    if let Some(accepted) = accepted {
+                        serve_connection(accepted.stream, peer, pipeline, context, shutdown).await;
+                    }
+                });
+            }
+            Err(err) => {
+                tracing::warn!(listener = %tls.listener.name, "accept failed: {err}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
+async fn serve_connection<F: Forward, S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    stream: S,
     peer: SocketAddr,
     pipeline: Arc<RequestPipeline<F>>,
     context: ConnectionContext,

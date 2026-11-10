@@ -581,10 +581,13 @@ dependencies = [
  "fast-proxy-config-service",
  "fast-proxy-dataplane",
  "fast-proxy-health",
+ "fast-proxy-model",
  "fast-proxy-store",
  "fast-proxy-telemetry",
+ "fast-proxy-test-pki",
  "fast-proxy-tls",
  "humantime",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -630,14 +633,18 @@ dependencies = [
 name = "fast-proxy-config-service"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-store",
  "fast-proxy-telemetry",
+ "fast-proxy-test-pki",
+ "fast-proxy-tls",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -649,6 +656,8 @@ dependencies = [
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-telemetry",
+ "fast-proxy-test-pki",
+ "fast-proxy-tls",
  "futures-util",
  "http",
  "http-body",
@@ -656,9 +665,11 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rand 0.8.7",
+ "rustls",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
