@@ -222,12 +222,21 @@ pub async fn get(addr: SocketAddr, host: &str, path: &str, extra: &str) -> Reply
 }
 
 /// Polls `condition` for up to a second.
-pub async fn eventually(mut condition: impl FnMut() -> bool) -> bool {
-    for _ in 0..100 {
+pub async fn eventually(condition: impl FnMut() -> bool) -> bool {
+    eventually_within(Duration::from_secs(1), condition).await
+}
+
+/// Polls `condition` for up to `limit`, for waits that depend on the platform
+/// (connecting to a closed port takes about a second on Windows).
+pub async fn eventually_within(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
         if condition() {
             return true;
         }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    false
 }
