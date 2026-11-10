@@ -219,3 +219,86 @@ throughput at 16 endpoints and the one-endpoint comparison in particular are
 inside that band. Reproduce with the commands above, and run every throughput point with
 `scripts/bench-m2.sh results.txt` (needs `oha`; it builds the release binaries,
 starts the backends and configures the proxy itself).
+
+## M3 results: TLS
+
+Run with `scripts/bench-m3.sh <results-file>` (builds the release binaries, starts
+a plain and a TLS `bench_backend`, and drives the real proxy with `oha`). Same
+machine and tools as above; the proxy ran with `--log-level "info,access=off"`;
+each point is 6 s after a 2 s warm-up. Every request succeeded in every run. The
+proxy and `oha` share the CPU, as before. (Latencies in the script's output mix
+microseconds and milliseconds because `oha` does; they are normalised here.)
+
+### Plain HTTP must not slow down (M3 budget: within about 5% of M2)
+
+| Connections | M2 rps | TLS off, rps | TLS on, plain HTTP, rps | TLS off vs M2 | TLS on vs off |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 17,793 | 17,460 | 17,681 | -1.9% | +1.3% |
+| 16 | 85,126 | 84,190 | 83,183 | -1.1% | -1.2% |
+| 64 | 97,920 | 96,792 | 93,850 | -1.2% | -3.0% |
+
+Everything M3 added to the request path (the redirect check, scheme handling,
+certificate and TLS state in the snapshot) is not measurable with TLS off, and
+turning TLS on costs plain-HTTP traffic at most 3%, inside the budget and the run
+to run noise. The added latency at one connection is still about 27 µs at p50.
+
+### HTTPS, keep-alive
+
+| Connections | Plain HTTP rps | HTTPS HTTP/1.1 rps (p50 / p99) | HTTPS HTTP/2 rps (p50 / p99) |
+|---:|---:|---:|---:|
+| 1 | 17,681 | 16,799 (0.058 / 0.075 ms) | 15,216 (0.064 / 0.083 ms) |
+| 16 | 83,183 | 79,037 (0.193 / 0.374 ms) | 72,653 (0.207 / 0.441 ms) |
+| 64 | 93,850 | 91,216 (0.678 / 1.268 ms) | 80,028 (0.763 / 1.607 ms) |
+
+With keep-alive the cost is mostly the symmetric crypto: HTTPS over HTTP/1.1 is
+3% to 5% below plain HTTP at one and 16 connections and 3% at 64 (about 3 µs more
+at p50 on one connection). HTTP/2 is 10% to 14% below HTTPS HTTP/1.1: the
+framing, header compression and stream bookkeeping cost more CPU per request
+than they save here, because the load generator and the proxy share the cores and
+every response is two bytes. The case for HTTP/2 is fewer connections and
+multiplexing for browsers, not raw loopback throughput.
+
+### Handshakes
+
+One new TCP and TLS connection per request (`oha --disable-keepalive`), so each
+request pays a handshake:
+
+| Connections | Requests/s | p50 | p99 |
+|---:|---:|---:|---:|
+| 1 | 1,091 | 0.87 ms | 1.4 ms |
+| 16 | 6,349 | 2.2 ms | 8.0 ms |
+| 64 | 6,591 | 8.6 ms | 26.5 ms |
+
+About 6,600 new connections per second saturates the machine (the client does its
+side of every handshake on the same cores). Session tickets are on at the server;
+`oha` offers no switch for resumption, so a with/without-resumption comparison was
+**not** measured and would need a purpose-built client.
+
+### TLS to the upstream
+
+HTTP to the proxy and TLS (verified against an uploaded CA, with a name override)
+to the backend, keep-alive pool: 17,305 / 82,221 / 92,419 rps at 1 / 16 / 64
+connections, within 2% to 3% of the same run with a plain upstream. The handshake
+is paid once per pooled connection.
+
+### Certificate writes and the cache
+
+- A certificate write (generate a self-signed certificate, seal its key, store it,
+  compile the snapshot, swap): median **0.4 ms**, p95 0.4 ms, flat from 1 to 60
+  stored certificates.
+- Rebuilding the certificate cache with the 256 certificates the limit allows:
+  **2.4 ms** to decrypt and parse every one (this is also the startup cost), and
+  **26 µs** when nothing changed, because unchanged entries are reused.
+  (`cargo test -p fast-proxy-tls --release rebuilding_256 -- --nocapture`.)
+
+Both are far inside the plan's budget (low milliseconds for a rebuild, well under
+a second for a full parse), and neither stalls requests: the swap is one pointer
+swap and the work happens off the request path.
+
+### Upstream HTTP/2 (decision C4)
+
+The plan left HTTP/2 to upstreams open until there were numbers. The data say
+there is nothing to win on the upstream hop: pooled HTTP/1.1 keep-alive
+connections to the upstream cost 1% to 3% (even over TLS), and HTTP/2 on the
+client side is slower than HTTP/1.1 on loopback. **Decision: upstream connections
+stay HTTP/1.1.** Revisit it only for a concrete need (an h2-only backend, gRPC).

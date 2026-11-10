@@ -34,3 +34,12 @@ certificates and sometimes addressed by IP.
 
 - Global upstream trust settings: groups differ.
 - A TLS health kind: the HTTP probe over the group's TLS already covers it.
+
+## Decision on upstream HTTP/2 (task C4, recorded at the end of M3)
+
+Upstream connections stay HTTP/1.1, over TLS when the group says so. The M3
+benchmark ([benchmarks.md](../benchmarks.md)) shows pooled keep-alive upstream
+connections cost 1% to 3% (also over TLS) and that HTTP/2 is slower than HTTP/1.1
+on loopback, so multiplexing to upstreams would add complexity (in-flight
+accounting, retries and body replay are built for one request per connection)
+without a measurable gain. Revisit for an h2-only backend or gRPC.

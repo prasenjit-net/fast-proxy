@@ -67,8 +67,19 @@ pub fn validate_with_key(
     let leaf = chain
         .first()
         .ok_or_else(|| FieldError::new("certPem", "contains no certificate"))?;
+    if let Err(mismatch) = check_key_matches(&chain, &key) {
+        // A key that does not match is most often a chain in the wrong order
+        // (a CA first); say that instead of the bare mismatch.
+        return Err(if starts_with_ca(leaf) {
+            FieldError::new(
+                "certPem",
+                "starts with a CA certificate; put the server certificate first, then its chain",
+            )
+        } else {
+            mismatch
+        });
+    }
     let metadata = read_metadata(leaf)?;
-    check_key_matches(&chain, &key)?;
     if metadata.not_before_ms > now_ms {
         return Err(FieldError::new("certPem", "is not valid yet"));
     }
@@ -193,17 +204,10 @@ fn check_key_matches(
 }
 
 /// Extracts names, subject, issuer, validity and fingerprint from a leaf.
-/// Fails when the first certificate is a CA (the chain is in the wrong order)
-/// or has no usable DNS name.
+/// Fails when it has no usable DNS name.
 pub fn read_metadata(leaf: &CertificateDer<'_>) -> Result<CertificateMetadata, FieldError> {
     let (_, cert) = X509Certificate::from_der(leaf.as_ref())
         .map_err(|_| FieldError::new("certPem", "contains a certificate that cannot be parsed"))?;
-    if cert.is_ca() {
-        return Err(FieldError::new(
-            "certPem",
-            "starts with a CA certificate; put the server certificate first, then its chain",
-        ));
-    }
     let names = dns_names(&cert);
     if names.is_empty() {
         return Err(FieldError::new(
@@ -219,6 +223,12 @@ pub fn read_metadata(leaf: &CertificateDer<'_>) -> Result<CertificateMetadata, F
         not_after_ms: cert.validity().not_after.timestamp().saturating_mul(1000),
         fingerprint: hex(&Sha256::digest(leaf.as_ref())),
     })
+}
+
+/// Whether the certificate is marked as a CA. A self-signed server certificate
+/// made with `openssl req -x509` is, by default, so this alone is not an error.
+fn starts_with_ca(leaf: &CertificateDer<'_>) -> bool {
+    X509Certificate::from_der(leaf.as_ref()).is_ok_and(|(_, cert)| cert.is_ca())
 }
 
 fn dns_names(cert: &X509Certificate<'_>) -> Vec<String> {
@@ -376,6 +386,14 @@ mod tests {
         let err = validate_upload(&reversed, &issued.key_pem, now_ms()).unwrap_err();
         assert_eq!(err.field, "certPem");
         assert!(err.message.contains("CA certificate"), "{err}");
+    }
+
+    #[test]
+    fn a_self_signed_server_certificate_marked_as_a_ca_is_accepted_when_its_key_matches() {
+        // `openssl req -x509` marks its certificate CA:TRUE by default.
+        let issued = TestCa::new("ca").issue(&LeafSpec::new(&["shop.example.com"]).marked_as_ca());
+        let validated = validate_upload(&issued.cert_pem, &issued.key_pem, now_ms()).unwrap();
+        assert_eq!(validated.metadata.names, ["shop.example.com"]);
     }
 
     #[test]

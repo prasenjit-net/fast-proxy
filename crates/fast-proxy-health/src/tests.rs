@@ -327,3 +327,34 @@ async fn gauges_show_health_ejection_and_in_flight_and_forget_removed_endpoints(
     );
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn a_group_that_does_not_verify_upstream_certificates_is_marked_in_the_metrics() {
+    let backend = Backend::start().await;
+    let mut config = config_for(fast_check("/"), &[backend.addr]);
+    config.subsystems[0].upstream_groups[0].policy.tls.enabled = true;
+    config.subsystems[0].upstream_groups[0].policy.tls.verify = false;
+    let holder = Arc::new(SnapshotHolder::new());
+    holder.swap(snapshot(&config, None));
+    let metrics = Arc::new(Metrics::new());
+    let shutdown = CancellationToken::new();
+    tokio::spawn(run_status_gauges(
+        holder.clone(),
+        metrics.clone(),
+        shutdown.clone(),
+    ));
+    let marked = r#"fastproxy_upstream_tls{subsystem="shop",upstream="backend",verify="false"} 1"#;
+    assert!(
+        eventually(3, || metrics.render().contains(marked)).await,
+        "{}",
+        metrics.render()
+    );
+
+    config.subsystems[0].upstream_groups[0].policy.tls.enabled = false;
+    holder.swap(snapshot(&config, None));
+    assert!(
+        eventually(3, || !metrics.render().contains("fastproxy_upstream_tls{")).await,
+        "a group with plain upstreams is not listed"
+    );
+    shutdown.cancel();
+}

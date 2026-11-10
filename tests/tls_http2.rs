@@ -532,3 +532,177 @@ async fn an_oversized_client_hello_and_a_flood_of_failing_handshakes_do_no_harm(
         StatusCode::OK
     );
 }
+
+// ---- more HTTP/2 behaviour (Q4) ---------------------------------------------------
+
+/// A backend that reads the whole request body slowly (a pause between reads)
+/// and answers with how many body bytes it got.
+async fn slow_reader_backend() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut received = Vec::new();
+                let mut chunk = [0u8; 16 * 1024];
+                let mut body_start = None;
+                let mut length = 0usize;
+                loop {
+                    let read = stream.read(&mut chunk).await.unwrap_or(0);
+                    if read == 0 {
+                        return;
+                    }
+                    received.extend_from_slice(&chunk[..read]);
+                    if body_start.is_none() {
+                        if let Some(end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&received[..end]).to_lowercase();
+                            length = head
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length: "))
+                                .and_then(|value| value.trim().parse().ok())
+                                .unwrap_or(0);
+                            body_start = Some(end + 4);
+                        }
+                    }
+                    if let Some(start) = body_start {
+                        if received.len() - start >= length {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+                let reply = format!("got {length}");
+                let _ = stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                            reply.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn a_large_body_flows_through_a_slow_backend_with_flow_control() {
+    let backend = slow_reader_backend().await;
+    let stack = Stack::start_with_backend(Options::default(), Some(backend)).await;
+    let ca = TestCa::new("ca");
+    shop(&stack, &ca).await;
+    let hello = ClientHello {
+        sni: Some("shop.example.com".into()),
+        trust_pem: vec![ca.pem.clone()],
+        alpn: vec!["h2".into()],
+        ..ClientHello::default()
+    };
+    let (tls, _) = connect(stack.https, &hello).await.unwrap();
+    let (mut client, connection) = hyper::client::conn::http2::handshake::<
+        _,
+        _,
+        http_body_util::Full<Bytes>,
+    >(TokioExecutor::new(), TokioIo::new(tls))
+    .await
+    .unwrap();
+    tokio::spawn(connection);
+    let size = 4 * 1024 * 1024;
+    let request = Request::builder()
+        .method("POST")
+        .uri("https://shop.example.com/upload")
+        .header("content-length", size.to_string())
+        .body(http_body_util::Full::new(Bytes::from(vec![7u8; size])))
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(60), client.send_request(request))
+        .await
+        .expect("the upload finishes")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body, format!("got {size}"));
+}
+
+#[tokio::test]
+async fn many_streams_succeed_together_while_a_dead_endpoint_is_retried_around() {
+    let (live, _, _) = slow_backend(Duration::from_millis(20)).await;
+    let dead: SocketAddr = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap()
+    };
+    let stack = Stack::start_with_backend(Options::default(), Some(live)).await;
+    let ca = TestCa::new("ca");
+    let id = stack
+        .add_site_to(
+            "shop",
+            "shop.example.com",
+            &[dead, live],
+            fast_proxy_model::UpstreamTls::default(),
+        )
+        .await;
+    stack
+        .serve_with(id, "shop", &ca, &["shop.example.com"])
+        .await;
+    let mut client = h2(&stack, Some("shop.example.com"), &ca).await;
+    assert_eq!(
+        fetch(&mut client, "shop.example.com", "/").await.0,
+        StatusCode::OK
+    );
+    let mut tasks = Vec::new();
+    for _ in 0..60 {
+        let mut client = client.clone();
+        tasks.push(tokio::spawn(async move {
+            fetch(&mut client, "shop.example.com", "/").await.0
+        }));
+    }
+    for task in tasks {
+        assert_eq!(
+            task.await.unwrap(),
+            StatusCode::OK,
+            "retries hide the dead endpoint"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancelling_one_stream_leaves_the_others_alone_and_in_flight_returns_to_zero() {
+    let (backend, _, current) = slow_backend(Duration::from_millis(300)).await;
+    let stack = Stack::start_with_backend(Options::default(), Some(backend)).await;
+    let ca = TestCa::new("ca");
+    shop(&stack, &ca).await;
+    let mut client = h2(&stack, Some("shop.example.com"), &ca).await;
+    assert_eq!(
+        fetch(&mut client, "shop.example.com", "/").await.0,
+        StatusCode::OK
+    );
+
+    let mut kept = Vec::new();
+    for _ in 0..4 {
+        let mut client = client.clone();
+        kept.push(tokio::spawn(async move {
+            fetch(&mut client, "shop.example.com", "/").await
+        }));
+    }
+    let mut doomed = client.clone();
+    let cancelled = tokio::spawn(async move { fetch(&mut doomed, "shop.example.com", "/").await });
+    wait_until("all five reached the backend", || {
+        current.load(Ordering::SeqCst) == 5
+    })
+    .await;
+    cancelled.abort();
+
+    for task in kept {
+        let (status, body) = task.await.unwrap();
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "ok"));
+    }
+    wait_until("nothing is left in flight", || {
+        stack.metrics.traffic_totals().active_requests == 0
+    })
+    .await;
+    let mut fresh = h2(&stack, Some("shop.example.com"), &ca).await;
+    assert_eq!(
+        fetch(&mut fresh, "shop.example.com", "/").await.0,
+        StatusCode::OK
+    );
+}

@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); and upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). TLS, ACME and maintenance mode are the next milestones.
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. ACME and maintenance mode are the next milestones.
 
 - Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
@@ -58,9 +58,15 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
+- `crates/fast-proxy-tls/` is everything about certificates and keys, with no HTTP
+  knowledge: PEM parsing and validation, the `Vault` (AES-256-GCM under the master
+  key), the self-signed generator, `CertCache` (parsed keys, unchanged entries
+  reused across rebuilds), rustls server and client configurations.
+  `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
+  clients); never use it outside `dev-dependencies` and tests.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
-- `tests/` holds end-to-end tests that run the real binary; shared helpers (spawning
+- `tests/` holds end-to-end tests (the real binary, and in-process stacks with real TLS clients in `tests/common/tls_stack.rs`); shared helpers (spawning
   a configured proxy, backends, a tiny HTTP client) are in `tests/common/mod.rs`,
   with `flaky.rs` (a backend that can be killed, revived, slowed and made to
   fail), `groups.rs` (admin helpers for groups and endpoints) and `load.rs` (a
@@ -108,6 +114,28 @@ These invariants hold across the codebase; do not break them without an ADR in `
   proxy and the admin resolver cannot disagree.
 - **API errors never leak paths or storage detail**; the detail goes to the log.
 - **The admin plane has no authentication until M5**; keep it on loopback.
+- **Certificate material and keys never appear in `Config`, revisions, logs, errors,
+  metrics, events or API responses.** Private keys are write-only: sealed by the
+  `Vault` before they reach the store, opened only into the `CertCache`. Every type
+  that holds one has a redacted `Debug`. Requests that carry a key are accepted only
+  from a loopback peer until M5.
+- **Certificate and HTTPS writes go through `ConfigService` like every other write**
+  (seal, store, reconcile development certificates, veto by compiling with the
+  would-be certificates, commit, swap). There is no other reload path.
+- **The `store` crate never decrypts** and has no cryptography dependency (a test
+  checks the manifest); it sees certificate keys only as ciphertext.
+- **Certificates travel in the routing snapshot**, so a certificate or HTTPS change
+  is one atomic swap; a handshake chooses its certificate once from one snapshot
+  and the 421 rule compares ids from that choice.
+- **A self-signed certificate is generated only for a subsystem that enables HTTPS**
+  (named `dev-<subsystem>`), never for a name nobody configured; an uploaded
+  certificate is never replaced automatically.
+- **The redirect `Location` is built only from a host that matched a configured
+  pattern and passed `dns_host`**, plus the original path and query; HSTS is sent
+  only on HTTPS responses.
+- **Sharing one database between instances** relies on the revision version as the
+  generation (`ConfigService::sync_once`); everything local to an instance (health,
+  in-flight counts, session tickets) stays out of the database.
 
 ## Development Rules
 

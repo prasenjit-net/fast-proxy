@@ -1,6 +1,6 @@
 # fast-proxy: Plan and Roadmap
 
-Status: v0.4 (2026-11-10). **M0, M1 and M2 are complete**; M3 (TLS) is next. This is a
+Status: v0.5 (2026-11-10). **M0, M1, M2 and M3 are complete**; M4 (ACME) is next. This is a
 living document; update it as decisions are made and milestones land.
 
 ## 1. Vision
@@ -142,16 +142,13 @@ database  = "./state/fast-proxy.db"
 name = "http"
 listen = "0.0.0.0:80"
 
-[[data_plane.listener]]
-name = "https"
-listen = "0.0.0.0:443"
-tls = true
-
-# Static certificates, selected by SNI pattern.
-[[data_plane.tls.cert]]
-names = ["internal.example.com"]
-cert_file = "/etc/fast-proxy/internal.pem"
-key_file  = "/etc/fast-proxy/internal.key"
+# TLS as built in M3: a process-wide switch and policy. There is no certificate
+# or key in this file: they are uploaded (or generated) in the admin UI/API and
+# stored in the database, with the private keys encrypted.
+[data_plane.tls]
+enabled = true            # or --tls
+listen = "0.0.0.0:443"    # --https-listen
+min_version = "1.2"
 
 # ACME: account and directory only. Which host names get certs is derived
 # from the subsystems in the DB (see 4.4).
@@ -169,17 +166,16 @@ level = "info"
 access_log = "access.log"
 ```
 
-*Decided for M3:* certificates and CA bundles are **not** configured in this
-file; they live in the database (see [M3-PLAN.md](M3-PLAN.md)). The
-`[[data_plane.tls.cert]]` entries and the per-listener `tls = true` above are
-superseded: `[data_plane.tls]` holds the process-wide switch (`enabled`, also
-`--tls`), the HTTPS `listen` address and the policy, and `[data_plane.acme]` (M4)
-stays in this file.
+*As built in M3:* certificates and CA bundles are **not** configured in this
+file; they live in the database (see [M3-PLAN.md](M3-PLAN.md)). `[data_plane.tls]`
+holds the process-wide switch (`enabled`, also `--tls`), the HTTPS `listen`
+address and the policy; there are no per-listener `tls` keys and no certificate
+entries. `[data_plane.acme]` (M4) stays in this file.
 
 *As built in M1:* `state_dir`, `database`, `trusted_proxies`, `shutdown_grace`,
 `[[data_plane.listener]]` (`name`, `listen`), `[admin].listen` and `[logging]`
-exist, and unknown keys (including `tls`) are rejected. The TLS and ACME
-sections above are still illustrative and arrive in M3 and M4.
+exist, and unknown keys were rejected. `[data_plane.tls]` arrived in M3; the ACME
+section above is still illustrative and arrives in M4.
 
 ### 3.6 Subsystem model stored in the DB (illustrative, not final)
 
@@ -402,26 +398,26 @@ Detailed task plan and outcome: [M2-PLAN.md](M2-PLAN.md).
 backends causes no client errors and the endpoint returns to rotation
 automatically after recovery.
 
-### M3: TLS termination
+### M3: TLS termination (complete)
 
-Detailed task plan: [M3-PLAN.md](M3-PLAN.md) (draft; decisions awaiting confirmation).
+Detailed task plan and outcome: [M3-PLAN.md](M3-PLAN.md).
 
-- [ ] Process-wide TLS switch (`[data_plane.tls] enabled`, `--tls`) that starts one
+- [x] Process-wide TLS switch (`[data_plane.tls] enabled`, `--tls`) that starts one
       HTTPS listener (rustls, ALPN `h2` and `http/1.1`); off by default.
-- [ ] Per-subsystem HTTPS: enable, certificate, opt-in HSTS and HTTP -> HTTPS
+- [x] Per-subsystem HTTPS: enable, certificate, opt-in HSTS and HTTP -> HTTPS
       redirect (DB, live). SNI picks the certificate of the subsystem a host
       belongs to; certificates can be shared (wildcards).
-- [ ] Certificates stored in SQLite (private keys encrypted at rest with a master
+- [x] Certificates stored in SQLite (private keys encrypted at rest with a master
       key), uploaded live through the admin UI/API; a self-signed dev certificate
       is auto-generated when a subsystem enables HTTPS without one. No certificate
       files are read from disk.
-- [ ] In-memory certificate cache carried atomically with the routing snapshot;
+- [x] In-memory certificate cache carried atomically with the routing snapshot;
       changes made by another instance are picked up by a version poll (ready for
       a cluster and a later PostgreSQL backend).
-- [ ] TLS version policy (config file); 421 for SNI/Host mismatches.
-- [ ] Optional TLS to upstreams (uploaded CA bundles, SNI override); TLS health
+- [x] TLS version policy (config file); 421 for SNI/Host mismatches.
+- [x] Optional TLS to upstreams (uploaded CA bundles, SNI override); TLS health
       probes.
-- [ ] Cert expiry and handshake metrics; certificate screens in the admin UI.
+- [x] Cert expiry and handshake metrics; certificate screens in the admin UI.
 
 ### M4: ACME automatic certificates
 
@@ -517,6 +513,8 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | SQLite from async code (blocking I/O) | **Done in M1:** one dedicated store thread; the hot path only reads the in-memory snapshot, never the DB |
 | Admin UI is the only way to configure subsystems; no config-as-code | Add import/export (JSON/TOML) of subsystem config in M5 so setups are reproducible and reviewable |
 | Backup and portability of the DB file | Document file location; add export and a consistent online backup command |
+| M3: private keys leaking (database copy, revisions, logs, API) | **Done in M3:** keys are sealed with AES-256-GCM under a master key outside the database, never enter `Config` or a revision, are write-only in the API and accepted only from a loopback peer; verified by tests that read the database file and WAL, and by the security review ([security-review-m3.md](security-review-m3.md)) |
+| M3: instances sharing a database drifting apart or using different master keys | **Done in M3:** the revision version is the cluster generation, polled every few seconds; a different master key is detected and reported; tested with two services and two processes on one database |
 | Metrics crate choice and label cardinality | **Done in M1:** `prometheus` crate; labels come only from config names, enforced by tests. Per-request label-lookup cost is not measured separately yet |
 
 ## 8. Decision log
@@ -538,3 +536,4 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | 2026-11-09 | M2 design decisions E1-E16 (see [M2-PLAN.md](M2-PLAN.md) section 3 and ADRs [0005](adr/0005-runtime-state-and-endpoint-identity.md), [0006](adr/0006-selection-algorithms-and-eligibility.md), [0007](adr/0007-health-checks-and-ejection.md), [0008](adr/0008-retries-budget-and-body-replay.md)): stable endpoint ids; runtime state in carried `Arc<EndpointRuntime>`; new crates `balancing` and `health`; round robin default; fail-open default; passive ejection on, active checks off; retry connect failures and idempotent 5xx with a 20% budget; E12 body replay confirmed by spike G2 (shared-pointer body wrapper; idempotent requests also retried on connection resets). |
 | 2026-11-10 | M2 outcome: all E1-E16 held, with one refinement and one fix found by the end-to-end tests. Refinement (ADR 0008): idempotent requests are also retried after a connection reset, not only on 502/503/504. Fix: the power-of-two-choices cold start now gives an unsampled endpoint its rival's latency, so a fresh endpoint is neither starved nor flooded (it had been starved by faster measured endpoints). `UpstreamClient` and the pipeline report each request's actual endpoint and attempt count; requests cancelled by their client are counted and logged as 499. |
 | 2026-11-10 | M3 design decisions F1-F29 accepted as recommended ([M3-PLAN.md](M3-PLAN.md) section 3, ADRs [0009](adr/0009-tls-stack-and-enablement.md) to [0014](adr/0014-acme-constraints-for-m4.md)): rustls with `ring`; a process-wide TLS switch plus per-subsystem HTTPS; all certificates in SQLite with keys sealed (AES-256-GCM, master key outside the database); certificates carried in the routing snapshot; revision version as cluster generation with a sync poll; redirect, HSTS and 421 rules; upstream TLS per group. ACME settings stay in the config file. |
+| 2026-11-10 | M3 outcome: all F1-F29 held, with these differences. The `Forwarded` header was never added (the proxy only ever set `X-Forwarded-*`). Upstream HTTP/2 stays out (decision C4: pooled HTTP/1.1 upstream connections cost 1% to 3%, see [benchmarks.md](benchmarks.md) and [ADR 0013](adr/0013-upstream-tls.md)). A metric for upstream groups that do not verify certificates (`fastproxy_upstream_tls{verify="false"}`) was added during the security review because F16 required it and it was missing. Session resumption was not benchmarked separately (the load generator has no switch for it). |

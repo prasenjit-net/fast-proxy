@@ -60,8 +60,9 @@ other's committed revision version.
 Verified later: (c) the resolver reads the live snapshot per handshake and the
 next handshake sees a swapped certificate (PR4b); (g) two config services, and
 two real processes, on one SQLite file see each other's commits and converge
-within the poll interval (PR6). Still open: (b) hyper's auto builder serving h2
-behind the acceptor (D2). F1 stands.
+within the poll interval (PR6); (b) hyper's auto builder serves h2 and HTTP/1.1 on
+one port behind the acceptor with the limits of F20 (PR7). Every spike item is
+now verified, on Linux, macOS and Windows CI. F1 stands.
 
 ## Consequences
 

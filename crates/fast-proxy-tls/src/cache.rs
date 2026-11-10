@@ -427,6 +427,8 @@ mod tests {
         let (_, stats) = cache.rebuild(&rows, Some(&vault));
         let reused = started.elapsed();
         assert_eq!(stats.hits, 256);
+        // Printed for docs/benchmarks.md: run with --release -- --nocapture.
+        eprintln!("cache rebuild, 256 certificates: full parse {full:?}, all reused {reused:?}");
         assert!(full.as_millis() < 5_000, "full parse took {full:?}");
         assert!(reused.as_millis() < 250, "reuse took {reused:?}");
         assert!(!cache.is_empty());

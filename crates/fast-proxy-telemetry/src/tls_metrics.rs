@@ -88,6 +88,7 @@ pub(crate) struct TlsMetrics {
     sync: IntCounterVec,
     expiry: IntGaugeVec,
     unreadable: IntGaugeVec,
+    upstream_tls: IntGaugeVec,
 }
 
 fn counter(registry: &Registry, name: &str, help: &str, labels: &[&str]) -> IntCounterVec {
@@ -139,6 +140,24 @@ impl TlsMetrics {
                 "1 if the stored certificate cannot be read (for example a wrong master key)",
                 &["cert"],
             ),
+            upstream_tls: gauge(
+                registry,
+                "fastproxy_upstream_tls",
+                "1 for each upstream group that talks TLS to its endpoints; verify=\"false\" marks one that does not check certificates",
+                &["subsystem", "upstream", "verify"],
+            ),
+        }
+    }
+
+    /// Replaces the per-group series: `(subsystem, upstream, verifies)` for every
+    /// group with upstream TLS on, so a group that turned it off disappears.
+    pub(crate) fn set_upstream_tls(&self, groups: &[(String, String, bool)]) {
+        self.upstream_tls.reset();
+        for (subsystem, upstream, verifies) in groups {
+            let verify = if *verifies { "true" } else { "false" };
+            self.upstream_tls
+                .with_label_values(&[subsystem.as_str(), upstream.as_str(), verify])
+                .set(1);
         }
     }
 
@@ -215,6 +234,27 @@ mod tests {
             assert!(text.contains(expected), "missing {expected}\n{text}");
         }
         assert!(!text.contains("fastproxy_tls_cert_unreadable{cert=\"shop\"}"));
+    }
+
+    #[test]
+    fn groups_with_upstream_tls_are_published_and_unverified_ones_are_marked() {
+        let metrics = Metrics::new();
+        metrics.set_upstream_tls_groups(&[
+            ("shop".into(), "backend".into(), true),
+            ("shop".into(), "legacy".into(), false),
+        ]);
+        let text = metrics.render();
+        assert!(text.contains(
+            "fastproxy_upstream_tls{subsystem=\"shop\",upstream=\"backend\",verify=\"true\"} 1"
+        ));
+        assert!(text.contains(
+            "fastproxy_upstream_tls{subsystem=\"shop\",upstream=\"legacy\",verify=\"false\"} 1"
+        ));
+        metrics.set_upstream_tls_groups(&[]);
+        assert!(
+            !metrics.render().contains("fastproxy_upstream_tls{"),
+            "a group that turned TLS off disappears"
+        );
     }
 
     #[test]

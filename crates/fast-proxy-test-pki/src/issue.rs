@@ -16,6 +16,7 @@ pub struct LeafSpec {
     names: Vec<String>,
     not_before: OffsetDateTime,
     not_after: OffsetDateTime,
+    is_ca: bool,
 }
 
 impl LeafSpec {
@@ -27,7 +28,15 @@ impl LeafSpec {
             names: names.iter().map(ToString::to_string).collect(),
             not_before: now - Duration::days(1),
             not_after: now + Duration::days(90),
+            is_ca: false,
         }
+    }
+
+    /// Marks the certificate as a CA (basic constraints CA:TRUE), as `openssl req
+    /// -x509` does by default for a self-signed server certificate.
+    pub fn marked_as_ca(mut self) -> Self {
+        self.is_ca = true;
+        self
     }
 
     /// Valid until `days` from now (negative: already expired).
@@ -90,6 +99,9 @@ impl TestCa {
         params.subject_alt_names = spec.names.iter().map(|name| san(name)).collect();
         params.not_before = spec.not_before;
         params.not_after = spec.not_after;
+        if spec.is_ca {
+            params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        }
         let leaf = params
             .signed_by(key, &self.issuer)
             .expect("signing a test leaf");

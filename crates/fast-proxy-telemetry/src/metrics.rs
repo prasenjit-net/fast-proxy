@@ -271,6 +271,12 @@ impl Metrics {
         self.tls.set_certificates(readings);
     }
 
+    /// Publishes which upstream groups use TLS and whether they verify
+    /// certificates, replacing the earlier series.
+    pub fn set_upstream_tls_groups(&self, groups: &[(String, String, bool)]) {
+        self.tls.set_upstream_tls(groups);
+    }
+
     /// Counts a request as active until the returned guard drops.
     pub fn request_started(&self) -> ActiveRequest {
         self.active_requests.inc();
