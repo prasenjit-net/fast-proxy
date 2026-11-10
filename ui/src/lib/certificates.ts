@@ -10,12 +10,14 @@ export function daysLeft(secondsLeft: number): number {
   return Math.floor(secondsLeft / DAY_SECS);
 }
 
+function expiredLabel(daysAgo: number): string {
+  if (daysAgo === 0) return "expired today";
+  return `expired ${daysAgo} day${daysAgo === 1 ? "" : "s"} ago`;
+}
+
 /** "in 45 days", "tomorrow", "in 5 hours", "expired 3 days ago". */
 export function expiryLabel(secondsLeft: number): string {
-  if (secondsLeft <= 0) {
-    const ago = Math.floor(-secondsLeft / DAY_SECS);
-    return ago === 0 ? "expired today" : `expired ${ago} day${ago === 1 ? "" : "s"} ago`;
-  }
+  if (secondsLeft <= 0) return expiredLabel(Math.floor(-secondsLeft / DAY_SECS));
   const days = daysLeft(secondsLeft);
   if (days >= 2) return `in ${days} days`;
   if (days === 1) return "tomorrow";
@@ -43,7 +45,7 @@ export function isSelfSigned(source: CertificateSource): boolean {
 export function readFileText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
     reader.onerror = () => reject(reader.error ?? new Error("The file could not be read"));
     reader.readAsText(file);
   });

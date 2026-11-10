@@ -13,15 +13,25 @@ interface Props {
 }
 
 /** The certificate a subsystem serves, what is wrong with it, and what can be done. */
-export default function AttachedCertificate({ certificate, secondsLeft, onUpload, onChoose, onUseDevelopment }: Props) {
+function expiryTone(secondsLeft: number): "ok" | "warn" | "err" {
+  if (secondsLeft <= 0) return "err";
+  return daysLeft(secondsLeft) < EXPIRING_DAYS ? "warn" : "ok";
+}
+
+export default function AttachedCertificate({
+  certificate,
+  secondsLeft,
+  onUpload,
+  onChoose,
+  onUseDevelopment,
+}: Readonly<Props>) {
   const selfSigned = isSelfSigned(certificate.source);
-  const expiring = daysLeft(secondsLeft) < EXPIRING_DAYS;
   return (
     <div className="rounded-md border border-line p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-[0.95rem] font-semibold">{certificate.name}</h3>
         <SourceBadge source={certificate.source} />
-        <Badge tone={secondsLeft <= 0 ? "err" : expiring ? "warn" : "ok"} dot>
+        <Badge tone={expiryTone(secondsLeft)} dot>
           {expiryLabel(secondsLeft)}
         </Badge>
       </div>

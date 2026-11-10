@@ -3,11 +3,11 @@ import type { CertificateSource, CertificateState } from "../../lib/types";
 import Badge from "../Badge";
 
 /** Where a certificate came from; a self-signed one is called out as a warning. */
-export function SourceBadge({ source }: { source: CertificateSource }) {
+export function SourceBadge({ source }: Readonly<{ source: CertificateSource }>) {
   return <Badge tone={source === "self_signed" ? "warn" : "neutral"}>{SOURCE_LABELS[source]}</Badge>;
 }
 
-export function StateBadge({ state }: { state: CertificateState }) {
+export function StateBadge({ state }: Readonly<{ state: CertificateState }>) {
   return (
     <Badge tone={stateTone(state)} dot>
       {state}

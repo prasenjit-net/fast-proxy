@@ -14,6 +14,25 @@ import HttpsPolicyForm from "./HttpsPolicyForm";
 
 type Dialog = "upload" | "choose" | null;
 
+/** Whether HTTPS is being served, saved but not applied (TLS off), or off. */
+function StatusBadge({ https }: Readonly<{ https: HttpsSettings }>) {
+  if (https.effective) {
+    return (
+      <Badge tone="ok" dot>
+        serving HTTPS
+      </Badge>
+    );
+  }
+  if (https.enabled) {
+    return (
+      <Badge tone="warn" dot>
+        saved, not applied
+      </Badge>
+    );
+  }
+  return <Badge>off</Badge>;
+}
+
 function inputOf(https: HttpsSettings): HttpsInput {
   return {
     enabled: https.enabled,
@@ -24,7 +43,7 @@ function inputOf(https: HttpsSettings): HttpsInput {
 }
 
 /** Serve this subsystem over HTTPS: its certificate, the redirect and HSTS. */
-export default function HttpsSection({ subsystem }: { subsystem: SubsystemDetail }) {
+export default function HttpsSection({ subsystem }: Readonly<{ subsystem: SubsystemDetail }>) {
   const refresh = useRefreshConfigData();
   const { push, notifyError } = useToast();
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -93,17 +112,7 @@ export default function HttpsSection({ subsystem }: { subsystem: SubsystemDetail
         <h2>HTTPS</h2>
         <span className="card-hint">serve this subsystem over TLS</span>
         <span className="ml-auto">
-          {https.effective ? (
-            <Badge tone="ok" dot>
-              serving HTTPS
-            </Badge>
-          ) : https.enabled ? (
-            <Badge tone="warn" dot>
-              saved, not applied
-            </Badge>
-          ) : (
-            <Badge>off</Badge>
-          )}
+          <StatusBadge https={https} />
         </span>
       </div>
       {tlsOff ? (

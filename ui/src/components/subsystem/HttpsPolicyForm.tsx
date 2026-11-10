@@ -11,7 +11,7 @@ interface Props {
 }
 
 /** The redirect and HSTS settings, with a confirmation that says what will happen. */
-export default function HttpsPolicyForm({ https, onSave }: Props) {
+export default function HttpsPolicyForm({ https, onSave }: Readonly<Props>) {
   const [redirect, setRedirect] = useState<RedirectMode>(https.redirect);
   const [hstsEnabled, setHstsEnabled] = useState(https.hsts.enabled);
   const [maxAge, setMaxAge] = useState(https.hsts.maxAgeSecs);

@@ -17,10 +17,10 @@ function hasPrivateKey(text: string): boolean {
   return ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY"].some((label) => hasPem(text, label));
 }
 
-export function validateMaterialName(name: string, field = "name"): string | undefined {
+export function validateMaterialName(name: string): string | undefined {
   return MATERIAL_NAME.test(name.trim())
     ? undefined
-    : `${field === "name" ? "Use" : "Use"} 1 to 63 letters, digits, '.', '_' or '-', starting and ending with a letter or digit`;
+    : "Use 1 to 63 letters, digits, '.', '_' or '-', starting and ending with a letter or digit";
 }
 
 export function validateCertificateUpload(values: CertificateUpload): Validated<CertificateUpload> {

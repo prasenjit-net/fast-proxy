@@ -13,7 +13,7 @@ interface Props {
 }
 
 /** TLS to the endpoints of a group: on or off, verification, the name to check, the trust anchors. */
-export default function UpstreamTlsFields({ values, onChange, error, idPrefix }: Props) {
+export default function UpstreamTlsFields({ values, onChange, error, idPrefix }: Readonly<Props>) {
   const bundles = useQuery({ queryKey: ["ca-bundles"], queryFn: () => api.caBundles() });
   const nameId = `${idPrefix}-tls-server-name`;
   const caId = `${idPrefix}-tls-ca`;
