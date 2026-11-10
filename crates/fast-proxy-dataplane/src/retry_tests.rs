@@ -304,8 +304,22 @@ async fn the_in_flight_count_follows_the_request_to_the_retried_endpoint() {
         .next()
         .unwrap()
         .candidates;
-    let retried = candidates[1].runtime.clone();
-    assert!(crate::test_support::eventually(move || retried.in_flight() == 1).await);
+    // The failed connect to the dead endpoint is slow on some platforms, so
+    // wait for the request to actually arrive at the slow one (generously)
+    // instead of guessing how long the retry takes.
+    let arrived = slow.clone();
+    assert!(
+        crate::test_support::eventually_within(Duration::from_secs(15), move || {
+            arrived.request_count() == 1
+        })
+        .await,
+        "the retry should reach the slow endpoint"
+    );
+    assert_eq!(
+        candidates[1].runtime.in_flight(),
+        1,
+        "the retried endpoint holds the request"
+    );
     assert_eq!(
         candidates[0].runtime.in_flight(),
         0,
