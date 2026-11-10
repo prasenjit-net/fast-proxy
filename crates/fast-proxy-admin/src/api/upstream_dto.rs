@@ -5,7 +5,8 @@
 use fast_proxy_model::{
     parse_weight, EndpointAddr, EndpointConfig, EndpointState, FailurePolicy, FieldError,
     GroupPolicy, HashKey, HealthCheck, HealthKind, LbAlgorithm, LbPolicy, PassiveHealth,
-    RetryBudget, SubsystemId, UpstreamGroupConfig, UpstreamGroupId, MAX_ENDPOINTS_PER_GROUP,
+    RetryBudget, SubsystemId, UpstreamGroupConfig, UpstreamGroupId, UpstreamTls,
+    MAX_ENDPOINTS_PER_GROUP,
 };
 use fast_proxy_store::repository::subsystems;
 use fast_proxy_store::{Connection, EndpointFields, StoreError, UpstreamFields};
@@ -64,6 +65,18 @@ pub struct RetryBudgetDto {
     min_per_sec: u32,
 }
 
+/// How the proxy talks TLS to the group's endpoints.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TlsDto {
+    enabled: bool,
+    /// Verification is on unless this is `false` (shown with a warning in the UI).
+    verify: bool,
+    server_name: String,
+    /// The name of an uploaded CA bundle; empty means the OS trust store.
+    ca: String,
+}
+
 /// An upstream group with its policy and endpoints.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +88,7 @@ pub struct UpstreamDto {
     health: HealthDto,
     passive: PassiveDto,
     retry_budget: RetryBudgetDto,
+    tls: TlsDto,
     pub endpoints: Vec<EndpointDto>,
 }
 
@@ -116,6 +130,12 @@ pub fn upstream_dto(group: &UpstreamGroupConfig) -> UpstreamDto {
             percent: policy.retry_budget.percent,
             min_per_sec: policy.retry_budget.min_per_sec,
         },
+        tls: TlsDto {
+            enabled: policy.tls.enabled,
+            verify: policy.tls.verify,
+            server_name: policy.tls.server_name.clone(),
+            ca: policy.tls.ca.clone(),
+        },
         endpoints: group.endpoints.iter().map(endpoint_dto).collect(),
     }
 }
@@ -150,6 +170,8 @@ pub struct UpstreamRequest {
     passive: PassiveRequest,
     #[serde(default)]
     retry_budget: RetryBudgetRequest,
+    #[serde(default)]
+    tls: TlsRequest,
     /// Required when creating; not allowed when updating.
     endpoints: Option<Vec<EndpointRequest>>,
 }
@@ -187,6 +209,16 @@ struct PassiveRequest {
 struct RetryBudgetRequest {
     percent: Option<u32>,
     min_per_sec: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TlsRequest {
+    #[serde(default)]
+    enabled: bool,
+    verify: Option<bool>,
+    server_name: Option<String>,
+    ca: Option<String>,
 }
 
 /// One endpoint in a request, also the body of the endpoint resource.
@@ -257,6 +289,7 @@ fn parse_policy(request: &UpstreamRequest, errors: &mut FieldErrors) -> Option<G
     let health = parse_health(&request.health, errors);
     let passive = parse_passive(&request.passive, errors);
     let budget = parse_retry_budget(&request.retry_budget, errors);
+    let tls = parse_tls(&request.tls, errors);
     Some(GroupPolicy {
         lb: LbPolicy {
             algorithm: algorithm?,
@@ -266,8 +299,19 @@ fn parse_policy(request: &UpstreamRequest, errors: &mut FieldErrors) -> Option<G
         health: health?,
         passive: passive?,
         retry_budget: budget?,
-        tls: fast_proxy_model::UpstreamTls::default(),
+        tls: tls?,
     })
+}
+
+/// Validates the `tls` object under `tls.serverName` and `tls.ca`.
+fn parse_tls(request: &TlsRequest, errors: &mut FieldErrors) -> Option<UpstreamTls> {
+    let tls = UpstreamTls {
+        enabled: request.enabled,
+        verify: request.verify.unwrap_or(true),
+        server_name: request.server_name.clone().unwrap_or_default(),
+        ca: request.ca.clone().unwrap_or_default(),
+    };
+    errors.check(tls.validate().map(|()| tls))
 }
 
 fn parse_health(request: &HealthRequest, errors: &mut FieldErrors) -> Option<HealthCheck> {

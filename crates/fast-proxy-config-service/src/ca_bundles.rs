@@ -41,6 +41,31 @@ impl ConfigService {
         .await
     }
 
+    /// Replaces the PEM of a CA bundle, keeping its name and id. Groups that name
+    /// it get a new client configuration, which new connections use.
+    pub async fn replace_ca_bundle(&self, id: i64, pem: &str) -> Result<Applied<()>, StoreError> {
+        let infos = parse_ca_bundle(pem)?;
+        let pem = pem.to_string();
+        self.apply(move |conn| {
+            let current = ca_bundles::get(conn, id)?.bundle;
+            let name = current.name.clone();
+            ca_bundles::update(
+                conn,
+                id,
+                &NewCaBundle {
+                    name: current.name,
+                    pem,
+                    cert_count: u32::try_from(infos.len()).unwrap_or(u32::MAX),
+                },
+            )?;
+            Ok(Mutation {
+                value: (),
+                summary: format!("CA bundle replaced: {}", name.as_str()),
+            })
+        })
+        .await
+    }
+
     /// Deletes a CA bundle; a `Conflict` while an upstream group names it.
     pub async fn delete_ca_bundle(&self, id: i64) -> Result<Applied<()>, StoreError> {
         self.apply(move |conn| {

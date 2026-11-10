@@ -856,3 +856,85 @@ async fn the_status_reports_the_tls_state_and_the_soonest_certificate_expiry() {
         false
     );
 }
+
+#[tokio::test]
+async fn an_upstream_group_carries_its_tls_settings_with_defaults_and_validation() {
+    let app = TestApp::with_tls(false).await;
+    let id = site(&app, "shop", "shop.example.com").await;
+    let ca = TestCa::new("corp root");
+    app.post("/api/ca-bundles", json!({ "name": "corp", "pem": ca.pem }))
+        .await;
+
+    let (status, body) = app
+        .post(
+            &format!("/api/subsystems/{id}/upstreams"),
+            json!({ "name": "plain", "endpoints": [{ "addr": "127.0.0.1:3000" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        body["data"]["tls"],
+        json!({ "enabled": false, "verify": true, "serverName": "", "ca": "" }),
+        "off by default, verifying, OS trust store"
+    );
+
+    let (status, body) = app
+        .post(
+            &format!("/api/subsystems/{id}/upstreams"),
+            json!({
+                "name": "secure",
+                "tls": { "enabled": true, "verify": false, "serverName": "backend.internal", "ca": "corp" },
+                "endpoints": [{ "addr": "127.0.0.1:3001" }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        body["data"]["tls"],
+        json!({ "enabled": true, "verify": false, "serverName": "backend.internal", "ca": "corp" })
+    );
+    let group = body["data"]["id"].as_i64().unwrap();
+
+    let (status, body) = app
+        .put(
+            &format!("/api/subsystems/{id}/upstreams/{group}"),
+            json!({ "name": "secure", "tls": { "enabled": true } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["tls"]["verify"], true);
+    assert_eq!(body["data"]["tls"]["ca"], "");
+}
+
+#[tokio::test]
+async fn an_unknown_ca_name_or_a_bad_server_name_is_a_400_naming_the_field() {
+    let app = TestApp::with_tls(false).await;
+    let id = site(&app, "shop", "shop.example.com").await;
+    let uri = format!("/api/subsystems/{id}/upstreams");
+    let endpoints = json!([{ "addr": "127.0.0.1:3000" }]);
+
+    let (status, body) = app
+        .post(&uri, json!({ "name": "g", "tls": { "enabled": true, "ca": "missing" }, "endpoints": endpoints }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(fields(&body), ["tls.ca"]);
+
+    let (status, body) = app
+        .post(&uri, json!({ "name": "g", "tls": { "enabled": true, "serverName": "bad name" }, "endpoints": endpoints }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(fields(&body), ["tls.serverName"]);
+
+    let (status, body) = app
+        .post(
+            &uri,
+            json!({ "name": "g", "tls": { "enabled": true, "bogus": 1 }, "endpoints": endpoints }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        app.get(&uri).await.1["data"],
+        json!([]),
+        "nothing was created"
+    );
+}

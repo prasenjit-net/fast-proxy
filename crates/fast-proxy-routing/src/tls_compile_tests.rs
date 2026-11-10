@@ -1,6 +1,6 @@
 //! Compiling HTTPS settings, certificates and upstream CA names into snapshots.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
@@ -8,9 +8,10 @@ use fast_proxy_model::{
     CertificateId, CertificateName, CertificateSource, Config, HostPattern, HttpsPolicy,
     RedirectMode,
 };
+use fast_proxy_test_pki::TestCa;
 use fast_proxy_tls::{
-    generate_self_signed, parse_chain, read_metadata, CertCache, MasterKey, StoredCertificate,
-    Vault,
+    generate_self_signed, parse_chain, read_metadata, CaBundle, CertCache, MasterKey,
+    StoredCertificate, Vault,
 };
 
 use crate::compile::tests::{group, subsystem};
@@ -51,8 +52,46 @@ fn tls(enabled: bool, certificates: CertCache) -> TlsInputs {
     TlsInputs {
         enabled,
         certificates,
-        ca_bundles: HashSet::new(),
+        ca_bundles: HashMap::new(),
+        client_configs: Arc::default(),
     }
+}
+
+fn bundles(entries: &[(&str, &str, i64)]) -> HashMap<String, CaBundle> {
+    entries
+        .iter()
+        .map(|(name, pem, updated)| {
+            (
+                name.to_string(),
+                CaBundle {
+                    name: name.to_string(),
+                    pem: pem.to_string(),
+                    updated_at_ms: *updated,
+                },
+            )
+        })
+        .collect()
+}
+
+fn tls_group_config(ca: &str, enabled: bool, verify: bool) -> Config {
+    let mut config = config_with(None, false);
+    let mut backend = group(10, "backend", "127.0.0.1:3000");
+    backend.policy.tls.enabled = enabled;
+    backend.policy.tls.verify = verify;
+    backend.policy.tls.ca = ca.into();
+    config.subsystems[0].upstream_groups = vec![backend];
+    config
+}
+
+fn client_tls(snapshot: &Snapshot) -> Option<Arc<rustls::ClientConfig>> {
+    let upstream = snapshot
+        .subsystems
+        .values()
+        .next()?
+        .upstreams
+        .values()
+        .next()?;
+    upstream.client_tls.clone()
 }
 
 fn config_with(certificate: Option<i64>, https_enabled: bool) -> Config {
@@ -206,7 +245,7 @@ fn an_unknown_ca_bundle_name_is_rejected_and_a_known_one_accepted() {
         }
     );
     let known = TlsInputs {
-        ca_bundles: HashSet::from(["corp".to_string()]),
+        ca_bundles: bundles(&[("corp", &TestCa::new("corp root").pem, 1)]),
         ..TlsInputs::off()
     };
     compile(&config, &known).unwrap();
@@ -238,4 +277,56 @@ fn unrelated_edits_keep_endpoint_runtime_state() {
         Arc::clone(&upstream.candidates[0].runtime)
     };
     assert!(Arc::ptr_eq(&runtime(&first), &runtime(&second)));
+}
+
+#[test]
+fn a_tls_group_gets_a_client_configuration_and_a_plain_group_none() {
+    let inputs = TlsInputs {
+        ca_bundles: bundles(&[("corp", &TestCa::new("corp root").pem, 1)]),
+        ..TlsInputs::off()
+    };
+    let secure = compile(&tls_group_config("corp", true, true), &inputs).unwrap();
+    let config = client_tls(&secure).expect("a TLS group carries its configuration");
+    assert!(config.alpn_protocols.is_empty(), "the connector sets ALPN");
+    let plain = compile(&tls_group_config("corp", false, true), &inputs).unwrap();
+    assert!(client_tls(&plain).is_none());
+    let unverified = compile(&tls_group_config("", true, false), &inputs).unwrap();
+    assert!(client_tls(&unverified).is_some());
+}
+
+#[test]
+fn a_replaced_bundle_compiles_to_a_new_configuration_and_an_unchanged_one_is_reused() {
+    let first_pem = TestCa::new("first").pem;
+    let first = TlsInputs {
+        ca_bundles: bundles(&[("corp", &first_pem, 1)]),
+        ..TlsInputs::off()
+    };
+    let config = tls_group_config("corp", true, true);
+    let one = client_tls(&compile(&config, &first).unwrap()).unwrap();
+    let again = client_tls(&compile(&config, &first).unwrap()).unwrap();
+    assert!(
+        Arc::ptr_eq(&one, &again),
+        "unchanged bundle, same configuration"
+    );
+
+    let replaced = TlsInputs {
+        ca_bundles: bundles(&[("corp", &TestCa::new("second").pem, 2)]),
+        client_configs: first.client_configs.clone(),
+        ..TlsInputs::off()
+    };
+    let two = client_tls(&compile(&config, &replaced).unwrap()).unwrap();
+    assert!(!Arc::ptr_eq(&one, &two));
+}
+
+#[test]
+fn an_unusable_bundle_is_a_compile_error_naming_the_upstream() {
+    let inputs = TlsInputs {
+        ca_bundles: bundles(&[("corp", "no certificates here", 1)]),
+        ..TlsInputs::off()
+    };
+    let err = compile(&tls_group_config("corp", true, true), &inputs).unwrap_err();
+    assert!(
+        matches!(&err, CompileError::InvalidUpstream { upstream, .. } if upstream == "backend"),
+        "{err}"
+    );
 }

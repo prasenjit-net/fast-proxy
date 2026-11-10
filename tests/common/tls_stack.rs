@@ -13,7 +13,7 @@ use fast_proxy_dataplane::{
 };
 use fast_proxy_model::{
     CertificateId, EndpointAddr, EndpointState, GroupPolicy, HostPattern, HttpsPolicy, RetryPolicy,
-    RoutePrefix, SubsystemId, SubsystemName, UpstreamPrefix,
+    RoutePrefix, SubsystemId, SubsystemName, UpstreamPrefix, UpstreamTls,
 };
 use fast_proxy_store::repository::{hosts, routes, subsystems, upstreams};
 use fast_proxy_store::{
@@ -204,7 +204,19 @@ impl Stack {
 
     /// A subsystem answering to `host`, routing `/` to the echo backend.
     pub async fn add_site(&self, name: &'static str, host: &'static str) -> SubsystemId {
-        let backend = self.backend;
+        self.add_site_to(name, host, &[self.backend], UpstreamTls::default())
+            .await
+    }
+
+    /// A subsystem answering to `host` whose group has `endpoints` and `tls`.
+    pub async fn add_site_to(
+        &self,
+        name: &'static str,
+        host: &'static str,
+        endpoints: &[SocketAddr],
+        tls: UpstreamTls,
+    ) -> SubsystemId {
+        let endpoints: Vec<SocketAddr> = endpoints.to_vec();
         self.service
             .apply(move |conn| {
                 let id = subsystems::create(
@@ -222,13 +234,19 @@ impl Stack {
                     id,
                     &UpstreamFields {
                         name: "backend".into(),
-                        policy: GroupPolicy::default(),
+                        policy: GroupPolicy {
+                            tls,
+                            ..GroupPolicy::default()
+                        },
                     },
-                    &[EndpointFields {
-                        addr: EndpointAddr::parse(&backend.to_string()).unwrap(),
-                        weight: 1,
-                        state: EndpointState::Enabled,
-                    }],
+                    &endpoints
+                        .iter()
+                        .map(|addr| EndpointFields {
+                            addr: EndpointAddr::parse(&addr.to_string()).unwrap(),
+                            weight: 1,
+                            state: EndpointState::Enabled,
+                        })
+                        .collect::<Vec<_>>(),
                 )?;
                 routes::create(
                     conn,
@@ -313,4 +331,54 @@ pub fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
+}
+
+/// A TLS backend: its certificate is issued by `ca` for `names`, and it answers
+/// every request with `tls-ok` (and counts the requests in `served`).
+pub async fn tls_backend(
+    ca: &TestCa,
+    names: &[&str],
+) -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use rustls::pki_types::pem::PemObject;
+    let issued = ca.issue(&LeafSpec::new(names));
+    let chain: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls::pki_types::CertificateDer::pem_slice_iter(issued.chain_pem.as_bytes())
+            .collect::<Result<_, _>>()
+            .unwrap();
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(issued.key_pem.as_bytes()).unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(chain, key)
+    .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let served = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = served.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (acceptor, counter) = (acceptor.clone(), counter.clone());
+            tokio::spawn(async move {
+                let Ok(mut tls) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let mut buffer = [0u8; 4096];
+                if tls.read(&mut buffer).await.unwrap_or(0) == 0 {
+                    return;
+                }
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = tls
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\ntls-ok",
+                    )
+                    .await;
+                let _ = tls.shutdown().await;
+            });
+        }
+    });
+    (addr, served)
 }

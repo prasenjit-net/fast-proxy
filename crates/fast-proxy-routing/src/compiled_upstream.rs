@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use fast_proxy_balancing::{Balancer, Candidate, RetryBudget, RuntimeRegistry};
 use fast_proxy_model::{
     parse_weight, EndpointAddr, EndpointId, EndpointState, GroupPolicy, UpstreamGroupConfig,
@@ -37,6 +39,10 @@ pub struct CompiledUpstream {
     pub balancer: Balancer,
     /// Caps this group's retries (see [`RetryBudget`]).
     pub retry_budget: RetryBudget,
+    /// The TLS client configuration for the group's endpoints; `None` when the
+    /// group is plain HTTP. Carried in the snapshot so a replaced CA bundle
+    /// reaches new connections with the same atomic swap as everything else.
+    pub client_tls: Option<Arc<rustls::ClientConfig>>,
 }
 
 impl CompiledUpstream {
@@ -44,6 +50,7 @@ impl CompiledUpstream {
     pub(crate) fn build(
         group: &UpstreamGroupConfig,
         registry: &RuntimeRegistry,
+        client_tls: Option<Arc<rustls::ClientConfig>>,
     ) -> Result<Self, GroupFault> {
         let count = group.endpoints.len();
         if count == 0 || count > MAX_ENDPOINTS_PER_GROUP {
@@ -88,6 +95,7 @@ impl CompiledUpstream {
             retry_budget: RetryBudget::new(group.policy.retry_budget),
             endpoints,
             candidates,
+            client_tls,
         })
     }
 }

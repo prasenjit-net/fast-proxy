@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
-use fast_proxy_model::{Config, RoutePrefix, SubsystemConfig, UpstreamGroupId};
+use fast_proxy_model::{
+    Config, RoutePrefix, SubsystemConfig, UpstreamGroupConfig, UpstreamGroupId,
+};
+use fast_proxy_tls::UpstreamTrust;
 
 use crate::compiled_upstream::GroupFault;
 use crate::snapshot::{CompiledRoute, CompiledSubsystem};
@@ -159,6 +162,53 @@ fn compile_https(
     ))
 }
 
+/// The client TLS configuration of a group with upstream TLS on. Fails when the
+/// group names a CA bundle that does not exist (whether or not TLS is on, so a
+/// dangling name never survives a rollback) or one that cannot be used.
+fn client_tls_for(
+    subsystem: &str,
+    group: &UpstreamGroupConfig,
+    tls: &TlsInputs,
+) -> Result<Option<Arc<rustls::ClientConfig>>, CompileError> {
+    let settings = &group.policy.tls;
+    let bundle = if settings.ca.is_empty() {
+        None
+    } else {
+        match tls.ca_bundles.get(&settings.ca) {
+            Some(bundle) => Some(bundle.clone()),
+            None => {
+                return Err(CompileError::UnknownCaBundle {
+                    subsystem: subsystem.to_string(),
+                    upstream: group.name.clone(),
+                    name: settings.ca.clone(),
+                })
+            }
+        }
+    };
+    if !settings.enabled {
+        return Ok(None);
+    }
+    if !settings.verify {
+        tracing::warn!(
+            subsystem,
+            upstream = %group.name,
+            "upstream TLS verification is turned off for this group"
+        );
+    }
+    let trust = UpstreamTrust {
+        verify: settings.verify,
+        ca: bundle,
+    };
+    tls.client_configs
+        .get(&trust)
+        .map(Some)
+        .map_err(|err| CompileError::InvalidUpstream {
+            subsystem: subsystem.to_string(),
+            upstream: group.name.clone(),
+            reason: err.to_string(),
+        })
+}
+
 /// Compiles a subsystem's upstream groups, enforcing unique names and each
 /// group's own rules (endpoint count, unique addresses, valid policy).
 fn compile_groups(
@@ -176,15 +226,8 @@ fn compile_groups(
                 name: group.name.clone(),
             });
         }
-        let ca = &group.policy.tls.ca;
-        if !ca.is_empty() && !tls.ca_bundles.contains(ca) {
-            return Err(CompileError::UnknownCaBundle {
-                subsystem: name.to_string(),
-                upstream: group.name.clone(),
-                name: ca.clone(),
-            });
-        }
-        let compiled = CompiledUpstream::build(group, registry).map_err(|fault| {
+        let client_tls = client_tls_for(name, group, tls)?;
+        let compiled = CompiledUpstream::build(group, registry, client_tls).map_err(|fault| {
             let (subsystem, upstream) = (name.to_string(), group.name.clone());
             match fault {
                 GroupFault::EndpointCount(count) => CompileError::EndpointCount {

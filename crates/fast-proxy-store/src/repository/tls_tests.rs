@@ -97,7 +97,10 @@ fn replacing_a_certificate_bumps_updated_at_and_keeps_the_id() {
     let mut renewed = certificate("shop");
     renewed.metadata.fingerprint = "cd".repeat(32);
     renewed.key_enc = b"another".to_vec();
-    commit(&mut db, "replaced", |conn| certificates::update(conn, id, &renewed)).unwrap();
+    commit(&mut db, "replaced", |conn| {
+        certificates::update(conn, id, &renewed)
+    })
+    .unwrap();
     let after = db.read(|conn| certificates::get(conn, id)).unwrap();
     assert_eq!(after.id, id);
     assert!(after.updated_at_ms > before.updated_at_ms);
@@ -114,8 +117,10 @@ fn updating_or_deleting_a_missing_certificate_is_not_found() {
     })
     .unwrap_err();
     assert!(matches!(err, StoreError::NotFound(_)));
-    let err = commit(&mut db, "x", |conn| certificates::delete(conn, CertificateId(9)))
-        .unwrap_err();
+    let err = commit(&mut db, "x", |conn| {
+        certificates::delete(conn, CertificateId(9))
+    })
+    .unwrap_err();
     assert!(matches!(err, StoreError::NotFound(_)));
 }
 
@@ -136,8 +141,10 @@ fn a_certificate_in_use_cannot_be_deleted_until_detached() {
     })
     .unwrap();
 
-    let err = commit(&mut db, "delete", |conn| certificates::delete(conn, certificate_id))
-        .unwrap_err();
+    let err = commit(&mut db, "delete", |conn| {
+        certificates::delete(conn, certificate_id)
+    })
+    .unwrap_err();
     assert!(
         matches!(&err, StoreError::Conflict(m) if m.contains("shop")),
         "{err}"
@@ -149,7 +156,10 @@ fn a_certificate_in_use_cannot_be_deleted_until_detached() {
         subsystems::update(conn, site.subsystem, &subsystem_fields("shop"))
     })
     .unwrap();
-    commit(&mut db, "delete", |conn| certificates::delete(conn, certificate_id)).unwrap();
+    commit(&mut db, "delete", |conn| {
+        certificates::delete(conn, certificate_id)
+    })
+    .unwrap();
     assert!(db.read(certificates::list).unwrap().is_empty());
 }
 
@@ -209,14 +219,18 @@ fn certificate_limits_are_enforced() {
 #[test]
 fn ca_bundles_round_trip_and_enforce_uniqueness_and_limits() {
     let mut db = Database::open_in_memory().unwrap();
-    let id = commit(&mut db, "bundle", |conn| ca_bundles::insert(conn, &bundle("internal")))
-        .unwrap()
-        .value;
+    let id = commit(&mut db, "bundle", |conn| {
+        ca_bundles::insert(conn, &bundle("internal"))
+    })
+    .unwrap()
+    .value;
     let row = db.read(|conn| ca_bundles::get(conn, id)).unwrap();
     assert_eq!(row.bundle.name.as_str(), "internal");
     assert_eq!(row.bundle.cert_count, 1);
-    let err = commit(&mut db, "dup", |conn| ca_bundles::insert(conn, &bundle("internal")))
-        .unwrap_err();
+    let err = commit(&mut db, "dup", |conn| {
+        ca_bundles::insert(conn, &bundle("internal"))
+    })
+    .unwrap_err();
     assert!(matches!(err, StoreError::Conflict(_)));
 
     commit(&mut db, "fill", |conn| {
@@ -226,17 +240,21 @@ fn ca_bundles_round_trip_and_enforce_uniqueness_and_limits() {
         Ok(())
     })
     .unwrap();
-    let err = commit(&mut db, "more", |conn| ca_bundles::insert(conn, &bundle("extra")))
-        .unwrap_err();
+    let err = commit(&mut db, "more", |conn| {
+        ca_bundles::insert(conn, &bundle("extra"))
+    })
+    .unwrap_err();
     assert!(matches!(&err, StoreError::Invalid(f) if f[0].message.contains("16")));
 }
 
 #[test]
 fn a_ca_bundle_named_by_a_group_cannot_be_deleted_or_renamed() {
     let mut db = Database::open_in_memory().unwrap();
-    let id = commit(&mut db, "bundle", |conn| ca_bundles::insert(conn, &bundle("internal")))
-        .unwrap()
-        .value;
+    let id = commit(&mut db, "bundle", |conn| {
+        ca_bundles::insert(conn, &bundle("internal"))
+    })
+    .unwrap()
+    .value;
     let site = seed(&mut db, "shop", "shop.example.com");
     let mut fields = upstream_fields("backend");
     fields.policy.tls = UpstreamTls {
@@ -258,20 +276,34 @@ fn a_ca_bundle_named_by_a_group_cannot_be_deleted_or_renamed() {
             }
         })
         .unwrap_err();
-        assert!(matches!(&err, StoreError::Conflict(m) if m.contains("internal")), "{err}");
+        assert!(
+            matches!(&err, StoreError::Conflict(m) if m.contains("internal")),
+            "{err}"
+        );
     }
 }
 
 #[test]
 fn an_unused_ca_bundle_can_be_replaced_and_deleted() {
     let mut db = Database::open_in_memory().unwrap();
-    let id = commit(&mut db, "bundle", |conn| ca_bundles::insert(conn, &bundle("internal")))
-        .unwrap()
-        .value;
+    let id = commit(&mut db, "bundle", |conn| {
+        ca_bundles::insert(conn, &bundle("internal"))
+    })
+    .unwrap()
+    .value;
     let mut replacement = bundle("internal");
     replacement.cert_count = 3;
-    commit(&mut db, "replace", |conn| ca_bundles::update(conn, id, &replacement)).unwrap();
-    assert_eq!(db.read(|conn| ca_bundles::get(conn, id)).unwrap().bundle.cert_count, 3);
+    commit(&mut db, "replace", |conn| {
+        ca_bundles::update(conn, id, &replacement)
+    })
+    .unwrap();
+    assert_eq!(
+        db.read(|conn| ca_bundles::get(conn, id))
+            .unwrap()
+            .bundle
+            .cert_count,
+        3
+    );
     commit(&mut db, "delete", |conn| ca_bundles::delete(conn, id)).unwrap();
     assert!(db.read(ca_bundles::list).unwrap().is_empty());
 }
@@ -315,7 +347,9 @@ fn https_and_tls_settings_are_stored_and_loaded() {
         upstreams::update(conn, site.subsystem, site.group, &fields)
     })
     .unwrap();
-    let loaded = db.read(|conn| subsystems::get(conn, site.subsystem)).unwrap();
+    let loaded = db
+        .read(|conn| subsystems::get(conn, site.subsystem))
+        .unwrap();
     assert_eq!(loaded.https, https_on(Some(certificate_id)));
     assert_eq!(loaded.upstream_groups[0].policy.tls, tls);
 }
@@ -357,5 +391,47 @@ fn a_corrupt_stored_redirect_is_reported_as_internal() {
         Ok(())
     })
     .unwrap();
-    assert!(matches!(db.load_all().unwrap_err(), StoreError::Internal(_)));
+    assert!(matches!(
+        db.load_all().unwrap_err(),
+        StoreError::Internal(_)
+    ));
+}
+
+#[test]
+fn a_group_may_only_name_an_uploaded_ca_bundle() {
+    let mut db = Database::open_in_memory().unwrap();
+    let site = seed(&mut db, "shop", "shop.example.com");
+    let mut fields = upstream_fields("backend");
+    fields.policy.tls.enabled = true;
+    fields.policy.tls.ca = "corp".into();
+    let err = commit(&mut db, "x", |conn| {
+        upstreams::update(conn, site.subsystem, site.group, &fields)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Invalid(f) if f[0].field == "tls.ca"),
+        "{err}"
+    );
+    let err = commit(&mut db, "x", |conn| {
+        upstreams::create(
+            conn,
+            site.subsystem,
+            &fields,
+            &[crate::test_support::endpoint_fields("127.0.0.1:3001")],
+        )
+    })
+    .unwrap_err();
+    assert!(
+        matches!(&err, StoreError::Invalid(f) if f[0].field == "tls.ca"),
+        "{err}"
+    );
+
+    commit(&mut db, "bundle", |conn| {
+        ca_bundles::insert(conn, &bundle("corp"))
+    })
+    .unwrap();
+    commit(&mut db, "x", |conn| {
+        upstreams::update(conn, site.subsystem, site.group, &fields)
+    })
+    .unwrap();
 }

@@ -47,3 +47,6 @@ fn touch(conn: &Connection, id: SubsystemId) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tls_tests;

@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::probe::{run_probe, ProbeSpec};
+use crate::probe::{run_probe, ProbeSpec, ProbeTls};
 
 /// Names an endpoint in metrics and events.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +35,8 @@ pub(crate) struct ProberSpec {
     pub name: EndpointName,
     pub addr: EndpointAddr,
     pub check: HealthCheck,
+    /// Set for an endpoint of a TLS group; the HTTP probe then handshakes.
+    pub tls: Option<ProbeTls>,
 }
 
 /// What every prober shares.
@@ -71,7 +73,7 @@ pub(crate) async fn run_prober(
             return;
         };
         let result = tokio::select! {
-            result = run_probe(&probe, &spec.addr) => result,
+            result = run_probe(&probe, &spec.addr, spec.tls.as_ref()) => result,
             () = cancel.cancelled() => return,
         };
         record(&spec, &runtime, &context, result);

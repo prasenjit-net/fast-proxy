@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
-use fast_proxy_routing::{compile_with_tls, Snapshot, SnapshotHolder, TlsInputs};
+use fast_proxy_routing::{compile_with_tls, Snapshot, SnapshotHolder};
 use fast_proxy_store::repository::{certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
 use fast_proxy_telemetry::{Metrics, ReloadOutcome, SyncResult};
@@ -89,7 +89,7 @@ impl ConfigService {
             version,
             &config,
             &RuntimeRegistry::new(),
-            &inert_inputs(&prepared),
+            &tls.inputs(&prepared, false),
         )?;
         let holder = Arc::new(SnapshotHolder::new());
         holder.swap(snapshot);
@@ -148,11 +148,7 @@ impl ConfigService {
             .store
             .run(|db| Ok((db.load_all()?, db.current_version()?)))
             .await?;
-        let inputs = TlsInputs {
-            enabled: true,
-            certificates: prepared.cache.clone(),
-            ca_bundles: prepared.ca_bundles.clone(),
-        };
+        let inputs = self.tls.inputs(&prepared, true);
         self.holder
             .swap(compile_with_tls(version, &config, &previous, &inputs)?);
         self.tls.install(prepared.cache);
@@ -212,11 +208,7 @@ impl ConfigService {
                 })
             })
             .await?;
-        let inputs = TlsInputs {
-            enabled: self.tls.settings.enabled,
-            certificates: prepared.cache.clone(),
-            ca_bundles: prepared.ca_bundles.clone(),
-        };
+        let inputs = self.tls.inputs(&prepared, self.tls.settings.enabled);
         let snapshot = compile_with_tls(version, &config, &previous, &inputs)?;
         self.metrics
             .retain_upstream_series(&live_endpoints(&snapshot));
@@ -354,16 +346,6 @@ type PersistOutcome<T> = (
     Prepared,
 );
 
-/// What compiling for a certificate-less moment looks like: TLS switched off
-/// so subsystem HTTPS settings stay inert.
-fn inert_inputs(prepared: &Prepared) -> TlsInputs {
-    TlsInputs {
-        enabled: false,
-        certificates: prepared.cache.clone(),
-        ca_bundles: prepared.ca_bundles.clone(),
-    }
-}
-
 fn publish_certificates(metrics: &Metrics, prepared: &Prepared) {
     metrics.cert_cache_rebuilt(
         prepared.stats.hits,
@@ -404,11 +386,7 @@ fn persist_and_compile<T>(
             let Some(ready) = borrowed.as_ref() else {
                 return Err("certificates were not prepared".to_string());
             };
-            let inputs = TlsInputs {
-                enabled: tls.settings.enabled,
-                certificates: ready.cache.clone(),
-                ca_bundles: ready.ca_bundles.clone(),
-            };
+            let inputs = tls.inputs(ready, tls.settings.enabled);
             match compile_with_tls(0, config, previous, &inputs) {
                 Ok(snapshot) => {
                     compiled = Some(snapshot);

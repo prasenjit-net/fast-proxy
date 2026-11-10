@@ -53,6 +53,12 @@ pub struct ClientConfigs {
     native_roots: OnceLock<Arc<RootCertStore>>,
 }
 
+impl std::fmt::Debug for ClientConfigs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfigs").finish_non_exhaustive()
+    }
+}
+
 impl ClientConfigs {
     pub fn new() -> Self {
         Self::default()
@@ -88,7 +94,7 @@ impl ClientConfigs {
         let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
             .with_safe_default_protocol_versions()
             .map_err(|_| ClientConfigError::Invalid)?;
-        let mut config = if trust.verify {
+        let config = if trust.verify {
             builder
                 .with_root_certificates(self.roots(trust.ca.as_ref())?)
                 .with_no_client_auth()
@@ -99,8 +105,8 @@ impl ClientConfigs {
                 .with_custom_certificate_verifier(Arc::new(NoVerification { provider }))
                 .with_no_client_auth()
         };
-        // Upstream connections are HTTP/1.1 (ADR 0009).
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        // No ALPN here: the connector that uses this configuration sets
+        // `http/1.1` itself (upstream connections are HTTP/1.1, ADR 0009).
         Ok(config)
     }
 
@@ -362,7 +368,7 @@ mod tests {
             ca: None,
         };
         assert!(!Arc::ptr_eq(&first, &configs.get(&unverified).unwrap()));
-        assert_eq!(first.alpn_protocols, [b"http/1.1".to_vec()]);
+        assert!(first.alpn_protocols.is_empty(), "the connector sets ALPN");
     }
 
     #[test]

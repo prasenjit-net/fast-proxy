@@ -2,7 +2,7 @@
 //! the certificate cache. Everything here is touched only under the writer
 //! lock or from the store thread inside a write transaction.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -11,7 +11,8 @@ use fast_proxy_store::repository::vault::{self as vault_rows, VaultCheck};
 use fast_proxy_store::repository::{ca_bundles, certificates, load};
 use fast_proxy_store::{Connection, StoreError};
 use fast_proxy_tls::{
-    load_master_key, CertCache, RebuildStats, Sealed, StoredCertificate, Vault, VaultError,
+    load_master_key, CaBundle, CertCache, ClientConfigs, RebuildStats, Sealed, StoredCertificate,
+    Vault, VaultError,
 };
 
 use crate::dev_certificates;
@@ -60,13 +61,14 @@ pub(crate) struct VaultHolder {
 pub(crate) struct Prepared {
     pub cache: CertCache,
     pub stats: RebuildStats,
-    pub ca_bundles: HashSet<String>,
+    pub ca_bundles: HashMap<String, CaBundle>,
 }
 
 pub(crate) struct TlsState {
     pub settings: TlsSettings,
     vault: Mutex<VaultHolder>,
     cache: Mutex<CertCache>,
+    client_configs: Arc<ClientConfigs>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -95,6 +97,7 @@ impl TlsState {
             settings,
             vault: Mutex::new(holder),
             cache: Mutex::new(CertCache::empty()),
+            client_configs: Arc::new(ClientConfigs::new()),
         })
     }
 
@@ -187,13 +190,36 @@ impl TlsState {
         let (cache, stats) = previous.rebuild(&rows, vault.as_deref());
         let ca_bundles = ca_bundles::list(conn)?
             .into_iter()
-            .map(|row| row.bundle.name.as_str().to_string())
+            .map(|row| {
+                let name = row.bundle.name.as_str().to_string();
+                let bundle = CaBundle {
+                    name: name.clone(),
+                    pem: row.bundle.pem,
+                    updated_at_ms: row.updated_at_ms,
+                };
+                (name, bundle)
+            })
             .collect();
         Ok(Prepared {
             cache,
             stats,
             ca_bundles,
         })
+    }
+
+    /// What the compile step needs from the prepared state, with TLS `enabled`
+    /// or inert. The client configurations are shared across compiles.
+    pub(crate) fn inputs(
+        &self,
+        prepared: &Prepared,
+        enabled: bool,
+    ) -> fast_proxy_routing::TlsInputs {
+        fast_proxy_routing::TlsInputs {
+            enabled,
+            certificates: prepared.cache.clone(),
+            ca_bundles: prepared.ca_bundles.clone(),
+            client_configs: self.client_configs.clone(),
+        }
     }
 
     /// Reads the would-be configuration inside the transaction.

@@ -1,7 +1,7 @@
 use fast_proxy_model::{SubsystemId, UpstreamGroupId, MAX_ENDPOINTS_PER_GROUP};
 use rusqlite::Connection;
 
-use super::{endpoints, ensure_subsystem, expect_changed, policy_columns, touch};
+use super::{ca_bundles, endpoints, ensure_subsystem, expect_changed, policy_columns, touch};
 use crate::inputs::{EndpointFields, UpstreamFields};
 use crate::StoreError;
 
@@ -16,6 +16,7 @@ pub fn create(
 ) -> Result<UpstreamGroupId, StoreError> {
     ensure_subsystem(conn, subsystem_id)?;
     check_endpoint_count(endpoint_fields.len())?;
+    ensure_ca_bundle_exists(conn, &fields.policy.tls.ca)?;
     let group_id = insert(conn, None, subsystem_id, fields)?;
     for (index, endpoint) in endpoint_fields.iter().enumerate() {
         endpoints::insert(
@@ -28,6 +29,18 @@ pub fn create(
     }
     touch(conn, subsystem_id)?;
     Ok(group_id)
+}
+
+/// A group may only name a CA bundle that exists (`tls.ca`); an empty name means
+/// the OS trust store. A rollback is checked separately, naming the bundle.
+fn ensure_ca_bundle_exists(conn: &Connection, name: &str) -> Result<(), StoreError> {
+    if name.is_empty() || ca_bundles::ids_by_name(conn)?.contains_key(name) {
+        return Ok(());
+    }
+    Err(StoreError::invalid_field(
+        "tls.ca",
+        "no CA bundle has this name; upload it first",
+    ))
 }
 
 fn check_endpoint_count(count: usize) -> Result<(), StoreError> {
@@ -74,6 +87,7 @@ pub fn update(
     fields: &UpstreamFields,
 ) -> Result<(), StoreError> {
     fields.policy.validate()?;
+    ensure_ca_bundle_exists(conn, &fields.policy.tls.ca)?;
     let bound = policy_columns::Bound::new(&fields.policy);
     let mut params = bound.named();
     params.push((":id", &group_id.0));

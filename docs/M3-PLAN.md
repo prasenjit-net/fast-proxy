@@ -585,6 +585,13 @@ from M2.
 
 ### Workstream CS: Config service
 
+_Landed in PR9: D6 (the upstream client over TLS), H1 (TLS health probes) and A7 (the
+group API's `tls` object). The compile step builds each TLS group's client
+configuration and the snapshot carries it, so a replaced CA bundle reaches new
+connections and probers with the same atomic swap. `ConfigService::replace_ca_bundle`
+exists for that; the API has no PUT for bundles yet (upload and delete only, as
+planned)._
+
 _Landed in PR8: D5 (the plain-HTTP redirect and HSTS; the redirect decision lives in
 `fast-proxy-routing` so the data plane and the admin resolver share it) and A8 (the
 resolver shows HTTPS service, the redirect and the upstream scheme; `GET /api/status`
@@ -688,7 +695,7 @@ loopback checks come with PR5._
   byte, a non-default port, an unknown host (404, never a redirect), HTTPS
   disabled (no redirect), TLS off (no redirect even if configured), HSTS present
   on HTTPS and absent on HTTP, and `includeSubDomains`.
-- [ ] **D6 (L) Upstream TLS.** `UpstreamClient` keeps pools per `(connect timeout,
+- [x] **D6 (L) Upstream TLS.** `UpstreamClient` keeps pools per `(connect timeout,
   TLS settings)`; a `hyper-rustls` connector with the cached `ClientConfig`;
   passive health, retries and body replay keep working unchanged over TLS.
   *Done when:* end-to-end tests cover a TLS upstream with a trusted CA, an
@@ -706,7 +713,7 @@ loopback checks come with PR5._
 
 ### Workstream H: Health
 
-- [ ] **H1 (S) TLS probes.** HTTP probes to a TLS group handshake with the group's
+- [x] **H1 (S) TLS probes.** HTTP probes to a TLS group handshake with the group's
   settings (verify, name, CA); the TCP probe stays plain.
   *Done when:* tests mark a TLS endpoint healthy, and unhealthy for an untrusted
   certificate and for a plain-HTTP port.
@@ -739,7 +746,7 @@ capture test). A7 and A8 follow with upstream TLS and the redirect work._
   `effective` and `certificate`), validated with nested field names
   (`https.hsts.maxAgeSecs`); redirect and HSTS without `enabled` are a 400;
   enabling generates a dev certificate when none is attached.
-- [ ] **A7 (M) Upstream TLS settings** in the group API (`tls` object); an unknown
+- [x] **A7 (M) Upstream TLS settings** in the group API (`tls` object); an unknown
   CA name is a 400 naming `tls.ca`.
 - [x] **A8 (S) Resolver, status and events.** The resolver shows the scheme the
   proxy will use to the upstream, whether a request on plain HTTP would be

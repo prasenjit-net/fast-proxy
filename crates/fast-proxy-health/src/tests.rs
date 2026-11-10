@@ -70,6 +70,7 @@ async fn a_prober_flips_health_only_after_exactly_fall_failures_and_rise_success
         },
         addr: fast_proxy_model::EndpointAddr::parse(&backend.addr.to_string()).unwrap(),
         check,
+        tls: None,
     };
     tokio::spawn(run_prober(
         spec,

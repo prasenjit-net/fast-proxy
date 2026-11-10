@@ -93,6 +93,7 @@ mod tests {
                         }],
                     },
                     &RuntimeRegistry::new().rebuilt_for([(EndpointId(1), &endpoint())]),
+                    None,
                 )
                 .unwrap(),
             ),

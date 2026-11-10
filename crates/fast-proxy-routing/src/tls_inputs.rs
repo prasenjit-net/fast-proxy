@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use fast_proxy_tls::CertCache;
+use fast_proxy_tls::{CaBundle, CertCache, ClientConfigs};
 
 /// What the compile step needs besides the configuration to carry TLS into the
 /// snapshot: the process switch, the parsed certificates, and the names of the
@@ -12,8 +13,11 @@ pub struct TlsInputs {
     /// settings stay stored but inert and are not checked against certificates.
     pub enabled: bool,
     pub certificates: CertCache,
-    /// Names of the stored CA bundles that upstream groups may reference.
-    pub ca_bundles: HashSet<String>,
+    /// The stored CA bundles by name; upstream groups may reference them.
+    pub ca_bundles: HashMap<String, CaBundle>,
+    /// Client TLS configurations, shared across compiles so an unchanged
+    /// bundle reuses its configuration and a replaced one builds a new one.
+    pub client_configs: Arc<ClientConfigs>,
 }
 
 impl TlsInputs {
