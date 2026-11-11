@@ -27,9 +27,19 @@ impl Drop for Running {
 }
 
 pub fn start(dir: &Path, env: &[(&str, &str)], extra_args: &[&str]) -> Result<Running, String> {
+    start_with_config(dir, "", env, extra_args)
+}
+
+/// Like [`start`], adding `extra_config` lines to the `[data_plane]` section.
+pub fn start_with_config(
+    dir: &Path,
+    extra_config: &str,
+    env: &[(&str, &str)],
+    extra_args: &[&str],
+) -> Result<Running, String> {
     let data_port = free_port();
     let admin_port = free_port();
-    let config = write_config(dir, data_port, admin_port, "");
+    let config = write_config(dir, data_port, admin_port, extra_config);
     let mut command = Command::new(env!("CARGO_BIN_EXE_fast-proxy"));
     command
         .arg("--config")
@@ -77,8 +87,18 @@ pub fn start_ok(dir: &Path, env: &[(&str, &str)]) -> Running {
 /// Like [`start_ok`], passing command-line flags too. A "free" port can be
 /// taken before the proxy binds it, so a failed start is retried on new ports.
 pub fn start_ok_with_args(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Running {
+    start_ok_with_config(dir, "", env, args)
+}
+
+/// Like [`start_ok_with_args`], adding `extra_config` lines to `[data_plane]`.
+pub fn start_ok_with_config(
+    dir: &Path,
+    extra_config: &str,
+    env: &[(&str, &str)],
+    args: &[&str],
+) -> Running {
     for _ in 0..5 {
-        if let Ok(running) = start(dir, env, args) {
+        if let Ok(running) = start_with_config(dir, extra_config, env, args) {
             return running;
         }
     }

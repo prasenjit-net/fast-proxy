@@ -154,14 +154,18 @@ and the decision records in [docs/adr/](docs/adr/).
 | Active and passive health checking, safe retries, drain and disable | Done | M2 |
 | TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
 | ACME automatic certificates | Planned | M4 |
-| Admin authentication, admin TLS, maintenance mode | Done so far | M5 (audit API, CLI and UI pages follow) |
+| Admin authentication, admin TLS, maintenance mode, audit log, CLI | Done so far | M5 (the UI pages follow) |
 | Request sampling of unusual requests | Planned | M6 |
 | Rate and connection limits, hardening, 1.0 | Planned | M7 |
 
 ## CLI
 
+With no subcommand `fast-proxy` runs the server. The flags below override the
+config file and go **before** a subcommand; `--config` and `--database` also work
+after one.
+
 ```
-fast-proxy [OPTIONS]
+fast-proxy [OPTIONS] [COMMAND]
 
   -c, --config <CONFIG>             Path to the TOML configuration file [default: config.toml]
       --admin-listen <ADDR>         Override [admin].listen
@@ -175,6 +179,39 @@ fast-proxy [OPTIONS]
       --tls / --no-tls              Turn TLS on or off, overriding [data_plane.tls].enabled
       --https-listen <ADDR>         Override [data_plane.tls].listen (the HTTPS address)
 ```
+
+### Subcommands
+
+Operations on a **running proxy** talk to its admin API. They find it from the
+`[admin]` section of the config file (or `--url`), and take a token from
+`--token`, `--token-file` (refused on Unix unless only you can read it), or
+`FAST_PROXY_TOKEN`, in that order of precedence. For an admin plane served over
+TLS, `--ca-file <pem>` trusts the CA that issued its certificate and
+`--insecure` accepts a self-signed one. Add `--json` for the proxy's own answer.
+
+```sh
+export FAST_PROXY_TOKEN=fp_1...                      # the token printed on first start
+
+fast-proxy maintenance on --ttl 30m --message "Upgrading the database" \
+    --bypass-cidr 10.0.0.0/8                         # the whole proxy
+fast-proxy maintenance on --subsystem shop --route /api --ttl 5m
+fast-proxy maintenance status                        # what is on, with countdowns
+fast-proxy maintenance off --subsystem shop
+fast-proxy reload                                    # re-read the database now
+fast-proxy status                                    # version, listeners, admin protection
+fast-proxy audit --limit 20 --actor ci               # the audit tail, oldest first
+```
+
+| Command | Works on | Does |
+|---|---|---|
+| `maintenance on\|off\|status` | a running proxy | `--subsystem <name\|id>`, `--route <prefix>` choose the scope (default: the whole proxy); `on` takes `--ttl`, `--message`, `--retry-after`, `--bypass-cidr` (repeatable), `--bypass-header` and `--bypass-secret` |
+| `reload`, `status`, `audit` | a running proxy | as above |
+| `config validate [--check-database [PATH]]` | files only | parses and checks the config file with the command-line overrides applied, **creating nothing**; with `--check-database` it also opens the database **read-only** and compiles the stored configuration (certificates stay sealed, so HTTPS settings are not checked against them, and the output says so) |
+| `token create\|list\|revoke` | the database file | the way back in when every token is lost: it works directly on the file (also while the proxy runs, which picks the change up at its next sync), prints a new token **once**, never lists a secret, writes an audit entry as `cli`, and keeps the last admin token from being revoked |
+
+Exit codes: **0** success, **1** the proxy refused the request or the check
+failed (the message carries the proxy's own reason and names each bad field),
+**2** usage or connection errors (an unreachable proxy, a bad flag, a missing file).
 
 ## Configuration (`config.toml`)
 

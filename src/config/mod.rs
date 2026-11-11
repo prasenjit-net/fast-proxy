@@ -49,6 +49,11 @@ impl AppConfig {
         })
     }
 
+    /// Checks the final, override-applied configuration without touching the disk.
+    pub fn check(&self) -> Result<(), ConfigError> {
+        validate::check(self)
+    }
+
     /// Checks the final, override-applied configuration and prepares the state directory.
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate::validate(self)

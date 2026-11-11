@@ -439,7 +439,41 @@ request id (also the `X-Request-Id` response header), a stable action such as
 `subsystem.update` or `access.denied`, the target, the outcome and the revision it
 created. Keys, certificates and secrets never appear in it.
 
+## 19. The command line
+
+Everything in sections 17 and 18 has a shell form, so a deploy script does not
+need `curl`:
+
+```sh
+export FAST_PROXY_TOKEN=$TOKEN
+fast-proxy maintenance on --subsystem shop --ttl 10m --message "Deploying v2" \
+    --bypass-cidr 127.0.0.0/8
+fast-proxy maintenance status
+fast-proxy audit --limit 5
+fast-proxy maintenance off --subsystem shop
+fast-proxy reload
+```
+
+It exits 0 on success, 1 when the proxy refuses (with the proxy's reason) and 2 on
+a usage or connection problem, so `set -e` does the right thing.
+
+If every token is lost, create a new admin one straight from the database file
+(it works while the proxy runs and shows the token once):
+
+```sh
+fast-proxy token create --name rescue --role admin
+fast-proxy token list
+```
+
+And before you restart with a changed config file, check it without starting
+anything:
+
+```sh
+fast-proxy config validate                      # the file, with any flags you would start with
+fast-proxy config validate --check-database     # also compile what the database stores, read-only
+```
+
 ## Not available yet
 
 ACME certificates, rate limits and request sampling are later milestones (see
-[ROADMAP.md](ROADMAP.md)); the command line follows in M5.
+[ROADMAP.md](ROADMAP.md)).

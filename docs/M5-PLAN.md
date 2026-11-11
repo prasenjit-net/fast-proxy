@@ -624,29 +624,39 @@ carry-over.
 
 ### Workstream CL: The CLI
 
-- [ ] **CL1 (M) Subcommand structure and the admin client.** Restructure the clap
+- [x] **CL1 (M) Subcommand structure and the admin client.** Restructure the clap
   definition so no subcommand still runs the server; a small client over hyper and
   hyper-rustls with `--url`, token sources (flag, environment, file), `--ca-file` and
   `--insecure`; JSON and plain output; exit codes of H15.
   *Done when:* tests cover the no-subcommand behaviour, token source precedence, an
   unreachable proxy (exit 2), a refused request (exit 1) and TLS to the admin plane with
   a CA file.
-- [ ] **CL2 (M) `maintenance`, `reload`, `status`, `audit`.** The operations against a
+- [x] **CL2 (M) `maintenance`, `reload`, `status`, `audit`.** The operations against a
   running proxy with the scope, TTL, message, retry-after and bypass flags.
   *Done when:* end-to-end tests drive the real binary: maintenance on with a TTL answers
   503 for the host, status shows the countdown, off restores service, `reload` returns
   the version, `audit` shows the change with the actor.
-- [ ] **CL3 (M) `config validate`.** Parse and validate the configuration file without
+- [x] **CL3 (M) `config validate`.** Parse and validate the configuration file without
   starting or creating anything, and with `--database` open the file read-only and
   compile the stored configuration (certificates are not decrypted, so TLS inputs are
   inert there, which the output says); every error names the key.
   *Done when:* tests cover a valid file, each validation error with its exit code, a
   database that does not compile, and that no file or directory is created.
-- [ ] **CL4 (M) `token create|list|revoke`, offline.** Direct on the database file,
+- [x] **CL4 (M) `token create|list|revoke`, offline.** Direct on the database file,
   usable while the proxy runs; `create` prints the secret once; the last-admin
   protection applies; each writes an audit entry with the actor `cli`.
   *Done when:* tests cover recovery (all tokens revoked in the file, a new admin token
   created, the running proxy accepting it within the interval) and the protection.
+
+**PR7b notes (the CLI):**
+- `config validate --check-database [PATH]` (not `--database`, which is the server override). The
+  check is read-only; certificates are not decrypted, which the output says.
+- The server override flags go before a subcommand; `--config` and `--database` are global.
+- Token precedence is flag, then `--token-file` (refused on Unix unless mode 600), then
+  `FAST_PROXY_TOKEN`. `token` refuses a database that does not exist, writes an audit entry as `cli`
+  and a revision, and keeps the last-admin protection.
+- Q9 (Windows): the token-file permission check is Unix-only by design; the offline commands and the
+  TLS client use no Unix tools.
 
 ### Workstream U: Admin UI
 

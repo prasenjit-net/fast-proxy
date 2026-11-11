@@ -1,6 +1,7 @@
 //! The `fast-proxy` binary: CLI parsing, configuration, logging, and server startup.
 
 mod cli;
+mod commands;
 mod config;
 mod startup;
 
@@ -15,6 +16,9 @@ use crate::config::AppConfig;
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(command) = &cli.command {
+        return commands::run(&cli, command).await;
+    }
 
     let mut config = match AppConfig::load(&cli.config) {
         Ok(config) => config,

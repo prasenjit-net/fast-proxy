@@ -23,9 +23,13 @@ http-body-util = "0.1"
 
 [dependencies]
 fast-proxy-admin = { path = "crates/fast-proxy-admin" }
+fast-proxy-auth = { path = "crates/fast-proxy-auth" }
+fast-proxy-balancing = { path = "crates/fast-proxy-balancing" }
 fast-proxy-config-service = { path = "crates/fast-proxy-config-service" }
 fast-proxy-dataplane = { path = "crates/fast-proxy-dataplane" }
 fast-proxy-health = { path = "crates/fast-proxy-health" }
+fast-proxy-model = { path = "crates/fast-proxy-model" }
+fast-proxy-routing = { path = "crates/fast-proxy-routing" }
 fast-proxy-store = { path = "crates/fast-proxy-store" }
 fast-proxy-tls = { path = "crates/fast-proxy-tls" }
 fast-proxy-telemetry = { path = "crates/fast-proxy-telemetry" }
@@ -40,12 +44,14 @@ humantime = "2"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-util = "0.7"
-
-[dev-dependencies]
-fast-proxy-model = { path = "crates/fast-proxy-model" }
-fast-proxy-test-pki = { path = "crates/fast-proxy-test-pki" }
 bytes = "1"
 http-body-util = { workspace = true }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12"] }
+
+[dev-dependencies]
+fast-proxy-test-pki = { path = "crates/fast-proxy-test-pki" }
 hyper = { version = "1", features = ["client", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

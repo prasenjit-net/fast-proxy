@@ -7,6 +7,19 @@ use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
+    check(config)?;
+    let state_dir = &config.data_plane.state_dir;
+    std::fs::create_dir_all(state_dir).map_err(|err| {
+        ConfigError::Invalid(format!(
+            "state_dir {} cannot be created: {err}",
+            state_dir.display()
+        ))
+    })
+}
+
+/// Checks cross-field rules and touches nothing on disk (so `config validate`
+/// can run against a machine where the proxy has never started).
+pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
     let listeners = &config.data_plane.listener;
     if listeners.is_empty() {
         return invalid("at least one [[data_plane.listener]] is required");
@@ -40,15 +53,7 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
     }
 
     validate_admin(config)?;
-    validate_tls(config)?;
-
-    let state_dir = &config.data_plane.state_dir;
-    std::fs::create_dir_all(state_dir).map_err(|err| {
-        ConfigError::Invalid(format!(
-            "state_dir {} cannot be created: {err}",
-            state_dir.display()
-        ))
-    })
+    validate_tls(config)
 }
 
 /// Checks `[admin]`: the admin plane may leave loopback only with authentication

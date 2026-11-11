@@ -45,6 +45,30 @@ impl Database {
         Self::prepare(Connection::open(path)?)
     }
 
+    /// Opens an existing database for reading only: nothing is created, no
+    /// pragma that writes is set, and an empty file or one of another schema
+    /// version is refused. For tools that inspect the stored configuration
+    /// without touching it.
+    pub fn open_read_only(path: &Path) -> Result<Self, StoreError> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        let found: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match found {
+            SCHEMA_VERSION => Ok(Self { conn }),
+            0 => Err(StoreError::NotFound(
+                "a fast-proxy database (the file is empty)".into(),
+            )),
+            other => Err(StoreError::IncompatibleSchema {
+                found: other,
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    }
+
     /// An in-memory database, for tests.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         Self::prepare(Connection::open_in_memory()?)
@@ -171,6 +195,72 @@ mod tests {
             .unwrap();
         assert_eq!(mode, "wal");
         assert_eq!(keys, 1);
+    }
+
+    #[test]
+    fn a_read_only_open_reads_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        {
+            let mut db = Database::open(&path).unwrap();
+            seed(&mut db, "shop", "s.example.com");
+        }
+        let db = Database::open_read_only(&path).unwrap();
+        assert_eq!(db.load_all().unwrap().subsystems.len(), 1);
+        assert_eq!(db.current_version().unwrap(), 1);
+        drop(db);
+        // SQLite may leave its own -wal and -shm sidecars after reading a WAL
+        // database; nothing else appears.
+        let mut files: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.ends_with("-wal") && !name.ends_with("-shm"))
+            .collect();
+        files.sort();
+        assert_eq!(files, ["x.db"]);
+    }
+
+    #[test]
+    fn a_read_only_open_cannot_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        drop(Database::open(&path).unwrap());
+        let db = Database::open_read_only(&path).unwrap();
+        let err = db
+            .read(|conn| {
+                conn.execute(
+                    "INSERT INTO vault (id, check_nonce, check_blob) VALUES (1, x'00', x'00')",
+                    [],
+                )
+                .map_err(StoreError::from)
+            })
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Internal(_)), "{err}");
+    }
+
+    #[test]
+    fn a_read_only_open_refuses_an_empty_file_a_missing_one_and_another_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty.db");
+        Connection::open(&empty).unwrap();
+        assert!(matches!(
+            Database::open_read_only(&empty).err().unwrap(),
+            StoreError::NotFound(_)
+        ));
+        assert!(Database::open_read_only(&dir.path().join("missing.db")).is_err());
+        assert!(
+            !dir.path().join("missing.db").exists(),
+            "nothing was created"
+        );
+        let old = dir.path().join("old.db");
+        Connection::open(&old)
+            .unwrap()
+            .pragma_update(None, "user_version", 2)
+            .unwrap();
+        assert!(matches!(
+            Database::open_read_only(&old).err().unwrap(),
+            StoreError::IncompatibleSchema { found: 2, .. }
+        ));
     }
 
     #[test]
