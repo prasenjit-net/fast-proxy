@@ -5,6 +5,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -63,6 +64,15 @@ let nextId = 1;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const timers = useRef(new Map<number, number>());
+
+  // A toast's timer must not outlive the provider: it would update state that is gone.
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      pending.forEach((timer) => clearTimeout(timer));
+      pending.clear();
+    };
+  }, []);
 
   const dismiss = useCallback((id: number) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
