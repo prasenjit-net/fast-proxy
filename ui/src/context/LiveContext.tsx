@@ -123,8 +123,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (disposed) return;
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      socket = new WebSocket(`${proto}://${location.host}/ws?ticket=${encodeURIComponent(ticket)}`);
+      // The socket's address is the page's own origin with the ws(s) scheme; the
+      // ticket is added as a query parameter, which encodes it.
+      const url = new URL("/ws", location.href);
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      url.searchParams.set("ticket", ticket);
+      socket = new WebSocket(url);
 
       socket.onopen = () => {
         attempts = 0;

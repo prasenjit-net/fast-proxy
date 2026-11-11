@@ -419,10 +419,17 @@ fn endpoint_changes_under_load_drop_no_requests_and_a_closed_endpoint_gets_nothi
         {
             checked += 1;
             let body = &sample.outcome.as_ref().unwrap().1;
+            // The rule is strict; the numbers say how the request lay against the window, so
+            // a failure on a loaded machine can be told from a real race.
             assert_ne!(
-                body, span.backend,
-                "a request that began after {} was taken out still reached it",
-                span.backend
+                body,
+                span.backend,
+                "a request that began after {} was taken out still reached it: it began {:?} \
+                 into a {:?} window and took {:?}",
+                span.backend,
+                sample.started.duration_since(span.from),
+                span.until.duration_since(span.from),
+                sample.finished.duration_since(sample.started)
             );
         }
     }

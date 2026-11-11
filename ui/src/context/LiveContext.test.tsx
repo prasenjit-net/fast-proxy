@@ -19,7 +19,9 @@ class FakeSocket {
   onopen: (() => void) | null = null;
   onmessage: ((message: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
-  constructor(public url: string) {
+  readonly url: string;
+  constructor(url: string | URL) {
+    this.url = String(url);
     FakeSocket.last = this;
   }
   close() {}
@@ -199,7 +201,7 @@ describe("LiveProvider", () => {
   it("opens the socket with a single-use ticket, never the token", async () => {
     await renderLive();
     expect(ticketCalls).toBe(1);
-    expect(FakeSocket.last.url).toMatch(/\/ws\?ticket=ticket-1$/);
+    expect(FakeSocket.last.url).toMatch(/^ws:\/\/[^/]+\/ws\?ticket=ticket-1$/);
     const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
     expect(calls[0][0]).toBe("/api/ws-ticket");
     expect(calls[0][1].method).toBe("POST");
@@ -245,5 +247,25 @@ describe("LiveProvider", () => {
       }),
     );
     expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it("encodes a ticket that holds characters a URL cannot carry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ ticket: "a b&c=d/e?f#g", expiresInSecs: 30 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      ),
+    );
+    await renderLive();
+    const url = new URL(FakeSocket.last.url);
+    expect(url.pathname).toBe("/ws");
+    expect([...url.searchParams.keys()]).toEqual(["ticket"]);
+    expect(url.searchParams.get("ticket")).toBe("a b&c=d/e?f#g");
+    expect(url.hash).toBe("");
   });
 });
