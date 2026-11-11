@@ -7,6 +7,8 @@ const TITLES: Record<string, string> = {
   "/revisions": "Revisions",
   "/resolver": "Resolver",
   "/settings": "Settings",
+  "/tokens": "Tokens",
+  "/audit": "Audit log",
 };
 
 /** The page title for a path; a subsystem's detail page is just "Subsystem". */

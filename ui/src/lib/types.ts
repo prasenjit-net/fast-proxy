@@ -323,7 +323,18 @@ export interface StatusTls {
   soonestExpiry: SoonestExpiry | null;
 }
 
+/** How the admin plane is protected, from `/api/status`. */
+export interface AdminStatus {
+  auth: "required" | "off";
+  protectedChannel: boolean;
+  /** The stored certificate the admin plane serves over TLS; null on plain HTTP. */
+  tlsCertificate: string | null;
+  activeTokens: number;
+  activeMaintenance: number;
+}
+
 export interface Status {
+  admin: AdminStatus;
   tls: StatusTls;
   listeners: { name: string; addr: string }[];
   database: string;
@@ -424,4 +435,73 @@ export interface TlsStatus {
   http2: boolean;
   minVersion: string;
   vault: VaultState;
+}
+
+// ---- Sign-in, tokens and the audit log -------------------------------------
+
+export type Role = "admin" | "viewer";
+
+/** Who the server says the caller is (`GET /api/whoami`). */
+export interface WhoAmI {
+  name: string;
+  role: Role;
+  tokenExpiresAtMs: number | null;
+  /** Whether private keys may be sent over this channel. */
+  protectedChannel: boolean;
+  auth: "required" | "off";
+}
+
+/** A token as listed: never its secret. */
+export interface Token {
+  id: number;
+  name: string;
+  role: Role;
+  createdAtMs: number;
+  createdBy: string;
+  expiresAtMs: number | null;
+  revokedAtMs: number | null;
+  lastUsedAtMs: number | null;
+}
+
+/** The response to creating a token: the only time its secret is shown. */
+export interface CreatedToken extends Token {
+  secret: string;
+}
+
+export interface TokenInput {
+  name: string;
+  role: Role;
+  expiresInDays?: number;
+}
+
+export type AuditOutcome = "ok" | "denied" | "failed";
+
+export interface AuditEntry {
+  id: number;
+  atMs: number;
+  instance: string;
+  actor: string;
+  role: string;
+  source: string;
+  requestId: string;
+  action: string;
+  target: string;
+  outcome: AuditOutcome;
+  /** Structured detail; text when it was not JSON. */
+  detail: unknown;
+  revision: number | null;
+}
+
+export interface AuditPage {
+  data: AuditEntry[];
+  /** Pass as `before` for the next, older page; null on the last page. */
+  nextBefore: number | null;
+  version: number;
+}
+
+export interface AuditFilters {
+  actor?: string;
+  action?: string;
+  outcome?: AuditOutcome;
+  sinceMs?: number;
 }

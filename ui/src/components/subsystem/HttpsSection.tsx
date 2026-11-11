@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useCanWrite } from "../../context/SessionContext";
 import { useToast } from "../../context/ToastContext";
 import { api } from "../../lib/api";
 import { useRefreshConfigData } from "../../lib/refreshConfigData";
@@ -46,6 +47,7 @@ function inputOf(https: HttpsSettings): HttpsInput {
 export default function HttpsSection({ subsystem }: Readonly<{ subsystem: SubsystemDetail }>) {
   const refresh = useRefreshConfigData();
   const { push, notifyError } = useToast();
+  const canWrite = useCanWrite();
   const [dialog, setDialog] = useState<Dialog>(null);
   const [chosen, setChosen] = useState("");
   const https = subsystem.https;
@@ -123,6 +125,7 @@ export default function HttpsSection({ subsystem }: Readonly<{ subsystem: Subsys
           <span className="font-mono">[data_plane.tls]</span>).
         </p>
       ) : null}
+      {canWrite ? (
       <div className="flex flex-col gap-4">
         <Toggle checked={https.enabled} onChange={(next) => void toggle(next)} label="Serve over HTTPS" />
         {https.enabled && https.certificate ? (
@@ -164,6 +167,22 @@ export default function HttpsSection({ subsystem }: Readonly<{ subsystem: Subsys
           />
         ) : null}
       </div>
+      ) : (
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-[0.88rem]">
+          <dt className="text-ink-muted">Serve over HTTPS</dt>
+          <dd>{https.enabled ? "yes" : "no"}</dd>
+          {https.enabled ? (
+            <>
+              <dt className="text-ink-muted">Certificate</dt>
+              <dd>{https.certificate?.name ?? "none attached"}</dd>
+              <dt className="text-ink-muted">Redirect from HTTP</dt>
+              <dd>{https.redirect === "off" ? "off" : https.redirect}</dd>
+              <dt className="text-ink-muted">HSTS</dt>
+              <dd>{https.hsts.enabled ? `${https.hsts.maxAgeSecs}s` : "off"}</dd>
+            </>
+          ) : null}
+        </dl>
+      )}
 
       {dialog === "upload" ? (
         <Modal title="Upload a certificate" wide onClose={() => setDialog(null)}>

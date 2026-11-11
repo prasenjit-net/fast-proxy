@@ -11,29 +11,9 @@
          script below treats the same as "auto". -->
     <meta name="default-theme" content="__DEFAULT_THEME__" />
     <title>Fast Proxy</title>
-    <script>
-      // Apply the real default theme before first paint, so there's no
-      // flash of the wrong mode while the SPA boots and fetches
-      // /api/config. The React ThemeProvider takes over after hydration.
-      (function () {
-        var mode = null;
-        try {
-          mode = localStorage.getItem("rt-theme");
-        } catch (e) {
-          /* storage unavailable */
-        }
-        if (!mode) {
-          var meta = document.querySelector('meta[name="default-theme"]');
-          var configured = meta && meta.content;
-          mode = configured === "light" || configured === "dark" ? configured : "auto";
-        }
-        var dark =
-          mode === "dark" ||
-          (mode !== "light" &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches);
-        document.documentElement.dataset.theme = dark ? "dark" : "light";
-      })();
-    </script>
+    <!-- An external file, not an inline script: the admin plane's Content-Security-Policy
+         forbids inline script. Classic and blocking on purpose, so it runs before first paint. -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

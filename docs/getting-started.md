@@ -8,7 +8,12 @@ exit criteria and uses `curl` so every step is explicit.
 This walkthrough also covers TLS (section 16).
 
 **Prefer clicking?** Everything below can also be done in the admin UI at
-http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`):
+http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`). It asks for an
+admin token first: paste the one printed on the first start (or start with
+`--admin-auth off`, loopback only, to skip it). The token stays in that tab only, and
+**Sign out** in the top bar forgets it. Tokens, the audit log and (when you serve the
+admin plane over TLS) its certificate each have a page; a `viewer` token sees every page
+read-only:
 
 - **Subsystems**: create a subsystem, then on its page add hosts, upstreams (each
   with its endpoints, load-balancing and health settings) and routes. Forms check your input and show the server's messages next to the

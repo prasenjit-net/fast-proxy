@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useCanWrite } from "../../context/SessionContext";
 import { useToast } from "../../context/ToastContext";
 import { IconEdit, IconPlus, IconTrash } from "../../icons";
 import { api } from "../../lib/api";
@@ -9,6 +10,7 @@ import ConfirmDialog from "../ConfirmDialog";
 import RouteForm from "../forms/RouteForm";
 import Modal from "../Modal";
 import Toggle from "../Toggle";
+import WriteOnly from "../WriteOnly";
 
 type Editing = { kind: "new" } | { kind: "edit"; route: Route };
 
@@ -30,6 +32,7 @@ function rewriteSummary(route: Route): string {
 export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetail }) {
   const refresh = useRefreshConfigData();
   const { push, notifyError } = useToast();
+  const canWrite = useCanWrite();
   const [editing, setEditing] = useState<Editing | null>(null);
   const [deleting, setDeleting] = useState<Route | null>(null);
   const [busy, setBusy] = useState(false);
@@ -78,9 +81,11 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
       <div className="card-head">
         <h2>Routes</h2>
         <span className="card-hint">longest matching prefix wins</span>
-        <button className="btn btn-secondary btn-sm ml-auto" onClick={() => setEditing({ kind: "new" })}>
-          <IconPlus size={14} /> Add route
-        </button>
+        <WriteOnly>
+          <button className="btn btn-secondary btn-sm ml-auto" onClick={() => setEditing({ kind: "new" })}>
+            <IconPlus size={14} /> Add route
+          </button>
+        </WriteOnly>
       </div>
       {subsystem.routes.length === 0 ? (
         <p className="text-[0.88rem] text-ink-muted">
@@ -110,27 +115,33 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                     {formatDurationMs(route.connectTimeoutMs)} / {formatDurationMs(route.responseTimeoutMs)}
                   </td>
                   <td className="py-2 pr-4">
-                    <Toggle
-                      checked={route.enabled}
-                      onChange={(enabled) => void toggle(route, enabled)}
-                      label={route.enabled ? "On" : "Off"}
-                    />
+                    {canWrite ? (
+                      <Toggle
+                        checked={route.enabled}
+                        onChange={(enabled) => void toggle(route, enabled)}
+                        label={route.enabled ? "On" : "Off"}
+                      />
+                    ) : (
+                      <span>{route.enabled ? "On" : "Off"}</span>
+                    )}
                   </td>
                   <td className="py-2 text-right whitespace-nowrap">
-                    <button
-                      className="icon-btn"
-                      onClick={() => setEditing({ kind: "edit", route })}
-                      aria-label={`Edit route ${route.prefix}`}
-                    >
-                      <IconEdit size={16} />
-                    </button>
-                    <button
-                      className="icon-btn danger"
-                      onClick={() => setDeleting(route)}
-                      aria-label={`Delete route ${route.prefix}`}
-                    >
-                      <IconTrash size={16} />
-                    </button>
+                    <WriteOnly>
+                      <button
+                        className="icon-btn"
+                        onClick={() => setEditing({ kind: "edit", route })}
+                        aria-label={`Edit route ${route.prefix}`}
+                      >
+                        <IconEdit size={16} />
+                      </button>
+                      <button
+                        className="icon-btn danger"
+                        onClick={() => setDeleting(route)}
+                        aria-label={`Delete route ${route.prefix}`}
+                      >
+                        <IconTrash size={16} />
+                      </button>
+                    </WriteOnly>
                   </td>
                 </tr>
               ))}

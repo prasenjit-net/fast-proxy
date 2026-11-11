@@ -28,18 +28,23 @@ export class ApiError extends Error {
   }
 }
 
+import { getToken, reportUnauthorized } from "./session";
+
 interface ErrorBody {
   error?: { code?: string; message?: string; fields?: FieldError[] };
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const explicit = init?.headers as Record<string, string> | undefined;
+  const token = getToken();
   let res: Response;
   try {
     res = await fetch(path, {
       ...init,
       headers: {
         "Content-Type": "application/json",
-        ...(init?.headers as Record<string, string> | undefined),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...explicit,
       },
     });
   } catch {
@@ -47,6 +52,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    // A 401 the sign-in form did not ask for (it sets its own header) means the
+    // token was revoked or expired: sign the user out.
+    if (res.status === 401 && !explicit?.Authorization) reportUnauthorized();
     // Prefer the backend's { error: { code, message, fields? } } envelope.
     let code = `HTTP_${res.status}`;
     let message = res.statusText || "Request failed";

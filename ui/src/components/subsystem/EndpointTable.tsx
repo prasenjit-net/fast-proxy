@@ -9,6 +9,7 @@ import ConfirmDialog from "../ConfirmDialog";
 import EndpointForm from "../forms/EndpointForm";
 import EndpointStateBadge from "../EndpointStateBadge";
 import Modal from "../Modal";
+import WriteOnly from "../WriteOnly";
 
 interface EndpointTableProps {
   subsystemId: number;
@@ -98,6 +99,7 @@ export default function EndpointTable({ subsystemId, upstream, status }: Endpoin
                       : "—"}
                 </td>
                 <td className="py-2 text-right whitespace-nowrap">
+                  <WriteOnly>
                   {endpoint.state === "enabled" ? (
                     <>
                       <button className="btn btn-secondary btn-sm mr-1" onClick={() => setChanging({ endpoint, state: "draining" })} aria-label={`Drain endpoint ${endpoint.addr}`}>
@@ -124,6 +126,7 @@ export default function EndpointTable({ subsystemId, upstream, status }: Endpoin
                   >
                     <IconTrash size={16} />
                   </button>
+                  </WriteOnly>
                 </td>
               </tr>
             );

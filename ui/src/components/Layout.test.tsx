@@ -23,6 +23,16 @@ vi.mock("../context/ConfigContext", () => ({
 vi.mock("../context/LiveContext", () => ({
   useLive: () => ({ status: "online" }),
 }));
+// The session is signed in; each test sets the role it needs.
+const session = vi.hoisted(() => ({ role: "admin" as "admin" | "viewer" }));
+vi.mock("../context/SessionContext", () => ({
+  useSession: () => ({
+    who: { name: "ann", role: session.role, auth: "required" },
+    canWrite: session.role === "admin",
+    isAdmin: session.role === "admin",
+    signOut: vi.fn(),
+  }),
+}));
 vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({ mode: "light", setMode: vi.fn() }),
 }));
@@ -123,14 +133,37 @@ describe("Layout sidebar collapse", () => {
 
 describe("Layout navigation", () => {
   it("lists every page in the sidebar, with the dashboard active at the root", async () => {
+    session.role = "admin";
     renderLayout();
     const nav = await screen.findByRole("navigation");
     const labels = within(nav)
       .getAllByRole("link")
       .map((link) => link.textContent);
-    expect(labels).toEqual(["Dashboard", "Subsystems", "Certificates", "Revisions", "Resolver", "Settings"]);
+    expect(labels).toEqual([
+      "Dashboard",
+      "Subsystems",
+      "Certificates",
+      "Revisions",
+      "Resolver",
+      "Audit log",
+      "Tokens",
+      "Settings",
+    ]);
     expect(within(nav).getByRole("link", { name: "Subsystems" })).toHaveAttribute("href", "/subsystems");
     expect(within(nav).getByRole("link", { name: "Dashboard" }).className).toMatch(/text-accent/);
     expect(within(nav).getByRole("link", { name: "Settings" }).className).not.toMatch(/text-accent/);
+  });
+
+  it("does not offer tokens to a viewer, and shows who is signed in with their role", async () => {
+    session.role = "viewer";
+    renderLayout();
+    const nav = await screen.findByRole("navigation");
+    const labels = within(nav)
+      .getAllByRole("link")
+      .map((link) => link.textContent);
+    expect(labels).not.toContain("Tokens");
+    expect(labels).toContain("Audit log");
+    expect(screen.getByText("ann")).toBeInTheDocument();
+    expect(screen.getByText("viewer (read-only)")).toBeInTheDocument();
   });
 });

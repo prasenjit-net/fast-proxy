@@ -8,6 +8,7 @@ import type { CaBundle } from "../../lib/types";
 import ConfirmDialog from "../ConfirmDialog";
 import EmptyState from "../EmptyState";
 import Modal from "../Modal";
+import WriteOnly from "../WriteOnly";
 import { CaBundleForm } from "./SmallForms";
 
 /** CA bundles that upstream groups name to verify their TLS backends. */
@@ -46,9 +47,9 @@ export default function CaBundlesSection() {
       <div className="card-head">
         <h2>CA bundles</h2>
         <span className="card-hint">trust anchors for TLS upstreams</span>
-        <button className="btn btn-secondary btn-sm ml-auto" onClick={() => setUploading(true)}>
+        <WriteOnly><button className="btn btn-secondary btn-sm ml-auto" onClick={() => setUploading(true)}>
           <IconPlus size={14} /> Upload a bundle
-        </button>
+        </button></WriteOnly>
       </div>
       {list.length === 0 ? (
         <EmptyState title="No CA bundles">
@@ -64,13 +65,15 @@ export default function CaBundlesSection() {
                 {bundle.certCount} certificate{bundle.certCount === 1 ? "" : "s"}:{" "}
                 {bundle.certificates.map((certificate) => certificate.subject).join("; ")}
               </span>
-              <button
-                className="icon-btn ml-auto"
-                aria-label={`Delete ${bundle.name}`}
-                onClick={() => setDeleting(bundle)}
-              >
-                <IconTrash size={16} />
-              </button>
+              <WriteOnly>
+                <button
+                  className="icon-btn ml-auto"
+                  aria-label={`Delete ${bundle.name}`}
+                  onClick={() => setDeleting(bundle)}
+                >
+                  <IconTrash size={16} />
+                </button>
+              </WriteOnly>
             </li>
           ))}
         </ul>

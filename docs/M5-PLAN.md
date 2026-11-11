@@ -606,7 +606,7 @@ carry-over.
   *Done when:* tests cover HTTPS and WebSocket on the admin port, the generated
   certificate being served, an uploaded certificate replacing it live, and the plain
   listener not being open when TLS is on.
-- [ ] **AT2 (S) The admin certificate in the UI.** The Certificates page shows which
+- [x] **AT2 (S) The admin certificate in the UI.** The Certificates page shows which
   certificate the admin plane uses, with a note about browser warnings for the generated
   one.
   *Done when:* a UI test covers the card (see U-tasks).
@@ -660,17 +660,17 @@ carry-over.
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (M) Authentication in the client and the sign-in page.** The token in
+- [x] **U1 (M) Authentication in the client and the sign-in page.** The token in
   `sessionStorage`, sent on every request, a 401 returning to the sign-in page, the
   WebSocket ticket flow, sign-out, `whoami` in the topbar with the role, and the
   read-only mode for a `viewer` (write controls hidden).
   *Done when:* Vitest tests cover sign-in, a rejected token's message, the 401
   redirect, the header on requests, the ticket flow, sign-out clearing the token, and a
   viewer seeing no write control on any page.
-- [ ] **U2 (M) Tokens page.** List, create (the secret shown once in a copyable box with
+- [x] **U2 (M) Tokens page.** List, create (the secret shown once in a copyable box with
   a plain warning, then gone), revoke with confirmation, the 409 shown, last used.
   *Done when:* tests cover create, the one-time display, revoke, and the 409.
-- [ ] **U3 (M) Audit log page.** A paged table with filters (actor, action, outcome,
+- [x] **U3 (M) Audit log page.** A paged table with filters (actor, action, outcome,
   time), details, and an export link; live additions from the existing activity events.
   *Done when:* tests cover filters, paging, the empty state and the export.
 - [ ] **U4 (L) Maintenance controls.** On the subsystem page (a maintenance section) and
@@ -689,12 +689,29 @@ carry-over.
 - [ ] **U6 (M) Routes and upstreams overview.** A read-only cross-subsystem page of routes
   and upstream groups with health and maintenance state, linking to each subsystem.
   *Done when:* tests cover the table, health and maintenance badges, and links.
-- [ ] **U7 (S) The admin certificate card** on the Certificates page (AT2) and a note on
+- [x] **U7 (S) The admin certificate card** on the Certificates page (AT2) and a note on
   the Settings page about the auth mode and channel protection from `GET /api/status`.
   *Done when:* tests cover both.
 - [ ] **U8 (S) Tests and build.** `npm test` and `npm run build` pass; the CSP of A4 is
   checked against the production bundle (no inline script).
   *Done when:* both pass and a test loads the built `index.html` under the CSP.
+
+**PR8 notes (the UI: sign-in, tokens, audit, the admin certificate):**
+- The UI is gated by a `SessionProvider`: it asks `/api/whoami` (with the tab's token, if any); a 200
+  goes straight in (authentication off), a 401 shows the sign-in page. The token lives in
+  `sessionStorage` and in memory, goes out as a bearer header, and any later 401 clears it and returns to
+  sign-in with a reason. The WebSocket first trades the token for a single-use ticket.
+- A viewer's UI is read-only: every write control is wrapped in `WriteOnly` (or replaced by a read-only
+  summary), and a test walks the subsystem list, a subsystem page, certificates and revisions as a viewer
+  (no buttons, switches or inputs) and as an admin (the controls are there).
+- `GET /api/config` needs a token too, so the sign-in page cannot show the app name; it uses the logo.
+- **Found and fixed:** `index.html` carried an inline theme script, which the admin CSP
+  (`script-src 'self'`) blocks. It is now `public/theme-init.js`, and a test (`csp.test.ts`) fails if an
+  inline script or handler returns. The full U8 check (the built `index.html` against the served CSP) stays
+  for PR9, with the manual check done here against the real binary.
+- The admin certificate card (AT2) lives on the Certificates page; the certificate the admin plane serves
+  is marked, may be replaced, and has no rename or delete button.
+- **Not done:** the owner's click-through in a real browser (C1); every check here is automated.
 
 ### Workstream Q: Quality
 

@@ -8,6 +8,7 @@ import CertificateUploadForm from "../components/CertificateUploadForm";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
 import Modal from "../components/Modal";
+import WriteOnly from "../components/WriteOnly";
 import { useToast } from "../context/ToastContext";
 import { IconEdit, IconPlus, IconTrash } from "../icons";
 import { api } from "../lib/api";
@@ -31,6 +32,9 @@ export default function CertificatesPage() {
   const certificates = useQuery({ queryKey: ["certificates"], queryFn: () => api.certificates() });
   const tls = useQuery({ queryKey: ["tls"], queryFn: () => api.tls() });
   const subsystems = useQuery({ queryKey: ["subsystems"], queryFn: () => api.subsystems() });
+  const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
+  // The certificate the admin plane itself serves over TLS, when it does.
+  const adminCertificate = status.data?.data.admin.tlsCertificate ?? null;
   const list = certificates.data?.data ?? [];
   const tlsState = tls.data?.data;
   const nameOf = (id: number) => subsystems.data?.data.find((entry) => entry.id === id)?.name ?? `#${id}`;
@@ -118,6 +122,36 @@ export default function CertificatesPage() {
         ) : null}
       </section>
 
+      {status.data ? (
+        <section className="card">
+          <div className="card-head">
+            <h2>Admin plane</h2>
+            <span className="card-hint">the certificate this very page is served with</span>
+          </div>
+          {adminCertificate === null ? (
+            <p className="text-[0.88rem] text-ink-muted">
+              The admin plane is served over plain HTTP. Turn on <code>[admin.tls]</code> (or start
+              with <code>--admin-tls</code>) to serve it over HTTPS, which it needs to listen beyond
+              this machine.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2 text-[0.88rem]">
+              <p>
+                Served over HTTPS with the certificate <b>{adminCertificate}</b>. Replacing its
+                certificate and key takes effect for the next connection, with no restart; it cannot be
+                deleted or renamed while the admin plane uses it.
+              </p>
+              {list.find((c) => c.name === adminCertificate)?.source === "self_signed" ? (
+                <p role="note" className="rounded-md bg-warn-soft p-3 text-warn">
+                  This is the generated self-signed certificate, so browsers warn about this page.
+                  Replace it with a certificate for the name you use to reach this page.
+                </p>
+              ) : null}
+            </div>
+          )}
+        </section>
+      ) : null}
+
       {onlyDevelopment ? (
         <p role="note" className="rounded-md bg-warn-soft p-3 text-[0.86rem] text-warn">
           Only development (self-signed) certificates exist. Browsers will warn visitors: upload a real
@@ -129,14 +163,16 @@ export default function CertificatesPage() {
         <div className="card-head">
           <h2>Certificates</h2>
           <span className="card-hint">private keys are write-only and never shown</span>
-          <div className="ml-auto flex gap-2">
-            <button className="btn btn-secondary btn-sm" onClick={() => setDialog({ kind: "selfsigned" })}>
-              Generate self-signed
-            </button>
-            <button className="btn btn-primary btn-sm" onClick={() => setDialog({ kind: "upload" })}>
-              <IconPlus size={14} /> Upload a certificate
-            </button>
-          </div>
+          <WriteOnly>
+            <div className="ml-auto flex gap-2">
+              <button className="btn btn-secondary btn-sm" onClick={() => setDialog({ kind: "selfsigned" })}>
+                Generate self-signed
+              </button>
+              <button className="btn btn-primary btn-sm" onClick={() => setDialog({ kind: "upload" })}>
+                <IconPlus size={14} /> Upload a certificate
+              </button>
+            </div>
+          </WriteOnly>
         </div>
         {list.length === 0 ? (
           <EmptyState title="No certificates yet">
@@ -169,33 +205,44 @@ export default function CertificatesPage() {
                       <StateBadge state={certificate.state} />
                     </td>
                     <td className="py-2 pr-4">
+                      {certificate.name === adminCertificate ? (
+                        <Badge tone="accent">admin plane</Badge>
+                      ) : null}
                       {certificate.usedBy.length === 0 ? (
-                        <span className="text-ink-faint">unused</span>
+                        certificate.name === adminCertificate ? null : (
+                          <span className="text-ink-faint">unused</span>
+                        )
                       ) : (
                         certificate.usedBy.map(nameOf).join(", ")
                       )}
                     </td>
                     <td className="py-2 text-right whitespace-nowrap">
-                      <button
-                        className="icon-btn"
-                        aria-label={`Rename ${certificate.name}`}
-                        onClick={() => setDialog({ kind: "rename", certificate })}
-                      >
-                        <IconEdit size={16} />
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm mx-1"
-                        onClick={() => setDialog({ kind: "replace", certificate })}
-                      >
-                        Replace
-                      </button>
-                      <button
-                        className="icon-btn"
-                        aria-label={`Delete ${certificate.name}`}
-                        onClick={() => setDialog({ kind: "delete", certificate })}
-                      >
-                        <IconTrash size={16} />
-                      </button>
+                      <WriteOnly>
+                        {certificate.name === adminCertificate ? null : (
+                          <button
+                            className="icon-btn"
+                            aria-label={`Rename ${certificate.name}`}
+                            onClick={() => setDialog({ kind: "rename", certificate })}
+                          >
+                            <IconEdit size={16} />
+                          </button>
+                        )}
+                        <button
+                          className="btn btn-secondary btn-sm mx-1"
+                          onClick={() => setDialog({ kind: "replace", certificate })}
+                        >
+                          Replace
+                        </button>
+                        {certificate.name === adminCertificate ? null : (
+                          <button
+                            className="icon-btn"
+                            aria-label={`Delete ${certificate.name}`}
+                            onClick={() => setDialog({ kind: "delete", certificate })}
+                          >
+                            <IconTrash size={16} />
+                          </button>
+                        )}
+                      </WriteOnly>
                     </td>
                   </tr>
                 ))}

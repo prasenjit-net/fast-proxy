@@ -5,6 +5,7 @@ import ConfigViewer from "../components/ConfigViewer";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
 import Modal from "../components/Modal";
+import WriteOnly from "../components/WriteOnly";
 import { useToast } from "../context/ToastContext";
 import { IconRotateCcw } from "../icons";
 import { api } from "../lib/api";
@@ -111,12 +112,14 @@ export default function RevisionsPage() {
                       View
                     </button>
                     {revision.version !== current ? (
-                      <button
-                        className="btn btn-secondary btn-sm ml-1"
-                        onClick={() => setRollingBack(revision)}
-                      >
-                        <IconRotateCcw size={14} /> Roll back
-                      </button>
+                      <WriteOnly>
+                        <button
+                          className="btn btn-secondary btn-sm ml-1"
+                          onClick={() => setRollingBack(revision)}
+                        >
+                          <IconRotateCcw size={14} /> Roll back
+                        </button>
+                      </WriteOnly>
                     ) : null}
                   </td>
                 </tr>

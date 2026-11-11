@@ -81,7 +81,13 @@ cargo run --release
 # the proxy       -> http://0.0.0.0:8000
 ```
 
-Or just `make build` / `make run`. Then open the admin UI, create a subsystem,
+Or just `make build` / `make run`. The first start prints an **admin token** once
+(`admin token (shown once, store it now): fp_1.…`). Open the admin UI and paste it
+into the sign-in page; it is kept for that browser tab only. A `viewer` token shows
+the UI read-only (every control that would change something is hidden), and the
+**Tokens** page (admins) creates and revokes tokens, showing a new one's secret once.
+The **Audit log** page shows who changed what and who was refused, with filters and an
+NDJSON export. Then create a subsystem,
 add its host name, an upstream (your backend's `host:port` as its first
 endpoint) and a route with prefix `/`, and send a request with that `Host` header to port 8000.
 

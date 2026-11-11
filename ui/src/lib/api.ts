@@ -28,6 +28,12 @@ import type {
   UpstreamSettings,
   UpstreamStatus,
   VersionOnly,
+  AuditFilters,
+  AuditPage,
+  CreatedToken,
+  Token,
+  TokenInput,
+  WhoAmI,
 } from "./types";
 
 export { ApiError, type FieldError } from "./http";
@@ -35,7 +41,35 @@ export * from "./types";
 
 const subsystem = (id: number) => `/api/subsystems/${id}`;
 
+function auditQuery(filters: AuditFilters, before: number | null): string {
+  const params = new URLSearchParams({ limit: "50" });
+  if (before) params.set("before", String(before));
+  if (filters.actor) params.set("actor", filters.actor);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.outcome) params.set("outcome", filters.outcome);
+  if (filters.sinceMs) params.set("since", String(filters.sinceMs));
+  return params.toString();
+}
+
 export const api = {
+  /** Who the token (this tab's, or `token` when given) belongs to; a given token is not stored. */
+  whoami: (token?: string) =>
+    request<Envelope<WhoAmI>>(
+      "/api/whoami",
+      token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+    ),
+  /** A single-use ticket (30 s) to open the WebSocket, which cannot carry a header. */
+  wsTicket: () => request<{ ticket: string; expiresInSecs: number }>("/api/ws-ticket", send("POST", {})),
+
+  // tokens (admin only)
+  tokens: () => request<Envelope<Token[]>>("/api/tokens"),
+  createToken: (input: TokenInput) =>
+    request<Envelope<CreatedToken>>("/api/tokens", send("POST", input)),
+  revokeToken: (id: number) => request<VersionOnly>(`/api/tokens/${id}`, send("DELETE")),
+
+  // the audit log
+  audit: (filters: AuditFilters = {}, before: number | null = null) =>
+    request<AuditPage>(`/api/audit?${auditQuery(filters, before)}`),
   config: () => request<ServerConfig>("/api/config"),
   health: () => request<{ status: string; version: string }>("/api/health"),
   status: () => request<Envelope<Status>>("/api/status"),

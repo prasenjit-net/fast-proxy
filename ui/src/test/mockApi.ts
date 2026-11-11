@@ -7,6 +7,8 @@ export interface RecordedCall {
   method: string;
   path: string;
   body: unknown;
+  /** The request headers as sent, for tests of authentication. */
+  headers: Record<string, string>;
 }
 
 export interface Reply {
@@ -23,6 +25,7 @@ export function mockApi(handlers: Record<string, Handler>) {
       method: init?.method ?? "GET",
       path,
       body: init?.body ? JSON.parse(init.body as string) : undefined,
+      headers: (init?.headers as Record<string, string> | undefined) ?? {},
     };
     calls.push(call);
     const handler = handlers[`${call.method} ${call.path}`];

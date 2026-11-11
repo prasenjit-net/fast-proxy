@@ -11,6 +11,7 @@ import ConfirmDialog from "../ConfirmDialog";
 import EndpointForm from "../forms/EndpointForm";
 import UpstreamForm from "../forms/UpstreamForm";
 import Modal from "../Modal";
+import WriteOnly from "../WriteOnly";
 import EndpointTable from "./EndpointTable";
 
 type Dialog = "settings" | "endpoint" | "delete" | null;
@@ -67,17 +68,19 @@ export default function UpstreamCard({ subsystem, upstream }: { subsystem: Subsy
         <span className="text-[0.8rem] text-ink-muted">
           used by {routesUsing} route{routesUsing === 1 ? "" : "s"}
         </span>
-        <span className="ml-auto flex gap-1">
-          <button className="btn btn-secondary btn-sm" onClick={() => setDialog("endpoint")}>
-            <IconPlus size={14} /> Add endpoint
-          </button>
-          <button className="icon-btn" onClick={() => setDialog("settings")} aria-label={`Edit upstream ${upstream.name}`}>
-            <IconEdit size={16} />
-          </button>
-          <button className="icon-btn danger" onClick={() => setDialog("delete")} aria-label={`Delete upstream ${upstream.name}`}>
-            <IconTrash size={16} />
-          </button>
-        </span>
+        <WriteOnly>
+          <span className="ml-auto flex gap-1">
+            <button className="btn btn-secondary btn-sm" onClick={() => setDialog("endpoint")}>
+              <IconPlus size={14} /> Add endpoint
+            </button>
+            <button className="icon-btn" onClick={() => setDialog("settings")} aria-label={`Edit upstream ${upstream.name}`}>
+              <IconEdit size={16} />
+            </button>
+            <button className="icon-btn danger" onClick={() => setDialog("delete")} aria-label={`Delete upstream ${upstream.name}`}>
+              <IconTrash size={16} />
+            </button>
+          </span>
+        </WriteOnly>
       </div>
       <EndpointTable subsystemId={subsystem.id} upstream={upstream} status={status} />
 

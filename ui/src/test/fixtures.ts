@@ -1,4 +1,6 @@
 import type {
+  AdminStatus,
+  AuditEntry,
   CaBundle,
   Certificate,
   Endpoint,
@@ -11,8 +13,10 @@ import type {
   StatusTls,
   SubsystemSummary,
   TlsStatus,
+  Token,
   Upstream,
   UpstreamStatus,
+  WhoAmI,
 } from "../lib/types";
 
 export const NOW = 1_700_000_000_000;
@@ -195,5 +199,53 @@ export const revisionPage = (overrides: Partial<RevisionPage> = {}): RevisionPag
   ],
   version: 4,
   nextBefore: null,
+  ...overrides,
+});
+
+// ---- sign-in, tokens and the audit log ----
+
+export const adminStatus = (overrides: Partial<AdminStatus> = {}): AdminStatus => ({
+  auth: "required",
+  protectedChannel: true,
+  tlsCertificate: null,
+  activeTokens: 2,
+  activeMaintenance: 0,
+  ...overrides,
+});
+
+export const whoami = (overrides: Partial<WhoAmI> = {}): WhoAmI => ({
+  name: "test-admin",
+  role: "admin",
+  tokenExpiresAtMs: null,
+  protectedChannel: true,
+  auth: "required",
+  ...overrides,
+});
+
+export const token = (overrides: Partial<Token> = {}): Token => ({
+  id: 1,
+  name: "ci",
+  role: "viewer",
+  createdAtMs: NOW - 3_600_000,
+  createdBy: "test-admin",
+  expiresAtMs: null,
+  revokedAtMs: null,
+  lastUsedAtMs: null,
+  ...overrides,
+});
+
+export const auditEntry = (overrides: Partial<AuditEntry> = {}): AuditEntry => ({
+  id: 10,
+  atMs: Date.now() - 60_000,
+  instance: "i-1",
+  actor: "test-admin",
+  role: "admin",
+  source: "127.0.0.1",
+  requestId: "abc-1",
+  action: "subsystem.create",
+  target: "shop",
+  outcome: "ok",
+  detail: { summary: "subsystem created: shop" },
+  revision: 3,
   ...overrides,
 });
