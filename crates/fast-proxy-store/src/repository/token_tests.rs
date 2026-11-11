@@ -132,15 +132,27 @@ fn revoking_twice_keeps_the_first_time() {
 }
 
 #[test]
+fn marking_a_token_that_does_not_exist_is_not_found() {
+    let db = db();
+    let err = db
+        .read(|c| tokens::mark_used(c, TokenId(9), NOW))
+        .unwrap_err();
+    assert!(matches!(err, StoreError::NotFound(_)));
+}
+
+#[test]
 fn last_used_is_refreshed_at_most_once_a_minute() {
     let db = db();
     let id = create(&db, "ci", Role::Admin);
     let used = |db: &Database| db.read(|c| tokens::find(c, id)).unwrap().last_used_at_ms;
     assert_eq!(used(&db), None);
-    db.read(|c| tokens::mark_used(c, id, NOW)).unwrap();
+    assert!(
+        db.read(|c| tokens::mark_used(c, id, NOW)).unwrap(),
+        "the first use"
+    );
     assert_eq!(used(&db), Some(NOW));
-    db.read(|c| tokens::mark_used(c, id, NOW + 59_999)).unwrap();
+    assert!(!db.read(|c| tokens::mark_used(c, id, NOW + 59_999)).unwrap());
     assert_eq!(used(&db), Some(NOW), "too soon");
-    db.read(|c| tokens::mark_used(c, id, NOW + 60_000)).unwrap();
+    assert!(!db.read(|c| tokens::mark_used(c, id, NOW + 60_000)).unwrap());
     assert_eq!(used(&db), Some(NOW + 60_000));
 }

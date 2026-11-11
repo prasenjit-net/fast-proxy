@@ -3,6 +3,7 @@
 //! rules, persists it with a revision, and swaps the live snapshot, in that
 //! order and under one writer lock. The data plane only ever sees the holder.
 
+mod audit_events;
 mod audit_retention;
 mod ca_bundles;
 mod certificates;
@@ -15,6 +16,7 @@ mod service;
 mod tls_state;
 mod tokens;
 
+pub use audit_events::AuditEvent;
 pub use audit_retention::AuditRetention;
 pub use ca_bundles::CaBundleSummary;
 pub use certificates::{CertificateChange, CertificateSummary, SubsystemEdit, UploadOutcome};

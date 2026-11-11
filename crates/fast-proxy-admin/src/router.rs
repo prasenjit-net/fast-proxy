@@ -2,7 +2,7 @@
 
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::Router;
-use fast_proxy_model::Action::{Keys, Read, Tokens, Write};
+use fast_proxy_model::Action::{AuditExport, Keys, Read, Tokens, Write};
 
 use crate::guard::Access::{Needs, Open, Ticket};
 use crate::route_table::{RouteSpec, RouteTable};
@@ -140,6 +140,8 @@ pub(crate) fn build(state: SharedState) -> (Router, Vec<RouteSpec>) {
         .post("/api/resolve", Needs(Read), api::resolve)
         .get("/api/status", Needs(Read), api::status)
         .post("/api/reload", Needs(Write), api::reload)
+        .get("/api/audit", Needs(Read), api::list_audit)
+        .get("/api/audit/export", Needs(AuditExport), api::export_audit)
         .get("/api/maintenance", Needs(Read), api::list_maintenance)
         .put("/api/maintenance/global", Needs(Write), api::set_global)
         .delete("/api/maintenance/global", Needs(Write), api::clear_global)

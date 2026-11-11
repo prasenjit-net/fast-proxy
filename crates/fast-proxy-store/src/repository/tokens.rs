@@ -150,14 +150,25 @@ pub fn revoke(conn: &Connection, id: TokenId, now_ms: i64) -> Result<(), StoreEr
     expect_changed(changed, &format!("token {}", id.0))
 }
 
-/// Records a use at `now_ms`, at most once a minute per token.
-pub fn mark_used(conn: &Connection, id: TokenId, now_ms: i64) -> Result<(), StoreError> {
+/// Records a use at `now_ms`, at most once a minute per token, and says whether
+/// this was the token's first use ever.
+pub fn mark_used(conn: &Connection, id: TokenId, now_ms: i64) -> Result<bool, StoreError> {
+    let previous: Option<Option<i64>> = conn
+        .query_row(
+            "SELECT last_used_at FROM admin_token WHERE id = ?1",
+            [id.0],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let first_use = previous
+        .ok_or_else(|| StoreError::NotFound(format!("token {}", id.0)))?
+        .is_none();
     conn.execute(
         "UPDATE admin_token SET last_used_at = ?1
          WHERE id = ?2 AND (last_used_at IS NULL OR last_used_at <= ?3)",
         params![now_ms, id.0, now_ms - LAST_USED_GRANULARITY_MS],
     )?;
-    Ok(())
+    Ok(first_use)
 }
 
 /// How many admin tokens are neither revoked nor expired at `now_ms`.

@@ -68,10 +68,11 @@ impl FailureThrottle {
         })
     }
 
-    /// Records a failed authentication from `source`. While the address is
-    /// already throttled this changes nothing, so the block ends on schedule
-    /// however hard it is pushed.
-    pub fn record_failure(&self, source: IpAddr, now_ms: i64) {
+    /// Records a failed authentication from `source` and says whether this one
+    /// tripped the throttle (it was the failure that reached the limit). While
+    /// the address is already throttled this changes nothing, so the block ends
+    /// on schedule however hard it is pushed.
+    pub fn record_failure(&self, source: IpAddr, now_ms: i64) -> bool {
         let mut state = self.lock();
         let stamp = state.take_stamp();
         let entry = state.entries.entry(source).or_insert_with(|| Entry {
@@ -80,15 +81,17 @@ impl FailureThrottle {
         });
         drop_expired(&mut entry.failures, now_ms, self.window_ms);
         if entry.failures.len() >= self.max_failures {
-            return;
+            return false;
         }
         entry.failures.push_back(now_ms);
+        let tripped = entry.failures.len() >= self.max_failures;
         let old_stamp = std::mem::replace(&mut entry.stamp, stamp);
         state.by_recency.remove(&old_stamp);
         state.by_recency.insert(stamp, source);
         while state.entries.len() > self.capacity {
             state.evict_least_recent();
         }
+        tripped
     }
 
     /// How many addresses are currently remembered.
@@ -154,6 +157,18 @@ mod tests {
         fail(&t, ip(1), 1, 1_000);
         let err = t.check(ip(1), 1_000).unwrap_err();
         assert_eq!(err.retry_after_secs, 60);
+    }
+
+    #[test]
+    fn exactly_the_failure_that_reaches_the_limit_reports_that_it_tripped() {
+        let t = throttle();
+        let tripped: Vec<bool> = (0..12).map(|_| t.record_failure(ip(1), 0)).collect();
+        assert_eq!(tripped.iter().filter(|tripped| **tripped).count(), 1);
+        assert!(tripped[9], "the tenth failure trips it");
+        assert!(
+            !tripped[10] && !tripped[11],
+            "pushing a throttled address does not re-trip"
+        );
     }
 
     #[test]

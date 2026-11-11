@@ -40,13 +40,23 @@ async fn an_api_write_is_audited_with_the_peer_and_its_action() {
 }
 
 #[tokio::test]
-async fn a_rejected_request_leaves_no_audit_entry() {
+async fn a_rejected_request_records_the_rejection_but_no_change() {
     let app = TestApp::new().await;
     let (status, _) = app
         .post("/api/subsystems", json!({ "name": "Not Valid" }))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(audit_entries(&app).await.is_empty());
+    let entries = audit_entries(&app).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry.action, "request.rejected");
+    assert_eq!(entries[0].entry.revision, None, "nothing was committed");
+    assert!(app
+        .state
+        .config
+        .snapshot_holder()
+        .load()
+        .subsystems
+        .is_empty());
 }
 
 #[tokio::test]

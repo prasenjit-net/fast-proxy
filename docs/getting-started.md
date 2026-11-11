@@ -423,7 +423,23 @@ From another address (or without the bypass) the same request gets
 the backend. See the README's *Maintenance mode* section for the scopes, the
 secret-header bypass and the metrics.
 
+## 18. Who changed what: the audit log
+
+Every change is recorded with who made it, and so is every refused attempt:
+
+```sh
+curl -s -H "$H" "$A/audit?limit=5"                     # newest first; pass nextBefore as before= for older ones
+curl -s -H "$H" "$A/audit?outcome=denied"              # failed sign-ins, forbidden writes, foreign Host headers
+curl -s -H "$H" "$A/audit?action=maintenance.set&actor=ci"
+curl -s -H "$H" "$A/audit/export?since=0" > audit.ndjson   # everything, one JSON object per line (admin only)
+```
+
+An entry carries the token's *name* (never the token), the client address, the
+request id (also the `X-Request-Id` response header), a stable action such as
+`subsystem.update` or `access.denied`, the target, the outcome and the revision it
+created. Keys, certificates and secrets never appear in it.
+
 ## Not available yet
 
 ACME certificates, rate limits and request sampling are later milestones (see
-[ROADMAP.md](ROADMAP.md)); the audit log and the command line follow in M5.
+[ROADMAP.md](ROADMAP.md)); the command line follows in M5.

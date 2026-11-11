@@ -47,7 +47,7 @@ pub struct ConfigService {
     metrics: Arc<Metrics>,
     pub(crate) tls: Arc<TlsState>,
     /// Names this process in audit entries, so a shared log says which instance wrote.
-    instance: String,
+    pub(crate) instance: String,
     pub(crate) tokens: Arc<TokenCache>,
 }
 

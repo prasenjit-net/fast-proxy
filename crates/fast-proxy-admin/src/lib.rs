@@ -10,6 +10,7 @@ mod events;
 mod guard;
 mod host_allow_list;
 mod host_check;
+mod refusal_audit;
 mod request_id;
 mod route_table;
 mod router;
@@ -25,6 +26,8 @@ mod ws;
 
 #[cfg(test)]
 mod api_tests;
+#[cfg(test)]
+mod audit_api_tests;
 #[cfg(test)]
 mod audit_trail_tests;
 #[cfg(test)]

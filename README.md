@@ -227,6 +227,8 @@ All routes except `/api/health` need `Authorization: Bearer <token>`; a missing 
 | GET, POST | `/api/tokens` | List / create (`name`, `role`, optional `expiresInDays`; the secret appears only in the creation response) |
 | DELETE | `/api/tokens/{id}` | Revoke at once (409 for the last usable admin token) |
 | POST | `/api/reload` | Re-read the database now and recompile; answers with the live version |
+| GET | `/api/audit?limit=&before=&actor=&action=&outcome=&since=` | The audit log, newest first, paged (`nextBefore`); readable by a `viewer` |
+| GET | `/api/audit/export?since=` | Every entry since a time as NDJSON, oldest first, streamed (admin only) |
 | GET | `/api/maintenance` | Every maintenance scope that is on, with its target names, message, `secondsLeft`, who set it and its bypass rules (never a secret) |
 | PUT, DELETE | `/api/maintenance/global` | Turn maintenance on (replacing earlier settings) or off for the whole proxy |
 | PUT, DELETE | `/api/subsystems/{id}/maintenance` | The same for one subsystem |
@@ -414,6 +416,16 @@ read, and never serves the ones it cannot.
 
 ## Security notes
 
+- **Everything is audited.** Each committed change writes an audit entry in the
+  same transaction as the change and its revision, naming who (the token's name
+  and role), from where, what and the revision it created. The log also records
+  what changed nothing: authentication failures (with the reason, and whether that
+  failure tripped the throttle), refusals (`access.denied`), a foreign `Host`, a
+  write the server rejected (400 or 409), and a token's first use. Entries hold
+  names, ids and a short reason, never a body, a token, a ticket, a key or a PEM.
+  Entries for unauthenticated requests are capped at 60 a minute for the whole
+  process, so a flood cannot grow the log; the log is pruned to 90 days and
+  200,000 rows.
 - **The admin plane needs a bearer token.** Every API call and the WebSocket
   need one (only `GET /api/health` is open). The first start prints a bootstrap
   admin token once; `POST /api/tokens` creates more, with the role `admin`

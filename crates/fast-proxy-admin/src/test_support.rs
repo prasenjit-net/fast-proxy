@@ -144,7 +144,14 @@ impl TestApp {
             expires_at_ms: None,
         };
         let id = store
-            .run(move |db| db.read(|conn| tokens::create(conn, &new_token, 0)))
+            .run(move |db| {
+                db.read(|conn| {
+                    let id = tokens::create(conn, &new_token, 0)?;
+                    // Already used, so the tests' first request is not a "first use".
+                    tokens::mark_used(conn, id, 0)?;
+                    Ok(id)
+                })
+            })
             .await
             .unwrap();
         let admin_token = PlaintextToken::new(id, &secret).reveal().to_string();

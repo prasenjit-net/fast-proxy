@@ -1,5 +1,6 @@
 //! REST handlers, one file per resource.
 
+mod audit;
 mod ca_bundles;
 mod certificate_dto;
 mod certificates;
@@ -29,6 +30,7 @@ mod upstream_health;
 mod upstream_status;
 mod upstreams;
 
+pub use audit::{export_audit, list_audit};
 pub use ca_bundles::{delete_ca_bundle, list_ca_bundles, upload_ca_bundle};
 pub use certificates::{
     delete_certificate, detach_subsystem_certificate, generate_self_signed, list_certificates,

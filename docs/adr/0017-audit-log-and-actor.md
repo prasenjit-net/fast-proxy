@@ -1,6 +1,6 @@
 # ADR 0017: the audit log and the actor on every change
 
-Status: proposed (awaiting owner confirmation). Plan reference: M5 H7, H8.
+Status: proposed (awaiting owner confirmation); built in M5 PR3 (committed changes) and PR7a (the rest). Plan reference: M5 H7, H8.
 
 ## Context
 
@@ -35,6 +35,21 @@ undone by a rollback.
   through the existing sync poll (ADR 0011).
 - **API:** `GET /api/audit` (paged, filtered, newest first) and
   `GET /api/audit/export` (NDJSON, admin only).
+
+## As built
+
+- The middleware's entries (`auth.failed`, `access.denied`, `host.refused`,
+  `request.rejected`, `token.first_use`) are written through
+  `ConfigService::record_audit`, which never creates a revision, so a committed
+  change is never recorded twice.
+- A failed authentication carries its reason (`no token presented`, `unknown
+  token`, `wrong secret`, `token revoked`, `token expired`) and whether it was the
+  failure that tripped the throttle; the requests the throttle then refuses are
+  not logged one by one.
+- Entries for requests nobody authenticated (401 and a foreign `Host`) are capped
+  at 60 a minute for the process; authenticated denials and rejections are not
+  capped.
+- The path is logged without its query: the WebSocket ticket lives there.
 
 ## Consequences
 

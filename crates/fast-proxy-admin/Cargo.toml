@@ -29,6 +29,8 @@ tokio-util = "0.7"
 tower = { workspace = true }
 rust-embed = "8"
 mime_guess = "2"
+tokio-stream = "0.1"
+bytes = "1"
 
 [dev-dependencies]
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }

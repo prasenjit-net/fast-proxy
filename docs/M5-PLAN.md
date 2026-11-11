@@ -547,7 +547,7 @@ carry-over.
   *Done when:* tests cover the headers on API, UI and error responses, a key upload from
   a non-loopback peer over plain HTTP refused and over admin TLS accepted, and a viewer
   refused.
-- [ ] **A5 (M) Audit API.** `GET /api/audit` with paging and filters, `GET
+- [x] **A5 (M) Audit API.** `GET /api/audit` with paging and filters, `GET
   /api/audit/export` as NDJSON; denials, failures and authentication events recorded by
   the middleware (no duplicate of a committed change's own entry).
   *Done when:* tests cover each filter, paging, the export, every action name appearing
@@ -586,6 +586,15 @@ carry-over.
   protected like the rest.
 - Denials, validation failures and authentication events are audited by the middleware in **PR7** (A5);
   committed changes are already audited since PR3.
+
+**PR7a notes (the audit API; the CLI follows as PR7b):**
+- Denials, authentication failures, foreign hosts and rejected writes are recorded by the access
+  middleware through `ConfigService::record_audit` (no revision, so no duplicate of a committed
+  change's own entry). The throttle reports the failure that trips it; the 429s that follow are not
+  logged. Unauthenticated entries are capped at 60 a minute for the process.
+- `record_token_use` notes a token's use at most once a minute and audits its first use ever.
+- The export streams in chunks of 500 through a channel (`tokio-stream`), so a 200,000-row log is
+  never held in memory.
 
 ### Workstream AT: Admin TLS
 

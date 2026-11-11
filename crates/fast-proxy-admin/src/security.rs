@@ -3,10 +3,12 @@
 //! `Host` allow-list, the failure throttle, WebSocket tickets and the live
 //! token set.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fast_proxy_auth::{FailureThrottle, TicketStore, TokenCache};
+use fast_proxy_model::TokenId;
 
 use crate::host_allow_list::HostAllowList;
 use crate::AppError;
@@ -19,6 +21,12 @@ const THROTTLE_ADDRESSES: usize = 10_000;
 /// A WebSocket ticket lives this long and works once.
 pub const TICKET_LIFETIME_MS: i64 = 30_000;
 const TICKETS_OUTSTANDING: usize = 1_024;
+/// How often one token's use is noted (`last_used_at` is coarse on purpose).
+const TOKEN_USE_INTERVAL_MS: i64 = 60_000;
+/// Audit entries for requests nobody authenticated (bad tokens, foreign `Host`
+/// names) per minute for the whole process, so a flood cannot grow the log.
+const UNAUTHENTICATED_AUDIT_PER_MINUTE: u32 = 60;
+const MINUTE_MS: i64 = 60_000;
 
 /// How the admin plane is configured to protect itself.
 #[derive(Debug, Clone)]
@@ -43,6 +51,8 @@ pub struct AdminSecurity {
     pub(crate) throttle: FailureThrottle,
     pub(crate) tickets: TicketStore,
     pub(crate) tokens: Arc<TokenCache>,
+    token_use: Mutex<HashMap<TokenId, i64>>,
+    unauthenticated_audit: Mutex<(i64, u32)>,
 }
 
 impl AdminSecurity {
@@ -59,6 +69,8 @@ impl AdminSecurity {
             ),
             tickets: TicketStore::new(TICKET_LIFETIME_MS, TICKETS_OUTSTANDING),
             tokens,
+            token_use: Mutex::default(),
+            unauthenticated_audit: Mutex::new((0, 0)),
         }
     }
 
@@ -73,6 +85,39 @@ impl AdminSecurity {
              plane served over TLS); run the request on the machine the proxy runs on"
                 .into(),
         ))
+    }
+
+    /// Whether `id`'s use should be noted now: at most once a minute per token,
+    /// so authenticating does not turn every request into a write.
+    pub(crate) fn token_use_due(&self, id: TokenId, now_ms: i64) -> bool {
+        let mut seen = self
+            .token_use
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match seen.get(&id) {
+            Some(last) if now_ms - last < TOKEN_USE_INTERVAL_MS => false,
+            _ => {
+                seen.insert(id, now_ms);
+                true
+            }
+        }
+    }
+
+    /// Whether one more audit entry for an unauthenticated request may be
+    /// written in the current minute (a fixed window over the whole process).
+    pub(crate) fn unauthenticated_audit_allowed(&self, now_ms: i64) -> bool {
+        let mut window = self
+            .unauthenticated_audit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if now_ms - window.0 >= MINUTE_MS {
+            *window = (now_ms, 0);
+        }
+        if window.1 >= UNAUTHENTICATED_AUDIT_PER_MINUTE {
+            return false;
+        }
+        window.1 += 1;
+        true
     }
 
     /// The name of the certificate the admin plane is serving, if it serves TLS.

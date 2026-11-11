@@ -10,7 +10,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use fast_proxy_telemetry::{AccessRecord, Plane};
 
-use crate::guard::ActorName;
+use crate::guard::{AuthFailure, Caller};
+use crate::refusal_audit::{self, Finished};
 use crate::request_id::RequestId;
 use crate::state::SharedState;
 
@@ -33,16 +34,21 @@ pub async fn record(
     let version = format!("{:?}", req.version());
     let request_id = RequestId::next();
     req.extensions_mut().insert(request_id.clone());
+    let path = req.uri().path().to_string();
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
 
     let mut response = next.run(req).await;
     if let Ok(value) = HeaderValue::from_str(&request_id.0) {
         response.headers_mut().insert("x-request-id", value);
     }
 
-    let actor = response
-        .extensions()
-        .get::<ActorName>()
-        .map(|a| a.0.clone());
+    let caller = response.extensions().get::<Caller>().cloned();
+    let failure = response.extensions().get::<AuthFailure>().cloned();
+    let actor = caller.as_ref().map(|caller| caller.name.clone());
     let record = AccessRecord {
         plane: Plane::Admin,
         client,
@@ -55,6 +61,21 @@ pub async fn record(
         actor: actor.as_deref(),
     };
     state.access_log.record(&record);
+
+    refusal_audit::record(
+        &state,
+        &Finished {
+            method: &method,
+            path: &path,
+            host: host.as_deref(),
+            status: response.status(),
+            source: client.ip().to_string(),
+            request_id: &request_id.0,
+            caller: caller.as_ref(),
+            failure: failure.as_ref(),
+        },
+    )
+    .await;
 
     response
 }
