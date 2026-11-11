@@ -7,6 +7,7 @@ import type {
   EndpointStatus,
   Envelope,
   HttpsSettings,
+  MaintenanceScope,
   RevisionPage,
   Route,
   SubsystemDetail,
@@ -247,5 +248,24 @@ export const auditEntry = (overrides: Partial<AuditEntry> = {}): AuditEntry => (
   outcome: "ok",
   detail: { summary: "subsystem created: shop" },
   revision: 3,
+  ...overrides,
+});
+
+/** A scope in maintenance for the whole proxy, ending an hour after the real clock now. */
+export const maintenanceScope = (overrides: Partial<MaintenanceScope> = {}): MaintenanceScope => ({
+  scope: "global",
+  subsystemId: null,
+  subsystem: null,
+  routeId: null,
+  route: null,
+  message: "Back at 14:00",
+  contentType: null,
+  hasCustomBody: false,
+  retryAfterSecs: null,
+  expiresAtMs: Date.now() + 3_600_000,
+  secondsLeft: 3600,
+  setBy: "test-admin",
+  setAtMs: Date.now() - 60_000,
+  bypass: { cidrs: [], header: null, secretSet: false },
   ...overrides,
 });

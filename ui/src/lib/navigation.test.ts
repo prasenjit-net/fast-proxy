@@ -5,6 +5,8 @@ describe("pageTitle", () => {
   it("names each top-level page", () => {
     expect(pageTitle("/")).toBe("Dashboard");
     expect(pageTitle("/subsystems")).toBe("Subsystems");
+    expect(pageTitle("/routes")).toBe("Routes and upstreams");
+    expect(pageTitle("/maintenance")).toBe("Maintenance");
     expect(pageTitle("/revisions")).toBe("Revisions");
     expect(pageTitle("/resolver")).toBe("Resolver");
     expect(pageTitle("/settings")).toBe("Settings");

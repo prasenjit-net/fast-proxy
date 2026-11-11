@@ -4,6 +4,7 @@
 //   mobile  (<768px) — opens the sidebar as an overlay drawer
 import { Outlet, useLocation } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import MaintenanceBanner from "./MaintenanceBanner";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 
@@ -48,6 +49,7 @@ export default function Layout() {
         }`}
       >
         <Topbar onMenu={toggleSidebar} />
+        <MaintenanceBanner />
         <main className="mx-auto w-full max-w-[1360px] flex-1 p-4 md:p-6">
           <Outlet />
         </main>

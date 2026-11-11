@@ -5,6 +5,7 @@ import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import HostsSection from "../components/subsystem/HostsSection";
 import HttpsSection from "../components/subsystem/HttpsSection";
+import MaintenanceSection from "../components/subsystem/MaintenanceSection";
 import RoutesSection from "../components/subsystem/RoutesSection";
 import SubsystemSettings from "../components/subsystem/SubsystemSettings";
 import UpstreamsSection from "../components/subsystem/UpstreamsSection";
@@ -84,6 +85,7 @@ export default function SubsystemDetailPage() {
       </div>
 
       <SubsystemSettings subsystem={subsystem} />
+      <MaintenanceSection subsystem={subsystem} />
       <HostsSection subsystem={subsystem} />
       <HttpsSection subsystem={subsystem} />
       <UpstreamsSection subsystem={subsystem} />

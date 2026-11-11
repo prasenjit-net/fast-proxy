@@ -33,6 +33,8 @@ vi.mock("../context/SessionContext", () => ({
     signOut: vi.fn(),
   }),
 }));
+// The banner has its own tests and needs the query client these tests do not set up.
+vi.mock("./MaintenanceBanner", () => ({ default: () => null }));
 vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({ mode: "light", setMode: vi.fn() }),
 }));
@@ -142,6 +144,8 @@ describe("Layout navigation", () => {
     expect(labels).toEqual([
       "Dashboard",
       "Subsystems",
+      "Routes",
+      "Maintenance",
       "Certificates",
       "Revisions",
       "Resolver",

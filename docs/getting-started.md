@@ -22,6 +22,10 @@ read-only:
   roll back.
 - **Resolver**: try a host and path and see the subsystem, route, the upstream's
   algorithm and every endpoint's URL and eligibility, or why nothing matched.
+- **Maintenance**: turn the whole proxy, a subsystem (on its page) or one route (in its
+  row) into a temporary 503 with a message, a countdown and a bypass; a banner under the
+  top bar shows while anything is closed. **Routes** lists every route and upstream
+  group with its health and maintenance state.
 - **Dashboard**: live requests/s, error rate and connections by subsystem, and
   which upstream endpoints are out of rotation and why.
 

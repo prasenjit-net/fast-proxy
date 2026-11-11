@@ -505,3 +505,49 @@ export interface AuditFilters {
   outcome?: AuditOutcome;
   sinceMs?: number;
 }
+
+// ---- Maintenance mode -------------------------------------------------------
+
+export type MaintenanceScopeKind = "global" | "subsystem" | "route";
+
+/** One scope that is in maintenance, as `GET /api/maintenance` lists it. */
+export interface MaintenanceScope {
+  scope: MaintenanceScopeKind;
+  subsystemId: number | null;
+  subsystem: string | null;
+  routeId: number | null;
+  route: string | null;
+  message: string;
+  contentType: string | null;
+  hasCustomBody: boolean;
+  retryAfterSecs: number | null;
+  /** When it ends by itself; null means until turned off. */
+  expiresAtMs: number | null;
+  secondsLeft: number | null;
+  setBy: string;
+  setAtMs: number;
+  bypass: { cidrs: string[]; header: string | null; secretSet: boolean };
+}
+
+/** The body of a turn-on request; fields left out are not sent. */
+export interface MaintenanceInput {
+  message: string;
+  body?: string;
+  contentType?: string;
+  retryAfterSecs?: number;
+  ttlSecs?: number;
+  bypass: { cidrs: string[]; header?: string; secret?: string };
+}
+
+/** The answer to turning maintenance on; the secret, when one was generated, is shown once. */
+export interface MaintenanceSet {
+  data: MaintenanceScope;
+  version: number;
+  bypassSecret: string | null;
+}
+
+/** What a maintenance control acts on. */
+export type MaintenanceTarget =
+  | { scope: "global" }
+  | { scope: "subsystem"; subsystemId: number; name: string }
+  | { scope: "route"; subsystemId: number; routeId: number; prefix: string };

@@ -7,8 +7,10 @@ import Layout from "./components/Layout";
 import AuditLogPage from "./pages/AuditLog";
 import CertificatesPage from "./pages/Certificates";
 import DashboardPage from "./pages/Dashboard";
+import MaintenancePage from "./pages/Maintenance";
 import NotFoundPage from "./pages/NotFound";
 import ResolverPage from "./pages/Resolver";
+import RoutesOverviewPage from "./pages/RoutesOverview";
 import RevisionsPage from "./pages/Revisions";
 import SettingsPage from "./pages/Settings";
 import SubsystemDetailPage from "./pages/SubsystemDetail";
@@ -35,6 +37,18 @@ const subsystemDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/subsystems/$id",
   component: SubsystemDetailPage,
+});
+
+const routesOverviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/routes",
+  component: RoutesOverviewPage,
+});
+
+const maintenanceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/maintenance",
+  component: MaintenancePage,
 });
 
 const certificatesRoute = createRoute({
@@ -77,6 +91,8 @@ const routeTree = rootRoute.addChildren([
   dashboardRoute,
   subsystemsRoute,
   subsystemDetailRoute,
+  routesOverviewRoute,
+  maintenanceRoute,
   certificatesRoute,
   revisionsRoute,
   resolverRoute,

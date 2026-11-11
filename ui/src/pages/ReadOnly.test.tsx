@@ -1,7 +1,7 @@
 // A viewer's UI is read-only: every control that would change something is
 // hidden, not merely refused by the server. Each page is rendered twice, as an
 // administrator (to prove the controls exist) and as a viewer (to prove none do).
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adminStatus,
@@ -60,7 +60,11 @@ describe("a viewer's UI is read-only", () => {
     });
 
   it("a subsystem page shows everything and offers no control at all", async () => {
-    mockApi({ "GET /api/subsystems/1": { body: envelope(detail()) }, "GET /api/tls": { body: envelope(tlsStatus()) } });
+    mockApi({
+      "GET /api/subsystems/1": { body: envelope(detail()) },
+      "GET /api/tls": { body: envelope(tlsStatus()) },
+      "GET /api/maintenance": { body: envelope([]) },
+    });
     renderPage(SubsystemDetailPage, { path: "/subsystems/$id", entry: "/subsystems/1", role: "viewer" });
     expect(await screen.findByRole("heading", { name: "shop", level: 2 })).toBeInTheDocument();
     // What there is to read is all there ...
@@ -68,12 +72,17 @@ describe("a viewer's UI is read-only", () => {
     expect(screen.getByText("127.0.0.1:3000")).toBeInTheDocument();
     expect(screen.getByText("/api")).toBeInTheDocument();
     expect(screen.getByText("The shop")).toBeInTheDocument();
-    // ... and nothing can be pressed or typed into.
+    // ... including that nothing is in maintenance, and nothing can be pressed or typed into.
+    await waitFor(() => expect(screen.getAllByText("open").length).toBeGreaterThan(0));
     expect(controls().map((c) => c.getAttribute("aria-label") ?? c.textContent)).toEqual([]);
   });
 
   it("the same page has all of them for an administrator", async () => {
-    mockApi({ "GET /api/subsystems/1": { body: envelope(detail()) }, "GET /api/tls": { body: envelope(tlsStatus()) } });
+    mockApi({
+      "GET /api/subsystems/1": { body: envelope(detail()) },
+      "GET /api/tls": { body: envelope(tlsStatus()) },
+      "GET /api/maintenance": { body: envelope([]) },
+    });
     renderPage(SubsystemDetailPage, { path: "/subsystems/$id", entry: "/subsystems/1", role: "admin" });
     await screen.findByRole("heading", { name: "shop", level: 2 });
     for (const name of [
@@ -86,6 +95,8 @@ describe("a viewer's UI is read-only", () => {
       /edit upstream/i,
       /drain endpoint/i,
       /edit route/i,
+      /turn on maintenance for subsystem shop/i,
+      /turn on maintenance for route/i,
       /upload a certificate/i,
     ]) {
       expect(screen.getAllByRole("button", { name }).length, String(name)).toBeGreaterThan(0);

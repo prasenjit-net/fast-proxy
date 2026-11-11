@@ -42,6 +42,8 @@ mod tests;
 mod tls_api_tests;
 #[cfg(test)]
 mod tls_server_tests;
+#[cfg(test)]
+mod ui_page_policy_tests;
 
 pub use error::{AppError, AppResult};
 pub use router::router;

@@ -7,6 +7,7 @@ import { formatDurationMs } from "../../lib/format";
 import { useRefreshConfigData } from "../../lib/refreshConfigData";
 import type { Route, RouteInput, SubsystemDetail } from "../../lib/types";
 import ConfirmDialog from "../ConfirmDialog";
+import MaintenanceControl from "../maintenance/MaintenanceControl";
 import RouteForm from "../forms/RouteForm";
 import Modal from "../Modal";
 import Toggle from "../Toggle";
@@ -102,6 +103,7 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                 <th className="py-2 pr-4 font-medium">Rewrite</th>
                 <th className="py-2 pr-4 font-medium">Timeouts</th>
                 <th className="py-2 pr-4 font-medium">Enabled</th>
+                <th className="py-2 pr-4 font-medium">Maintenance</th>
                 <th className="py-2" />
               </tr>
             </thead>
@@ -124,6 +126,16 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                     ) : (
                       <span>{route.enabled ? "On" : "Off"}</span>
                     )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <MaintenanceControl
+                      target={{
+                        scope: "route",
+                        subsystemId: subsystem.id,
+                        routeId: route.id,
+                        prefix: route.prefix,
+                      }}
+                    />
                   </td>
                   <td className="py-2 text-right whitespace-nowrap">
                     <WriteOnly>

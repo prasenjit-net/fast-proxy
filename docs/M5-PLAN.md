@@ -673,7 +673,7 @@ carry-over.
 - [x] **U3 (M) Audit log page.** A paged table with filters (actor, action, outcome,
   time), details, and an export link; live additions from the existing activity events.
   *Done when:* tests cover filters, paging, the empty state and the export.
-- [ ] **U4 (L) Maintenance controls.** On the subsystem page (a maintenance section) and
+- [x] **U4 (L) Maintenance controls.** On the subsystem page (a maintenance section) and
   on each route row: turn on with message, TTL (presets and custom), retry-after, custom
   body, bypass CIDRs and header (the generated secret shown once); a visible state with a
   live countdown; turn off with a confirmation that says what reopens. A global control
@@ -681,20 +681,45 @@ carry-over.
   *Done when:* tests cover the forms (validation shown, the exact bodies sent), the
   countdown, the confirmations, the secret shown once, and a viewer seeing state but no
   controls.
-- [ ] **U5 (S) Maintenance overview and the banner.** A Maintenance page listing every
+- [x] **U5 (S) Maintenance overview and the banner.** A Maintenance page listing every
   active scope across the proxy with its countdown, and a topbar banner while anything is
   in maintenance, updated live from `maintenanceChanged`.
   *Done when:* tests cover the list, the banner appearing and disappearing, and expiry
   being reflected without a reload.
-- [ ] **U6 (M) Routes and upstreams overview.** A read-only cross-subsystem page of routes
+- [x] **U6 (M) Routes and upstreams overview.** A read-only cross-subsystem page of routes
   and upstream groups with health and maintenance state, linking to each subsystem.
   *Done when:* tests cover the table, health and maintenance badges, and links.
 - [x] **U7 (S) The admin certificate card** on the Certificates page (AT2) and a note on
   the Settings page about the auth mode and channel protection from `GET /api/status`.
   *Done when:* tests cover both.
-- [ ] **U8 (S) Tests and build.** `npm test` and `npm run build` pass; the CSP of A4 is
+- [x] **U8 (S) Tests and build.** `npm test` and `npm run build` pass; the CSP of A4 is
   checked against the production bundle (no inline script).
   *Done when:* both pass and a test loads the built `index.html` under the CSP.
+
+**PR9 notes (the UI: maintenance controls, overview, banner, routes overview):**
+- **One control for every scope.** `MaintenanceControl` takes a target (the whole proxy, a subsystem or a route) and
+  shows its state (`open`, or `in maintenance` with the message and a live countdown); an administrator also gets
+  *Turn on* / *Change* and *Turn off*. It sits in a Maintenance card on each subsystem page, in a column of the routes
+  table, and on the Maintenance page for the whole proxy. A viewer sees the state and the countdown and no button.
+- **The list is the source of truth.** Everything reads `GET /api/maintenance` through one query; a
+  `maintenanceChanged` event (and every config event) refetches it. A scope whose own `expiresAtMs` has passed is
+  treated as open at once on the client (`stillActive`), so a countdown reaching zero does not wait for the server's
+  sweeper or a refetch. The clock is a one-second `useNow`.
+- **The form mirrors the server's bounds** (`maintenanceValidation.ts`: TTL 1 s to 30 days with presets and custom
+  minutes, retry-after 1 to 86400, message 1024 characters, body 16 KiB, 32 networks, a header name for a secret, a
+  secret of 16 or more characters), shows the server's field errors beside the fields, and sends only what was filled in.
+- **The bypass secret is shown once**, in the same `SecretReveal` as a new token, and is gone when the dialog closes.
+  Turning off always asks first and says what reopens: what the scope covered, and what still applies above it.
+- **The banner** sits under the top bar while any scope is active and names what is closed (the first two, then "and n
+  more"), with a link to the Maintenance page. It has an accessible name so it is told apart from the toast area.
+- **Routes and upstreams overview** (`/routes`) is read-only: every route and every group of every subsystem, with the
+  group's live health and a maintenance badge saying which scope closed it (route, subsystem or whole proxy).
+- **U8:** the Rust test `ui_page_policy_tests` fetches the built page the way a browser would and checks it against the
+  policy the server sends: no inline script, no inline handler or `javascript:` URL, nothing from another origin, and
+  every script and stylesheet it names is served with a type `nosniff` lets run. It needs `npm run build` first (CI
+  already hands `ui/dist` to the Rust jobs). Planting an inline script, a foreign script and an `onload` handler in
+  the page each turned it red.
+- **Not done:** the owner's click-through in a real browser (C1), now including the maintenance screens.
 
 **PR8 notes (the UI: sign-in, tokens, audit, the admin certificate):**
 - The UI is gated by a `SessionProvider`: it asks `/api/whoami` (with the tab's token, if any); a 200

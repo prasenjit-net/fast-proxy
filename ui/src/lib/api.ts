@@ -31,6 +31,10 @@ import type {
   AuditFilters,
   AuditPage,
   CreatedToken,
+  MaintenanceInput,
+  MaintenanceScope,
+  MaintenanceSet,
+  MaintenanceTarget,
   Token,
   TokenInput,
   WhoAmI,
@@ -40,6 +44,18 @@ export { ApiError, type FieldError } from "./http";
 export * from "./types";
 
 const subsystem = (id: number) => `/api/subsystems/${id}`;
+
+/** The maintenance URL of a scope. */
+function maintenancePath(target: MaintenanceTarget): string {
+  switch (target.scope) {
+    case "global":
+      return "/api/maintenance/global";
+    case "subsystem":
+      return `${subsystem(target.subsystemId)}/maintenance`;
+    case "route":
+      return `${subsystem(target.subsystemId)}/routes/${target.routeId}/maintenance`;
+  }
+}
 
 function auditQuery(filters: AuditFilters, before: number | null): string {
   const params = new URLSearchParams({ limit: "50" });
@@ -66,6 +82,13 @@ export const api = {
   createToken: (input: TokenInput) =>
     request<Envelope<CreatedToken>>("/api/tokens", send("POST", input)),
   revokeToken: (id: number) => request<VersionOnly>(`/api/tokens/${id}`, send("DELETE")),
+
+  // maintenance mode
+  maintenance: () => request<Envelope<MaintenanceScope[]>>("/api/maintenance"),
+  setMaintenance: (target: MaintenanceTarget, input: MaintenanceInput) =>
+    request<MaintenanceSet>(maintenancePath(target), send("PUT", input)),
+  clearMaintenance: (target: MaintenanceTarget) =>
+    request<VersionOnly>(maintenancePath(target), send("DELETE")),
 
   // the audit log
   audit: (filters: AuditFilters = {}, before: number | null = null) =>

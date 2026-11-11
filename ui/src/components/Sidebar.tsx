@@ -6,11 +6,13 @@ import {
   IconClock,
   IconDashboard,
   IconExternal,
+  IconAlertTriangle,
   IconKey,
   IconLayers,
   IconList,
   IconLock,
   IconSearch,
+  IconServer,
   IconSliders,
   IconX,
 } from "../icons";
@@ -21,6 +23,8 @@ interface NavItem {
   to:
     | "/"
     | "/subsystems"
+    | "/routes"
+    | "/maintenance"
     | "/certificates"
     | "/revisions"
     | "/resolver"
@@ -36,6 +40,8 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <IconDashboard size={20} /> },
   { to: "/subsystems", label: "Subsystems", icon: <IconLayers size={20} /> },
+  { to: "/routes", label: "Routes", icon: <IconServer size={20} /> },
+  { to: "/maintenance", label: "Maintenance", icon: <IconAlertTriangle size={20} /> },
   { to: "/certificates", label: "Certificates", icon: <IconLock size={20} /> },
   { to: "/revisions", label: "Revisions", icon: <IconClock size={20} /> },
   { to: "/resolver", label: "Resolver", icon: <IconSearch size={20} /> },
