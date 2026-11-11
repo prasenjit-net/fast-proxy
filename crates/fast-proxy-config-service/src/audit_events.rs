@@ -7,6 +7,7 @@ use fast_proxy_model::TokenId;
 use fast_proxy_store::repository::audit::{self, AuditOutcome, NewAuditEntry};
 use fast_proxy_store::repository::tokens;
 use fast_proxy_store::StoreError;
+use fast_proxy_telemetry::AuditResult;
 
 use crate::service::now_ms;
 use crate::{ChangeContext, ConfigService};
@@ -35,6 +36,11 @@ impl ConfigService {
         if detail.len() > MAX_DETAIL_BYTES {
             detail = serde_json::json!({ "truncated": true }).to_string();
         }
+        let result = match event.outcome {
+            AuditOutcome::Ok => AuditResult::Ok,
+            AuditOutcome::Denied => AuditResult::Denied,
+            AuditOutcome::Failed => AuditResult::Failed,
+        };
         let entry = NewAuditEntry {
             at_ms: now_ms(),
             instance: self.instance.clone(),
@@ -54,7 +60,9 @@ impl ConfigService {
             .await
         {
             tracing::warn!("could not write an audit entry: {err}");
+            return;
         }
+        self.metrics.audit_entry(result);
     }
 
     /// Notes that token `id` was used, at most once a minute (the store keeps

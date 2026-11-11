@@ -97,7 +97,7 @@ impl<F: Forward> RequestPipeline<F> {
     /// Handles one request. Never fails: every problem becomes a response.
     pub async fn handle(
         &self,
-        request: Request<Incoming>,
+        mut request: Request<Incoming>,
         client_addr: SocketAddr,
     ) -> Response<ResponseBody> {
         let started = Instant::now();
@@ -195,6 +195,7 @@ impl<F: Forward> RequestPipeline<F> {
                 known.subsystem = subsystem.name.as_str().to_string();
                 known.route = route.prefix.clone();
                 let upstream = &route.upstream;
+                bypassed.strip_secrets(request.headers_mut());
                 match select_endpoint(upstream, request.headers(), client_addr.ip(), None) {
                     None => FixedResponse::NoHealthyUpstream.render(&request_id, wants_json),
                     Some(selection) => {

@@ -16,21 +16,35 @@ use crate::ResponseBody;
 /// Tells the operator a request passed through maintenance by a bypass rule.
 pub(crate) const BYPASS_HEADER: HeaderName = HeaderName::from_static("x-maintenance-bypass");
 
-/// The scopes a request passed through by a bypass rule.
+/// The scopes a request passed through by a bypass rule, and the request
+/// headers that carry a bypass secret.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct BypassedScopes(Vec<MaintenanceScope>);
+pub(crate) struct BypassedScopes {
+    passed: Vec<MaintenanceScope>,
+    /// The bypass header of every scope that applied, whether or not it matched.
+    secret_headers: Vec<HeaderName>,
+}
 
 impl BypassedScopes {
     pub(crate) fn scopes(&self) -> &[MaintenanceScope] {
-        &self.0
+        &self.passed
+    }
+
+    /// Removes the bypass headers from a request about to be forwarded: the
+    /// secret is for this proxy, and the upstream (and its logs) must never see
+    /// it, nor a wrong guess at it.
+    pub(crate) fn strip_secrets(&self, headers: &mut HeaderMap) {
+        for name in &self.secret_headers {
+            headers.remove(name);
+        }
     }
 
     /// `global`, `subsystem,route`, ...: the scopes passed, for the response header.
     pub(crate) fn header_value(&self) -> Option<HeaderValue> {
-        if self.0.is_empty() {
+        if self.passed.is_empty() {
             return None;
         }
-        let labels: Vec<&str> = self.0.iter().map(|scope| scope.label()).collect();
+        let labels: Vec<&str> = self.passed.iter().map(|scope| scope.label()).collect();
         HeaderValue::from_str(&labels.join(",")).ok()
     }
 }
@@ -56,14 +70,19 @@ pub(crate) fn evaluate<'snapshot>(
     let mut now = None;
     for scope in scopes.iter().flatten() {
         let now_ms = *now.get_or_insert_with(now_ms);
-        let presented = scope
-            .bypass_header_name()
+        let header_name = scope.bypass_header_name();
+        let presented = header_name
             .and_then(|name| headers.get(name))
             .and_then(|value| value.to_str().ok());
         match scope.check(now_ms, client, presented) {
             MaintenanceCheck::Inactive => {}
-            MaintenanceCheck::Bypassed => bypassed.0.push(scope.scope),
+            MaintenanceCheck::Bypassed => bypassed.passed.push(scope.scope),
             MaintenanceCheck::Respond => return ScopeOutcome::Respond(scope),
+        }
+        if let Some(name) =
+            header_name.and_then(|name| HeaderName::from_bytes(name.as_bytes()).ok())
+        {
+            bypassed.secret_headers.push(name);
         }
     }
     ScopeOutcome::Pass(bypassed)
@@ -90,6 +109,11 @@ pub(crate) fn render(
         HeaderValue::from(scope.retry_after(now)),
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // The operator chose the content type; a browser must not second-guess it.
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     headers.insert(REQUEST_ID, header_value(request_id));
     response
 }
@@ -169,8 +193,8 @@ mod tests {
     fn passed_scopes_are_named_in_order_for_the_response_header() {
         let mut bypassed = BypassedScopes::default();
         assert!(bypassed.header_value().is_none());
-        bypassed.0.push(MaintenanceScope::Global);
-        bypassed.0.push(MaintenanceScope::Route);
+        bypassed.passed.push(MaintenanceScope::Global);
+        bypassed.passed.push(MaintenanceScope::Route);
         assert_eq!(bypassed.header_value().unwrap(), "global,route");
     }
 }

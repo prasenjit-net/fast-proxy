@@ -12,11 +12,13 @@ use fast_proxy_model::{
 use fast_proxy_store::repository::audit::{self, AuditEntry, AuditOutcome, AuditQuery};
 use fast_proxy_store::repository::subsystems;
 use fast_proxy_store::{revision, Connection, Mutation, Store, StoreError};
-use fast_proxy_telemetry::SyncResult;
+use fast_proxy_telemetry::{Metrics, SyncResult};
 use tempfile::TempDir;
 
 use crate::tests::create_site;
-use crate::{AuditRetention, Audited, Bootstrap, ChangeContext, ConfigService, StartError};
+use crate::{
+    AuditEvent, AuditRetention, Audited, Bootstrap, ChangeContext, ConfigService, StartError,
+};
 
 fn ann() -> ChangeContext {
     ChangeContext::token("ann", "admin", "10.0.0.5", "req-1")
@@ -141,6 +143,61 @@ async fn a_vetoed_or_failed_change_leaves_neither_an_entry_nor_a_revision() {
 
     assert_eq!(all_audit(&service).await.len(), 1, "only the first change");
     assert_eq!(service.snapshot_holder().load().version, before);
+}
+
+#[tokio::test]
+async fn audit_volume_is_counted_by_outcome_and_a_vetoed_change_counts_nothing() {
+    let metrics = Arc::new(Metrics::new());
+    let service =
+        ConfigService::start_with_metrics(Store::open_in_memory().unwrap(), metrics.clone())
+            .await
+            .unwrap();
+    let count = |outcome: &str| {
+        let line = format!("fastproxy_audit_entries_total{{outcome=\"{outcome}\"}} ");
+        metrics
+            .render()
+            .lines()
+            .find_map(|text| text.strip_prefix(&line)?.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    assert_eq!((count("ok"), count("denied"), count("failed")), (0, 0, 0));
+
+    add_site(&service, "shop").await;
+    let duplicate = service
+        .apply(
+            &ann(),
+            Audited::new("subsystem.create", "shop"),
+            create_site("shop", "other.example.com".into(), "127.0.0.1:3001"),
+        )
+        .await;
+    assert!(duplicate.is_err());
+    assert_eq!(
+        count("ok"),
+        1,
+        "the committed change counts, the vetoed one does not"
+    );
+
+    let event = |outcome| AuditEvent {
+        action: "access.denied",
+        target: "/api/x".into(),
+        outcome,
+        detail: serde_json::json!({}),
+    };
+    service
+        .record_audit(&ann(), event(AuditOutcome::Denied))
+        .await;
+    service
+        .record_audit(&ann(), event(AuditOutcome::Denied))
+        .await;
+    service
+        .record_audit(&ann(), event(AuditOutcome::Failed))
+        .await;
+    assert_eq!((count("ok"), count("denied"), count("failed")), (1, 2, 1));
+    assert_eq!(
+        all_audit(&service).await.len(),
+        4,
+        "the metric agrees with the log"
+    );
 }
 
 #[tokio::test]

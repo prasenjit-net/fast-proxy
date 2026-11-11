@@ -249,6 +249,7 @@ async fn the_response_is_a_503_with_retry_after_no_store_and_a_request_id() {
     assert_eq!(reply.status, 503);
     assert_eq!(reply.header("retry-after"), Some("90"));
     assert_eq!(reply.header("cache-control"), Some("no-store"));
+    assert_eq!(reply.header("x-content-type-options"), Some("nosniff"));
     assert!(reply.header("x-request-id").is_some());
     assert!(reply
         .header("content-type")
@@ -399,6 +400,38 @@ async fn the_secret_header_lets_a_request_through_and_a_wrong_one_does_not() {
         503
     );
     assert_eq!(rig.get(SHOP, "/", "").await.status, 503);
+}
+
+#[tokio::test]
+async fn the_bypass_secret_never_reaches_the_upstream() {
+    let rig = Rig::start(&[]).await;
+    let secret = GeneratedSecret::generate().unwrap();
+    let mut settings = on("x");
+    settings.bypass.header = Some(BypassHeader {
+        name: "X-Maintenance-Pass".into(),
+        secret_hash: secret.hash().clone(),
+    });
+    // A network that lets this client through too, so the header is not what decides.
+    settings.bypass.cidrs = vec![cidr("127.0.0.0/8")];
+    rig.set(vec![(MaintenanceTarget::Global, settings)]);
+
+    let right = format!("X-Maintenance-Pass: {}\r\nX-Keep: yes\r\n", secret.value());
+    for extra in [
+        right.as_str(),
+        "X-Maintenance-Pass: a-wrong-guess\r\nX-Keep: yes\r\n",
+    ] {
+        assert_eq!(rig.get(SHOP, "/", extra).await.status, 200);
+        let seen = rig.shop.last_headers();
+        assert!(
+            seen.get("x-maintenance-pass").is_none(),
+            "the bypass header reached the upstream: {seen:?}"
+        );
+        assert_eq!(
+            seen.get("x-keep").unwrap(),
+            "yes",
+            "other headers are untouched"
+        );
+    }
 }
 
 #[tokio::test]

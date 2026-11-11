@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::admin_metrics::{AdminMetrics, AdminResult, AuditResult};
 use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
 use crate::tls_metrics::{
     CacheResult, CertificateReading, HandshakeResult, SyncResult, TlsMetrics,
@@ -96,6 +97,7 @@ pub struct Metrics {
     upstream: UpstreamMetrics,
     tls: TlsMetrics,
     maintenance: MaintenanceMetrics,
+    admin: AdminMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -135,10 +137,12 @@ impl Metrics {
         let upstream = UpstreamMetrics::new(&registry);
         let tls = TlsMetrics::new(&registry);
         let maintenance = MaintenanceMetrics::new(&registry);
+        let admin = AdminMetrics::new(&registry);
         Self {
             upstream,
             tls,
             maintenance,
+            admin,
             cancelled: counter_vec(
                 &registry,
                 "fastproxy_requests_cancelled_total",
@@ -192,6 +196,16 @@ impl Metrics {
         self.duration
             .with_label_values(&[subsystem, route])
             .observe(elapsed.as_secs_f64());
+    }
+
+    /// Counts an admin request by how the guard ended it.
+    pub fn admin_request(&self, result: AdminResult) {
+        self.admin.request(result);
+    }
+
+    /// Counts an audit entry this instance wrote.
+    pub fn audit_entry(&self, outcome: AuditResult) {
+        self.admin.audit_entry(outcome);
     }
 
     /// Counts a request answered with the maintenance response by `scope`.

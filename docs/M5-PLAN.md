@@ -696,6 +696,47 @@ carry-over.
   checked against the production bundle (no inline script).
   *Done when:* both pass and a test loads the built `index.html` under the CSP.
 
+**PR10 notes (verification, review and documentation):**
+- **Q2 `tests/operations.rs`** (real binary, authentication on, `common/console.rs` now also gives the data
+  address): each scope closes only what it covers with a 503, `Retry-After`, no-store and the operator's own JSON page,
+  and the backend's request count does not move; the bypass by header and by network works and cannot be forged (a
+  claimed `X-Forwarded-For`, a wrong secret, the right secret in the wrong header); probes keep arriving while the whole
+  proxy is in maintenance; the audit trail names `operator`, `watcher` (denied) and `anonymous` (401) with the revision, and
+  holds no secret; a token is made, used and revoked and the last admin is protected (409); twelve wrong tokens end in
+  429 even for the right one. Together with `admin_auth.rs`, `admin_tls.rs`, `maintenance.rs` and `cli.rs` (already
+  there) this is every item of Q2. Each scenario was shown red by breaking the code it guards (a forged forwarded
+  address trusted, `Retry-After` removed, the last-admin guard removed, the denial renamed).
+- **Q3 `tests/maintenance_under_load.rs`**: eight keep-alive clients, 24 toggles over all three scopes and a TTL expiry
+  (the end observed through the traffic, not slept for). About 118,000 requests: none failed except with the page; the
+  sharp rule held for every request that ran entirely between two toggles (about 45,000 closed and 770 open ones);
+  and the backend's count equals the 200s exactly. Red when maintenance never answers and when a route scope closes
+  nothing. Three consecutive runs and five more in a loop passed.
+- **Q4 `tests/secret_hygiene.rs`**: every file under the state directory (database, write-ahead log, key file), every API
+  read, every revision, the audit log, `/metrics`, the WebSocket frames, the console and the access log, searched for
+  both token secrets, a generated and a chosen bypass secret, the WebSocket ticket, the private key's body and
+  `PRIVATE KEY`; the bootstrap token only on the console, once. Red when a token secret is put in an audit target and
+  when the `/ws` redaction is removed.
+- **Q5 `tests/cluster_operations.rs`**: two real processes, each with its **own master key**, on one database: a token
+  made on A works on B and its revocation locks it out there, maintenance with a TTL closes B's data plane and its
+  expiry reopens both, the expired scope disappears from B's API, and the shared audit log names two different
+  instances. The stale-instance rule stays covered by the service-level test (`sync_tests`); red when B never syncs.
+- **Q6**: `scripts/bench-m5.sh`; results in `docs/benchmarks.md`. Idle cost is not measurable (within 1.3% of M3, and a
+  scope on another subsystem changes nothing); answering the page is 1.7 to 2.0 times as fast as proxying (about
+  189,000 to 196,000 503/s at 64 connections on the laptop).
+- **Q8 `docs/security-review-m5.md`**: 15 checklist items, **three findings, all fixed with tests that failed first**:
+  (1) **the bypass secret header was forwarded to the upstream** (the backend and its logs saw the secret): the
+  pipeline now strips the bypass header of every applying scope before forwarding, matched or not; (2) the maintenance
+  503 had no `X-Content-Type-Options: nosniff`; (3) **exit criterion 9's authentication and audit metrics had never been
+  built** (no task covered them): `fastproxy_admin_requests_total{result}` and `fastproxy_audit_entries_total{outcome}` now
+  exist, counted at the one place each is decided (the access middleware, and the two audit writers).
+- **Not done / moved:** C1 and C2 are the owner's; C3 stays open (see below); C4 (the release) and C5 (the M3
+  follow-ups: replacing a CA bundle through the API, the SonarCloud findings on the Certificates page, the
+  certificate-ownership decision) were not started and are carried to the next milestone; G1 awaits the owner's
+  confirmation of H1-H19 in #42; import and export of configuration (a roadmap risk) was never in M5 and is still open.
+- **Disk:** three coverage builds in a row filled the machine's disk (4.6 GB under `target/llvm-cov-target`), which made
+  tests fail in odd ways (two of the failures were in `reload_under_load`) until the folder was removed. A full disk is
+  therefore a known false alarm for that test; the earlier macOS CI failure was a different run on a different machine.
+
 **PR9 notes (the UI: maintenance controls, overview, banner, routes overview):**
 - **One control for every scope.** `MaintenanceControl` takes a target (the whole proxy, a subsystem or a route) and
   shows its state (`open`, or `in maintenance` with the message and a live countdown); an administrator also gets
@@ -747,7 +788,7 @@ carry-over.
   existing test meaningful (none quietly weakened).
   *Done when:* the whole existing suite passes with authentication on, and a test fails
   if a route is added without an `Action`.
-- [ ] **Q2 (L) Exit-criteria end-to-end tests** (`tests/operations.rs`), the real binary:
+- [x] **Q2 (L) Exit-criteria end-to-end tests** (`tests/operations.rs`), the real binary:
   authentication required by default with a printed bootstrap token; 401, 403 and the
   viewer role; a token created, used and revoked; recovery with the offline CLI; admin
   TLS; the `Host` check; the throttle; maintenance at each scope with its 503, page,
@@ -755,28 +796,28 @@ carry-over.
   and by header, persistence across a restart, and health checks continuing; the audit
   trail of all of it with the right actors; the CLI doing the operations. Each must be
   shown to be able to fail.
-- [ ] **Q3 (M) Maintenance under load.** Clients keep making requests while maintenance
+- [x] **Q3 (M) Maintenance under load.** Clients keep making requests while maintenance
   is toggled on and off for each scope repeatedly (and TTLs expire): no request fails
   other than with the maintenance 503, a request that began after a toggle returned never
   sees the old state (the sharp rule of `reload_under_load`), no endpoint receives a
   request while its scope is in maintenance, and in-flight requests finish.
-- [ ] **Q4 (M) Secret hygiene tests.** The database file (and WAL) contains no token
+- [x] **Q4 (M) Secret hygiene tests.** The database file (and WAL) contains no token
   secret, no bypass secret and no private key; no response, event, log line, metric,
   audit entry or revision contains a secret after creating tokens, setting bypass secrets
   and uploading a certificate; the `/ws` ticket never appears in the admin access log.
-- [ ] **Q5 (M) Cluster behaviour tests.** Two instances (two services, and once two real
+- [x] **Q5 (M) Cluster behaviour tests.** Two instances (two services, and once two real
   processes) on one database: a token created on one authenticates on the other within
   the interval and a revocation locks it out; maintenance and its expiry follow; the audit
   log is shared with each entry naming its instance; a stale instance cannot write over a
   newer state; a different master key on one instance does not affect tokens (they carry
   no encrypted data).
-- [ ] **Q6 (S) Benchmark.** Re-run `docs/benchmarks.md` (M3 baseline) with no maintenance
+- [x] **Q6 (S) Benchmark.** Re-run `docs/benchmarks.md` (M3 baseline) with no maintenance
   active, with maintenance active on an unrelated subsystem, and with maintenance
   answering (the rate of 503s the proxy can serve); record the numbers.
 - [ ] **Q7 (S) Gates.** fmt, clippy, tests and UI build green on Linux, macOS and Windows
   on every PR (the M2 and M3 lessons apply: wait for events, not durations; no Unix-only
   commands in tests; one write per raw request).
-- [ ] **Q8 (S) Security review.** A checklist run before release: tokens and secrets only
+- [x] **Q8 (S) Security review.** A checklist run before release: tokens and secrets only
   as hashes and shown once; constant-time comparison; no secret in any output; the
   throttle and `Host` check in force; the CSP real; the loopback and protected-channel
   rule for keys; the refusal to expose an unprotected admin plane; audit entries free of
@@ -789,20 +830,20 @@ carry-over.
 
 ### Workstream W: Documentation
 
-- [ ] **W1 (M) README and getting-started.** A section on authentication (the bootstrap
+- [x] **W1 (M) README and getting-started.** A section on authentication (the bootstrap
   token, tokens and roles, the UI sign-in, recovery), admin TLS and the exposure rules,
   maintenance mode (each scope, TTL, bypass, what the response looks like, what it never
   touches), the audit log, the CLI, the config table and the new metrics; an
   **operations** note on running behind a reverse proxy (it makes every request look
   local to the admin plane) and on backing up the database *and* the master key.
-- [ ] **W2 (S) AGENTS.md.** The new crate and rules: every admin route declares an
+- [x] **W2 (S) AGENTS.md.** The new crate and rules: every admin route declares an
   action; every change goes through `apply` with a `ChangeContext`; tokens, audit and
   maintenance are not `Config`; secrets only as hashes and never in output; maintenance
   is one pure function shared by the data plane and the resolver.
-- [ ] **W3 (S) ROADMAP.md.** Tick M5, record decisions H1-H19 in the decision log, update
+- [x] **W3 (S) ROADMAP.md.** Tick M5, record decisions H1-H19 in the decision log, update
   the risks table (the admin-exposure risk is closed) and the config example, link this
   plan.
-- [ ] **W4 (S) Outcome.** A closing section in this file like M3's section 11.
+- [x] **W4 (S) Outcome.** A closing section in this file like M3's section 11.
 
 ### Workstream C: Carry-over and housekeeping
 
@@ -961,22 +1002,18 @@ PR7 needs PR3 and PR6; the UI pull requests need their APIs.
 
 ## 10. Definition of done for M5
 
-- [ ] Every task above is checked, or explicitly moved with a note.
-- [ ] Exit criteria (section 1) demonstrated by the end-to-end tests in Q2 to Q5 and a
-  manual run: start fresh and copy the bootstrap token, sign in to the UI, create a viewer
-  token and see the read-only UI, turn maintenance on for a route with a TTL and a bypass
-  header, see the 503 and the banner, verify through the bypass, watch it expire, read the
-  audit trail, revoke the token, lose every token and recover with `token create`, put the
-  admin plane behind TLS, and watch a second instance follow a token and a maintenance
-  toggle.
-- [ ] CI green on all three platforms; no new clippy warnings.
-- [ ] Overall test coverage above 60%, number recorded (AGENTS.md rule); aim to stay near
-  M3's 97.3%.
-- [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md and getting-started updated, including the exposure
-  rules and the operations notes.
-- [ ] Benchmark re-run and recorded; the idle overhead of maintenance within budget.
-- [ ] The security review (Q8) done, findings recorded, secret hygiene verified (Q4).
+- [x] Every task above is checked, or explicitly moved with a note (the open ones are the owner's: G1, C1, C2, and
+  the carried C3 to C5; see section 12).
+- [x] Exit criteria (section 1) demonstrated by the end-to-end tests in Q2 to Q5 (the table in section 12). The
+  **manual run** (start fresh, sign in, a viewer token, maintenance on a route with a TTL and a bypass header, the
+  banner, the audit trail, revocation, recovery, admin TLS, a second instance following) is the owner's click-through
+  (C1); every step except the browser itself is an automated test.
+- [ ] CI green on all three platforms; no new clippy warnings (clippy is clean locally; CI is checked on the PR).
+- [x] Overall test coverage above 60%, number recorded: 95.97% of regions, 97.37% of lines.
+- [x] Nothing committed without the owner's go-ahead after manual review.
+- [x] README, AGENTS.md, ROADMAP.md and getting-started updated, including the exposure rules and the operations notes.
+- [x] Benchmark re-run and recorded; the idle overhead of maintenance within budget.
+- [x] The security review (Q8) done, findings recorded, secret hygiene verified (Q4).
 - [ ] The owner's click-through of the UI done (C1) and the M3 stack merged (C2).
 
 ## 11. What M5 leaves for M4, and the other touch points
@@ -1014,3 +1051,56 @@ Other touch points with finished work:
   the vault check and the `Prepared` state are reused, not duplicated.
 - **M2 endpoint drain and disable** stay the tool for taking a *backend* out;
   maintenance is for taking a *site* out with an explanation. The docs say which to use.
+
+## 12. Outcome
+
+M5 shipped in ten stacked pull requests (#42 to #52, then PR10). What the milestone delivers, against the exit criteria of
+section 1:
+
+| # | Criterion | Shown by |
+|---|---|---|
+| 1 | The admin plane requires authentication; a fresh install is neither open nor locked out | `admin_auth.rs`, `operations.rs`, `cli.rs` (recovery with `token create`) |
+| 2 | Tokens are managed live, hashed, shown once, shared by instances | `operations.rs`, `cluster_operations.rs`, `secret_hygiene.rs` |
+| 3 | Admin TLS, the exposure refusal, the `Host` check, headers, the throttle | `admin_tls.rs`, `admin_auth.rs`, `operations.rs`, `ui_page_policy_tests` |
+| 4 | Every change audited with its actor, refusals too, never a secret | `operations.rs`, `secret_hygiene.rs`, `operations_tests` |
+| 5 | Maintenance at three scopes: 503, `Retry-After`, a page, a TTL, never reaching an upstream | `operations.rs`, `maintenance.rs`, `maintenance_under_load.rs` |
+| 6 | Bypass by network and by secret header | `operations.rs`, the data plane's `maintenance_tests` |
+| 7 | Persistent and live; instances follow; health checks continue | `maintenance.rs`, `cluster_operations.rs`, `operations.rs` |
+| 8 | The CLI | `cli.rs` |
+| 9 | Observable | maintenance metrics (D4), `fastproxy_admin_requests_total` and `fastproxy_audit_entries_total` (added by the security review), the UI pages and banner |
+| 10 | No regression, no idle cost | the whole earlier suite on authentication; `docs/benchmarks.md` (within 1.3% of M3) |
+
+**Numbers.** 1,185 Rust tests and 428 frontend tests; overall Rust coverage 95.97% of regions and 97.37% of lines
+(M3: 97.3% of lines). `cargo fmt` and clippy with `-D warnings` clean.
+
+**What the build changed against the plan.**
+
+- Exit criterion 9's authentication and audit metrics were in no task; the security review found the gap and closed it.
+- The security review found a real leak the tests had not: **the bypass secret header was forwarded to the upstream.** It
+  is stripped now. Reading what the code leaves on the request, not only what it returns, is how it was found.
+- The admin CSP (`script-src 'self'`) caught the template's inline theme script during PR8; the script is a file now, and
+  a test fails if an inline one returns.
+- The throttle, the WebSocket redaction and the secret scan each needed their own mutation to prove them: a test that
+  passes on the first try was broken on purpose before it was trusted (AGENTS.md rule), and that found two weak ones (the
+  expiry test that was green before the list had loaded, and a metric helper that read only the first series).
+- Several smaller fixes came out of building (the CIDR canonicalisation, `subtle` instead of a deprecated constant-time
+  function, the 421 answer lacking security headers, a `ResolveRequest` without camelCase, a maintenance `DELETE` on a
+  missing subsystem answering 200); each has a test.
+
+**Lessons.**
+
+- A full disk makes the load tests fail in ways that look like races (two `reload_under_load` failures during a coverage run
+  were exactly that). Check `df` before believing a flake, and remove `target/llvm-cov-target` after coverage.
+- Counting is stronger than timing: "the backend saw exactly the requests answered 200" proves nothing in maintenance
+  reached it, where a time-window check could only suggest it.
+- A scope on the request path costs nothing when it does not apply, because the clock and the bypass check are reached
+  only when a scope is on for that request.
+
+**Open, and carried on.**
+
+- G1: the owner's confirmation of H1-H19 (in #42), and C1: the owner's click-through of the UI in a real browser.
+- C2: the stack merge, in order from #42.
+- C3: the unexplained `reload_under_load` failure on one macOS run is still unexplained; its assertion now reports how far
+  into the closed window the request began, so a recurrence says whether it is a window-edge artefact or a real race.
+- C4: the release (the versions are still `0.1.0`); C5: the M3 follow-ups.
+- Configuration import and export, and the M4 (ACME) milestone.

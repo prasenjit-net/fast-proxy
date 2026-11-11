@@ -6,7 +6,7 @@ use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_routing::{compile_all, MaintenanceInputs, Snapshot, SnapshotHolder};
 use fast_proxy_store::repository::{audit, certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
-use fast_proxy_telemetry::{Metrics, ReloadOutcome, SyncResult};
+use fast_proxy_telemetry::{AuditResult, Metrics, ReloadOutcome, SyncResult};
 use fast_proxy_tls::certificate_readings;
 use tokio::sync::{broadcast, Mutex};
 
@@ -44,7 +44,7 @@ pub struct ConfigService {
     /// Held across persist + swap so commit order always equals swap order.
     writer: Mutex<()>,
     changes: broadcast::Sender<ConfigChanged>,
-    metrics: Arc<Metrics>,
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) tls: Arc<TlsState>,
     /// Names this process in audit entries, so a shared log says which instance wrote.
     pub(crate) instance: String,
@@ -345,6 +345,8 @@ impl ConfigService {
             Ok(applied) => {
                 self.metrics.set_config_version(applied.version);
                 self.metrics.config_reload(ReloadOutcome::Applied);
+                // The entry went in with the change, in the same transaction.
+                self.metrics.audit_entry(AuditResult::Ok);
             }
             Err(_) => self.metrics.config_reload(ReloadOutcome::Rejected),
         }

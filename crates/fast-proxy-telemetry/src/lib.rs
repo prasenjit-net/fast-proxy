@@ -1,6 +1,7 @@
 //! Access log, metrics, and live traffic statistics shared by both planes.
 
 mod access_log;
+mod admin_metrics;
 mod endpoint_events;
 mod maintenance_metrics;
 mod metrics;
@@ -8,6 +9,7 @@ mod tls_metrics;
 mod upstream_metrics;
 
 pub use access_log::{AccessLog, AccessRecord, DataPlaneFields, Plane};
+pub use admin_metrics::{AdminResult, AuditResult};
 pub use endpoint_events::{EndpointChange, EndpointEvent, EndpointEvents};
 pub use maintenance_metrics::MaintenanceReading;
 pub use metrics::{

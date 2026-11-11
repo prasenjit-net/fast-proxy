@@ -16,6 +16,8 @@ pub const TOKEN_MARKER: &str = "admin token (shown once, store it now): ";
 pub struct Running {
     pub child: Child,
     pub admin: std::net::SocketAddr,
+    /// The data plane's HTTP listener.
+    pub data: std::net::SocketAddr,
     lines: mpsc::Receiver<String>,
 }
 
@@ -65,6 +67,7 @@ pub fn start_with_config(
     let mut running = Running {
         child,
         admin,
+        data: ([127, 0, 0, 1], data_port).into(),
         lines,
     };
     let deadline = Instant::now() + Duration::from_secs(15);

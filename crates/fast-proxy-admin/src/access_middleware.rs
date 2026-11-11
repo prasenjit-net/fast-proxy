@@ -5,10 +5,10 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::HeaderValue;
+use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
-use fast_proxy_telemetry::{AccessRecord, Plane};
+use fast_proxy_telemetry::{AccessRecord, AdminResult, Plane};
 
 use crate::guard::{AuthFailure, Caller};
 use crate::refusal_audit::{self, Finished};
@@ -61,6 +61,9 @@ pub async fn record(
         actor: actor.as_deref(),
     };
     state.access_log.record(&record);
+    if let Some(result) = admin_result(response.status(), caller.is_some()) {
+        state.metrics.admin_request(result);
+    }
 
     refusal_audit::record(
         &state,
@@ -80,6 +83,20 @@ pub async fn record(
     response
 }
 
+/// How the guard ended a request, for the metrics: a refusal by its status, a
+/// served request only when a caller was authenticated (the open health check
+/// and the UI's own files are not admin requests).
+fn admin_result(status: StatusCode, authenticated: bool) -> Option<AdminResult> {
+    match status {
+        StatusCode::UNAUTHORIZED => Some(AdminResult::Unauthenticated),
+        StatusCode::FORBIDDEN => Some(AdminResult::Forbidden),
+        StatusCode::TOO_MANY_REQUESTS => Some(AdminResult::Throttled),
+        StatusCode::MISDIRECTED_REQUEST => Some(AdminResult::HostRefused),
+        _ if authenticated => Some(AdminResult::Ok),
+        _ => None,
+    }
+}
+
 /// The request target for the log, without the query of `/ws`.
 fn loggable_uri(req: &Request) -> String {
     if req.uri().path() == REDACTED_QUERY_PATH {
@@ -96,6 +113,24 @@ mod tests {
 
     fn request(uri: &str) -> Request {
         Request::builder().uri(uri).body(Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn a_refusal_is_counted_by_its_status_and_a_served_request_only_when_authenticated() {
+        let result = |status: u16, authenticated: bool| {
+            admin_result(StatusCode::from_u16(status).unwrap(), authenticated)
+        };
+        assert_eq!(result(401, false), Some(AdminResult::Unauthenticated));
+        assert_eq!(result(403, true), Some(AdminResult::Forbidden));
+        assert_eq!(result(429, false), Some(AdminResult::Throttled));
+        assert_eq!(result(421, false), Some(AdminResult::HostRefused));
+        assert_eq!(result(200, true), Some(AdminResult::Ok));
+        assert_eq!(
+            result(409, true),
+            Some(AdminResult::Ok),
+            "the handler refused, the guard did not"
+        );
+        assert_eq!(result(200, false), None, "health and the UI's files");
     }
 
     #[test]

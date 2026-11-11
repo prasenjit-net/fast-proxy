@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. ACME and maintenance mode are the next milestones.
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. Milestone 5 is complete as well: the admin plane needs a bearer token (two roles), every change is audited with its actor, maintenance mode closes the whole proxy, a subsystem or one route (503, TTL, bypass), the admin plane can serve TLS, and a CLI does the common operations. ACME is the next milestone (M4 was skipped).
 
 - Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
@@ -18,9 +18,18 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `src/main.rs` wires CLI parsing, configuration, and logging; `src/startup.rs`
   assembles the store, config service, data plane, and admin plane.
 - `src/config/` defines the TOML configuration (`[data_plane]`, `[admin]`, `[logging]`, `[ui]`) and its validation; `src/cli.rs` defines the CLI overrides.
-- `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs`, `api/` (one
-  file per resource: subsystems, hosts, upstreams, routes), `ws.rs`, `events.rs`, `error.rs` (shared API error
+- `crates/fast-proxy-admin/` is the Axum admin plane: `router.rs` and `route_table.rs`
+  (every route is registered with an `Access`: `Open`, `Needs(Action)` or `Ticket(Action)`),
+  `guard.rs` (throttle, bearer authentication, role check), `access_middleware.rs` and
+  `refusal_audit.rs` (the access log and the audit of refusals), `host_allow_list.rs`,
+  `security_headers.rs`, `tls_server.rs` (the admin listener over TLS), `api/` (one
+  file per resource: subsystems, hosts, upstreams, routes, certificates, tokens, maintenance,
+  audit, session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
+- `crates/fast-proxy-auth/` is token and secret handling with no HTTP and no database:
+  generation, SHA-256 hashing, constant-time comparison (`subtle`), roles, the failure
+  throttle, the WebSocket ticket store. `crates/fast-proxy-model/` holds the vocabulary
+  (`Role`, `Action`, `SecretHash`, `Cidr`, the maintenance types).
 - `crates/fast-proxy-telemetry/` holds `Metrics` (Prometheus registry, the single
   source for `/metrics` and the live traffic stats), the `AccessLog`
   (non-blocking; `flush()` at shutdown) and the `EndpointEvents` bus (endpoint
@@ -37,18 +46,24 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-health/` runs the active probes: `HealthEngine` keeps one
   prober task per endpoint of groups with checks on, reconciled with every
   config change, plus the status gauges sampler.
-- `crates/fast-proxy-routing/` compiles a `Config` into an immutable `Snapshot`
+- `crates/fast-proxy-routing/` compiles a `Config` (plus the maintenance scopes, through
+  `compile_all`) into an immutable `Snapshot`
   (host and route matchers, and each group as a `CompiledUpstream` holding its
   `Balancer` and endpoint runtime) shared through `SnapshotHolder`; also owns
   `build_upstream_uri` (path rewriting), used by both the data plane and the
-  admin resolver so they can never disagree. No I/O.
+  admin resolver so they can never disagree. Maintenance is decided by one pure function,
+  `CompiledMaintenance::check`, used by the data plane and the resolver alike. No I/O.
 - `crates/fast-proxy-store/` is SQLite persistence: `Database` (sync core, all
   writes via `Database::write`), `Store` (async handle on a dedicated thread),
   `repository/` (one file per resource), `revision/`. The data plane must never
   use it.
 - `crates/fast-proxy-config-service/` is the only writer: `ConfigService::apply`
-  validates (compiles) a change, persists it, swaps the live `Snapshot`, and
-  broadcasts `ConfigChanged`. All admin writes must go through it.
+  validates (compiles) a change, persists it with its revision and its audit row in one
+  transaction, swaps the live `Snapshot`, and broadcasts `ConfigChanged`. All admin writes
+  must go through it, each with a `ChangeContext` (who, from where, which request) and an
+  `Audited` description. It also owns tokens (`tokens.rs`), maintenance (`maintenance.rs`
+  and its sweeper), audit retention and `record_audit` (refusals, which never make a
+  revision).
 - `crates/fast-proxy-dataplane/` is the hyper proxy: `listener` (bind),
   `server` (accept loop), `pipeline` (host -> route -> `Forward`), `responses`
   (fixed 404/503/502/504), `selection` (pick an endpoint per request),
@@ -64,13 +79,19 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   reused across rebuilds), rustls server and client configurations.
   `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
   clients); never use it outside `dev-dependencies` and tests.
+- `src/cli/` and `src/commands/` are the subcommands (`maintenance`, `reload`, `status`,
+  `audit`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
+  proxy refused or a check failed, 2 usage or connection errors.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
 - `tests/` holds end-to-end tests (the real binary, and in-process stacks with real TLS clients in `tests/common/tls_stack.rs`); shared helpers (spawning
   a configured proxy, backends, a tiny HTTP client) are in `tests/common/mod.rs`,
   with `flaky.rs` (a backend that can be killed, revived, slowed and made to
   fail), `groups.rs` (admin helpers for groups and endpoints) and `load.rs` (a
-  keep-alive load client). `upstream_groups.rs` is the M2 exit criteria.
+  keep-alive load client). `upstream_groups.rs` is the M2 exit criteria; `operations.rs`,
+  `maintenance.rs`, `maintenance_under_load.rs`, `secret_hygiene.rs`, `cluster_operations.rs`,
+  `admin_auth.rs`, `admin_tls.rs` and `cli.rs` are M5's (`common/console.rs` starts the
+  binary with authentication on and reads the bootstrap token from its console).
   Tests that deliver real signals are `#[cfg(unix)]`.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
   (measured with `oha` against the `bench_backend` example in the data plane crate).
@@ -113,12 +134,34 @@ These invariants hold across the codebase; do not break them without an ADR in `
 - **The URL rewrite lives in `fast-proxy-routing`** (`build_upstream_uri`) so the
   proxy and the admin resolver cannot disagree.
 - **API errors never leak paths or storage detail**; the detail goes to the log.
-- **The admin plane has no authentication until M5**; keep it on loopback.
+- **Every admin route declares an `Access`** when it is registered (`RouteTable`); a test
+  fails for a route that does not, and for one that skips the guard. Only `/api/health` is
+  open. A new route needs an `Action` (`Read`, `Write`, `ManageTokens`, ...).
+- **Tokens, audit entries and maintenance scopes are not `Config`.** A revision never holds
+  them and a rollback never changes them (it must not revoke today's tokens or switch
+  maintenance on or off). A change to any of them is still a revision (summary only), so
+  other instances pick it up through the sync poll.
+- **Secrets are stored only as SHA-256 hashes, shown once, and compared in constant time**
+  (`fast-proxy-auth`). A token, a bypass secret, a WebSocket ticket or a key appears in no
+  log line, metric, audit entry, revision, event or API response (`tests/secret_hygiene.rs`
+  checks every one against the real binary). Every type that holds one has a redacted `Debug`.
+- **The audit row is written in the same transaction as the change.** Refusals (401, 403,
+  421, rejected writes) are written by the access middleware through `record_audit`;
+  entries for callers that are not authenticated are capped per minute for the process.
+- **Maintenance never reaches an upstream and never touches endpoint state.** The check
+  runs after the host matched and before an endpoint is selected; bypass is by effective
+  client address (`X-Forwarded-For` only from a trusted proxy) or a secret header, and the
+  bypass header is removed from the request before it is forwarded. Health checks keep
+  running; the admin plane is never in maintenance.
+- **The admin plane needs authentication.** `auth = "off"` is accepted only on a loopback
+  listener; a non-loopback listener needs TLS and authentication or it refuses to start. A
+  request that carries a private key needs an admin token over a protected channel
+  (loopback, or admin TLS).
 - **Certificate material and keys never appear in `Config`, revisions, logs, errors,
   metrics, events or API responses.** Private keys are write-only: sealed by the
   `Vault` before they reach the store, opened only into the `CertCache`. Every type
-  that holds one has a redacted `Debug`. Requests that carry a key are accepted only
-  from a loopback peer until M5.
+  that holds one has a redacted `Debug`. Requests that carry a key need an admin
+  token over a protected channel.
 - **Certificate and HTTPS writes go through `ConfigService` like every other write**
   (seal, store, reconcile development certificates, veto by compiling with the
   would-be certificates, commit, swap). There is no other reload path.
@@ -146,7 +189,7 @@ These rules are set by the project owner and apply to every session.
 - **Never commit or push unless the owner explicitly says so.** When a task is
   done, stop and report. The owner does a manual check first, then asks for the
   commit and push.
-- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `M2-PLAN.md`, `M3-PLAN.md`). Keep them
+- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `M2-PLAN.md`, `M3-PLAN.md`, `M5-PLAN.md`). Keep them
   current: tick tasks as they land and record decisions. Start a milestone by
   writing its `docs/Mn-PLAN.md`; record new design decisions as an ADR in
   `docs/adr/` and in the ROADMAP decision log.

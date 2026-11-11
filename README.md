@@ -59,6 +59,23 @@ change is recorded so it can be rolled back.
 - **Several instances, one database.** Instances sharing a database converge on
   the same configuration and certificates within a few seconds (see
   [Running several instances](#running-several-instances)).
+- **A protected admin plane.** Every admin call needs a bearer token (roles `admin`
+  and `viewer`, hashed at rest, shown once, revocable at once); the first start prints
+  a bootstrap token, and the CLI can make one from the machine if every token is lost.
+  The plane can serve HTTPS with a stored certificate, refuses a foreign `Host`
+  header, throttles repeated failures and sends a strict Content-Security-Policy.
+- **An audit log.** Every change records who made it, from where and what it did, in
+  the same transaction as the change; refusals and failed attempts are recorded too.
+  It is browsable, filterable and exportable, and never holds a secret.
+- **Maintenance mode.** Close the whole proxy, a subsystem or one route with a 503, a
+  message (or your own page), `Retry-After`, a TTL that ends it by itself, and a bypass
+  by network or secret header so you can verify a deploy before reopening. It survives
+  a restart, follows across instances, never touches an upstream and leaves health
+  checks running.
+- **A CLI and a complete admin UI.** `fast-proxy maintenance`, `reload`, `status`,
+  `audit`, `config validate` and the offline `token` commands; the UI adds sign-in,
+  tokens, the audit log, maintenance controls with a live countdown and banner, and a
+  routes and upstreams overview, read-only for a `viewer`.
 - **Graceful shutdown.** Ctrl-C stops accepting, closes idle connections, and
   lets in-flight requests and open WebSockets finish for up to
   `data_plane.shutdown_grace`.
@@ -160,7 +177,7 @@ and the decision records in [docs/adr/](docs/adr/).
 | Active and passive health checking, safe retries, drain and disable | Done | M2 |
 | TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
 | ACME automatic certificates | Planned | M4 |
-| Admin authentication, admin TLS, maintenance mode, audit log, CLI | Done so far | M5 (the UI pages follow) |
+| Admin authentication, admin TLS, maintenance mode, audit log, CLI, UI pages | Done | M5 |
 | Request sampling of unusual requests | Planned | M6 |
 | Rate and connection limits, hardening, 1.0 | Planned | M7 |
 
@@ -191,7 +208,8 @@ fast-proxy [OPTIONS] [COMMAND]
 Operations on a **running proxy** talk to its admin API. They find it from the
 `[admin]` section of the config file (or `--url`), and take a token from
 `--token`, `--token-file` (refused on Unix unless only you can read it), or
-`FAST_PROXY_TOKEN`, in that order of precedence. For an admin plane served over
+`FAST_PROXY_TOKEN`, in that order of precedence (prefer the file or the variable: a
+`--token` flag shows in the process list). For an admin plane served over
 TLS, `--ca-file <pem>` trusts the CA that issued its certificate and
 `--insecure` accepts a self-signed one. Add `--json` for the proxy's own answer.
 
@@ -435,6 +453,10 @@ read, and never serves the ones it cannot.
   on), `fastproxy_maintenance_responses_total{scope,subsystem,route}` and
   `fastproxy_maintenance_bypass_total{scope,subsystem}`; the dashboard's error
   rate does not count maintenance answers, which are intended.
+  The admin plane adds `fastproxy_admin_requests_total{result}` (`ok`,
+  `unauthenticated`, `forbidden`, `throttled`, `host_refused`) and
+  `fastproxy_audit_entries_total{outcome}` (`ok`, `denied`, `failed`): a rise in
+  `unauthenticated` or `throttled` is someone guessing tokens.
   TLS adds `fastproxy_tls_handshakes_total` (by listener, result and version),
   `fastproxy_tls_cert_expiry_seconds{cert,source}` and
   `fastproxy_tls_cert_unreadable{cert}` (labels are certificate names you chose),
@@ -591,6 +613,17 @@ cargo llvm-cov --workspace --summary-only   # coverage (needs cargo-llvm-cov)
 - `tests/reload_under_load.rs` also changes endpoints (drain, disable, add,
   remove) under load and checks that no request starts on an endpoint after the
   write that took it out returned.
+- `tests/operations.rs` is the M5 exit criteria against the real binary with
+  authentication on: each maintenance scope closes only what it covers and nothing
+  reaches the upstream, a bypass cannot be forged, health checks keep running, the audit
+  trail names who did what (refusals included), a token can be made, used and revoked,
+  and a flood of bad tokens is throttled. `tests/maintenance_under_load.rs` toggles
+  maintenance on every scope under traffic (no failed request, the sharp rule after each
+  toggle, and the backend sees exactly the requests answered 200),
+  `tests/secret_hygiene.rs` scans every file, response, event, metric and log line for
+  any secret, and `tests/cluster_operations.rs` runs two processes with different master
+  keys on one database (`admin_auth.rs`, `admin_tls.rs`, `maintenance.rs` and `cli.rs`
+  cover the rest). `docs/security-review-m5.md` records the review.
 - Timing measurements are `#[ignore]`d tests, run in release mode (see
   [docs/benchmarks.md](docs/benchmarks.md)).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check`
