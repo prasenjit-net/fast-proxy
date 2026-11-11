@@ -3,6 +3,7 @@ import { IconMenu } from "../icons";
 import { pageTitle } from "../lib/navigation";
 import ConnectionBadge from "./ConnectionBadge";
 import ThemeToggle from "./ThemeToggle";
+import UserMenu from "./UserMenu";
 
 export default function Topbar({ onMenu }: { onMenu: () => void }) {
   const { pathname } = useLocation();
@@ -16,6 +17,7 @@ export default function Topbar({ onMenu }: { onMenu: () => void }) {
       <div className="flex items-center gap-2">
         <ConnectionBadge />
         <ThemeToggle />
+        <UserMenu />
       </div>
     </header>
   );

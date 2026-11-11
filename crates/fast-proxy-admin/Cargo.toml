@@ -6,6 +6,7 @@ description = "Axum admin plane for fast-proxy: REST API, WebSocket push, and th
 publish = false
 
 [dependencies]
+fast-proxy-auth = { path = "../fast-proxy-auth" }
 fast-proxy-config-service = { path = "../fast-proxy-config-service" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
@@ -20,10 +21,17 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "service", "tokio", "http1", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-util = "0.7"
+tower = { workspace = true }
 rust-embed = "8"
 mime_guess = "2"
+tokio-stream = "0.1"
+bytes = "1"
 
 [dev-dependencies]
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
-tower = { workspace = true }
 http-body-util = { workspace = true }

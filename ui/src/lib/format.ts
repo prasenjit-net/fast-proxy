@@ -39,3 +39,16 @@ export function formatDurationMs(ms: number): string {
   if (ms < 60_000) return `${Number((ms / 1000).toFixed(1))}s`;
   return `${Number((ms / 60_000).toFixed(1))}m`;
 }
+
+/** Time left as a clock-like label: 45s, 12:05, 1:02:03; "ending" at zero. */
+export function formatCountdown(secondsLeft: number): string {
+  const total = Math.max(0, Math.floor(secondsLeft));
+  if (total === 0) return "ending";
+  const h = Math.floor(total / 3600);
+  const m = Math.floor(total / 60) % 60;
+  const s = total % 60;
+  const two = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${two(m)}:${two(s)}`;
+  if (m > 0) return `${m}:${two(s)}`;
+  return `${s}s`;
+}

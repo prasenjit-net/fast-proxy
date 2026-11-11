@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { caBundle, certificate, envelope, subsystemSummary, tlsStatus } from "../test/fixtures";
+import { adminStatus, caBundle, certificate, envelope, subsystemSummary, tlsStatus } from "../test/fixtures";
 import { apiError, mockApi, type Reply } from "../test/mockApi";
 import { renderPage } from "../test/renderPage";
 import type { Certificate } from "../lib/types";
@@ -216,6 +216,51 @@ describe("CertificatesPage", () => {
       await userEvent.click(dialog().getByRole("button", { name: "Delete bundle" }));
       await waitFor(() => expect(api.called("DELETE", "/api/ca-bundles/2")).toHaveLength(1));
       expect(await screen.findByText("Deleted CA bundle corp")).toBeInTheDocument();
+    });
+  });
+
+  describe("the admin plane's own certificate", () => {
+    const adminCert = certificate({ id: 8, name: "admin", source: "self_signed", usedBy: [] });
+
+    it("says which certificate this page is served with and warns that a generated one makes browsers warn", async () => {
+      renderCertificates({
+        certificates: [adminCert],
+        handlers: { "GET /api/status": { body: envelope({ admin: adminStatus({ tlsCertificate: "admin" }) }) } },
+      });
+      expect(await screen.findByText("Admin plane")).toBeInTheDocument();
+      expect(screen.getByText(/served over HTTPS with the certificate/i)).toBeInTheDocument();
+      expect(screen.getByText(/generated self-signed certificate, so browsers warn/i)).toBeInTheDocument();
+    });
+
+    it("marks it in the list, may be replaced, and cannot be renamed or deleted from here", async () => {
+      renderCertificates({
+        certificates: [adminCert, certificate({ id: 9, name: "other", usedBy: [] })],
+        handlers: { "GET /api/status": { body: envelope({ admin: adminStatus({ tlsCertificate: "admin" }) }) } },
+      });
+      await screen.findByText("Admin plane");
+      const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+      expect(within(rows[0]).getByText("admin plane")).toBeInTheDocument();
+      expect(within(rows[0]).getByRole("button", { name: "Replace" })).toBeInTheDocument();
+      expect(within(rows[0]).queryByRole("button", { name: /rename admin/i })).not.toBeInTheDocument();
+      expect(within(rows[0]).queryByRole("button", { name: /delete admin/i })).not.toBeInTheDocument();
+      expect(within(rows[1]).getByRole("button", { name: /rename other/i })).toBeInTheDocument();
+      expect(within(rows[1]).getByRole("button", { name: /delete other/i })).toBeInTheDocument();
+    });
+
+    it("does not warn about browsers when the admin certificate was uploaded", async () => {
+      renderCertificates({
+        certificates: [certificate({ id: 8, name: "admin", source: "uploaded" })],
+        handlers: { "GET /api/status": { body: envelope({ admin: adminStatus({ tlsCertificate: "admin" }) }) } },
+      });
+      await screen.findByText("Admin plane");
+      expect(screen.queryByText(/browsers warn about this page/i)).not.toBeInTheDocument();
+    });
+
+    it("explains that the admin plane is plain HTTP when it does not serve TLS", async () => {
+      renderCertificates({
+        handlers: { "GET /api/status": { body: envelope({ admin: adminStatus({ tlsCertificate: null }) }) } },
+      });
+      expect(await screen.findByText(/served over plain HTTP/i)).toBeInTheDocument();
     });
   });
 });

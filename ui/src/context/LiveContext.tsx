@@ -8,8 +8,13 @@
 // configuration) refetches every list and detail that shows it. An
 // endpointState event (an endpoint became unhealthy, was ejected, or came
 // back) refetches the live endpoint status and the upstream health summary.
+// A tokenChanged or maintenanceChanged event refetches everything that shows them
+// (the lists, the status card, the audit log).
 // A certState event (a certificate was uploaded, replaced, deleted or generated)
 // refetches the certificate list, the TLS state and the status card.
+// The socket cannot carry an Authorization header, so each connection first
+// trades the signed-in token for a single-use ticket (`POST /api/ws-ticket`)
+// and opens `/ws?ticket=…`; a reconnect gets a fresh ticket.
 // Connection transitions surface as toast bubbles, but only when a
 // previously-live connection drops — a backend that is simply not
 // running yet retries quietly.
@@ -22,7 +27,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { Traffic } from "../lib/api";
+import { api, type Traffic } from "../lib/api";
 import { refreshCertificates, refreshConfigData, refreshEndpointStatus } from "../lib/refreshConfigData";
 import { useToast } from "./ToastContext";
 
@@ -47,6 +52,16 @@ type ServerEvent =
   | { type: "configChanged"; version: number; summary: string; timestampMs: number }
   | { type: "activity"; kind: string; message: string; timestampMs: number }
   | { type: "certState"; change: string; certificate: string; timestampMs: number }
+  | { type: "tokenChanged"; change: "created" | "revoked"; token: string; timestampMs: number }
+  | {
+      type: "maintenanceChanged";
+      scope: "global" | "subsystem" | "route";
+      subsystem: string | null;
+      route: string | null;
+      active: boolean;
+      expiresAtMs: number | null;
+      timestampMs: number;
+    }
   | {
       type: "endpointState";
       subsystem: string;
@@ -84,10 +99,36 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const prepend = (activity: Activity) =>
       setActivities((current) => [activity, ...current.slice(0, ACTIVITY_LIMIT - 1)]);
 
-    const connect = () => {
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      socket = new WebSocket(`${proto}://${location.host}/ws`);
+    // The connection is gone (or could not be made): say so once and retry
+    // with a growing delay.
+    const dropped = () => {
+      if (disposed) return;
+      setStatus("offline");
+      if (wasOnline.current) {
+        pushRef.current("warning", "Live connection lost — reconnecting…");
+        wasOnline.current = false;
+      }
+      const delay = Math.min(15_000, 1000 * 2 ** attempts);
+      attempts += 1;
+      reconnectTimer = window.setTimeout(() => void connect(), delay);
+    };
+
+    const connect = async () => {
       setStatus("connecting");
+      let ticket: string;
+      try {
+        ticket = (await api.wsTicket()).ticket;
+      } catch {
+        dropped();
+        return;
+      }
+      if (disposed) return;
+      // The socket's address is the page's own origin with the ws(s) scheme; the
+      // ticket is added as a query parameter, which encodes it.
+      const url = new URL("/ws", location.href);
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      url.searchParams.set("ticket", ticket);
+      socket = new WebSocket(url);
 
       socket.onopen = () => {
         attempts = 0;
@@ -113,6 +154,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           ]);
         } else if (event.type === "configChanged") {
           void refreshConfigData(queryClientRef.current);
+        } else if (event.type === "tokenChanged" || event.type === "maintenanceChanged") {
+          void refreshConfigData(queryClientRef.current);
         } else if (event.type === "certState") {
           void refreshCertificates(queryClientRef.current);
         } else if (event.type === "endpointState") {
@@ -132,20 +175,10 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         }
       };
 
-      socket.onclose = () => {
-        if (disposed) return;
-        setStatus("offline");
-        if (wasOnline.current) {
-          pushRef.current("warning", "Live connection lost — reconnecting…");
-          wasOnline.current = false;
-        }
-        const delay = Math.min(15_000, 1000 * 2 ** attempts);
-        attempts += 1;
-        reconnectTimer = window.setTimeout(connect, delay);
-      };
+      socket.onclose = dropped;
     };
 
-    connect();
+    void connect();
 
     return () => {
       disposed = true;

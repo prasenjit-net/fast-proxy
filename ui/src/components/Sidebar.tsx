@@ -1,13 +1,18 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useConfig } from "../context/ConfigContext";
+import { useSession } from "../context/SessionContext";
 import {
   IconClock,
   IconDashboard,
   IconExternal,
+  IconAlertTriangle,
+  IconKey,
   IconLayers,
+  IconList,
   IconLock,
   IconSearch,
+  IconServer,
   IconSliders,
   IconX,
 } from "../icons";
@@ -15,17 +20,33 @@ import { isNavActive } from "../lib/navigation";
 import Logo from "./Logo";
 
 interface NavItem {
-  to: "/" | "/subsystems" | "/certificates" | "/revisions" | "/resolver" | "/settings";
+  to:
+    | "/"
+    | "/subsystems"
+    | "/routes"
+    | "/maintenance"
+    | "/certificates"
+    | "/revisions"
+    | "/resolver"
+    | "/tokens"
+    | "/audit"
+    | "/settings";
   label: string;
   icon: ReactElement;
+  /** Shown only to administrators. */
+  adminOnly?: boolean;
 }
 
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <IconDashboard size={20} /> },
   { to: "/subsystems", label: "Subsystems", icon: <IconLayers size={20} /> },
+  { to: "/routes", label: "Routes", icon: <IconServer size={20} /> },
+  { to: "/maintenance", label: "Maintenance", icon: <IconAlertTriangle size={20} /> },
   { to: "/certificates", label: "Certificates", icon: <IconLock size={20} /> },
   { to: "/revisions", label: "Revisions", icon: <IconClock size={20} /> },
   { to: "/resolver", label: "Resolver", icon: <IconSearch size={20} /> },
+  { to: "/audit", label: "Audit log", icon: <IconList size={20} /> },
+  { to: "/tokens", label: "Tokens", icon: <IconKey size={20} />, adminOnly: true },
   { to: "/settings", label: "Settings", icon: <IconSliders size={20} /> },
 ];
 
@@ -39,6 +60,7 @@ interface SidebarProps {
 
 export default function Sidebar({ collapsed, open, onClose }: SidebarProps) {
   const config = useConfig();
+  const { isAdmin } = useSession();
   const { pathname } = useLocation();
 
   // On mobile the drawer always shows labels; `md:hidden` only kicks in
@@ -80,7 +102,7 @@ export default function Sidebar({ collapsed, open, onClose }: SidebarProps) {
       </div>
 
       <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2.5">
-        {NAV.map((item) => (
+        {NAV.filter((item) => isAdmin || !item.adminOnly).map((item) => (
           <Link
             key={item.to}
             to={item.to}

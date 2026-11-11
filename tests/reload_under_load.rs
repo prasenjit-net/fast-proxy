@@ -244,7 +244,7 @@ fn live_config_edits_under_load_drop_no_requests_and_serve_only_valid_backends()
 
     // 6. The proxy's own accounting agrees: no 5xx, no rejected change, and
     //    one config version per write.
-    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "localhost", None);
     assert!(
         !metrics.contains("status_class=\"5xx\""),
         "the proxy counted 5xx responses"
@@ -419,10 +419,17 @@ fn endpoint_changes_under_load_drop_no_requests_and_a_closed_endpoint_gets_nothi
         {
             checked += 1;
             let body = &sample.outcome.as_ref().unwrap().1;
+            // The rule is strict; the numbers say how the request lay against the window, so
+            // a failure on a loaded machine can be told from a real race.
             assert_ne!(
-                body, span.backend,
-                "a request that began after {} was taken out still reached it",
-                span.backend
+                body,
+                span.backend,
+                "a request that began after {} was taken out still reached it: it began {:?} \
+                 into a {:?} window and took {:?}",
+                span.backend,
+                sample.started.duration_since(span.from),
+                span.until.duration_since(span.from),
+                sample.finished.duration_since(sample.started)
             );
         }
     }
@@ -444,7 +451,7 @@ fn endpoint_changes_under_load_drop_no_requests_and_a_closed_endpoint_gets_nothi
 
     // The proxy's own accounting agrees: no 5xx, no rejected change, one
     // config version per write.
-    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    let (_, metrics) = http(proxy.admin, "GET", "/metrics", "localhost", None);
     assert!(
         !metrics.contains("status_class=\"5xx\""),
         "the proxy counted 5xx responses"

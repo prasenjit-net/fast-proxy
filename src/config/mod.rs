@@ -13,7 +13,7 @@ use std::path::Path;
 use fast_proxy_admin::UiConfig;
 use serde::Deserialize;
 
-pub use admin::AdminConfig;
+pub use admin::{AdminAuth, AdminConfig, AdminTlsConfig};
 pub use data_plane::DataPlaneConfig;
 pub use error::ConfigError;
 pub use logging::LoggingConfig;
@@ -47,6 +47,11 @@ impl AppConfig {
             path: path.display().to_string(),
             source,
         })
+    }
+
+    /// Checks the final, override-applied configuration without touching the disk.
+    pub fn check(&self) -> Result<(), ConfigError> {
+        validate::check(self)
     }
 
     /// Checks the final, override-applied configuration and prepares the state directory.

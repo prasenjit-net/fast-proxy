@@ -7,6 +7,7 @@
 
 mod common;
 
+use fast_proxy_config_service::ChangeContext;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,7 +42,12 @@ async fn handshakes_never_fail_while_certificates_and_https_settings_change() {
     let first = ca.issue(&LeafSpec::new(&["shop.example.com"]));
     let shop_cert = stack
         .service
-        .upload_certificate("shop", &first.chain_pem, &first.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &first.chain_pem,
+            &first.key_pem,
+        )
         .await
         .unwrap()
         .value
@@ -49,6 +55,7 @@ async fn handshakes_never_fail_while_certificates_and_https_settings_change() {
     stack
         .service
         .set_subsystem_https(
+            &ChangeContext::system(),
             shop,
             HttpsPolicy {
                 enabled: true,
@@ -116,6 +123,7 @@ async fn handshakes_never_fail_while_certificates_and_https_settings_change() {
         stack
             .service
             .replace_certificate(
+                &ChangeContext::system(),
                 shop_cert,
                 CertificateChange {
                     cert_pem: Some(renewed.chain_pem.clone()),
@@ -130,7 +138,12 @@ async fn handshakes_never_fail_while_certificates_and_https_settings_change() {
         let name = format!("blog-{round}");
         let uploaded = stack
             .service
-            .upload_certificate(&name, &extra.chain_pem, &extra.key_pem)
+            .upload_certificate(
+                &ChangeContext::system(),
+                &name,
+                &extra.chain_pem,
+                &extra.key_pem,
+            )
             .await
             .unwrap()
             .value
@@ -142,13 +155,18 @@ async fn handshakes_never_fail_while_certificates_and_https_settings_change() {
         };
         stack
             .service
-            .set_subsystem_https(blog, attached)
+            .set_subsystem_https(&ChangeContext::system(), blog, attached)
             .await
             .unwrap();
 
         let invalid = stack
             .service
-            .upload_certificate("invalid", "garbage", &renewed.key_pem)
+            .upload_certificate(
+                &ChangeContext::system(),
+                "invalid",
+                "garbage",
+                &renewed.key_pem,
+            )
             .await;
         assert!(
             invalid.is_err(),
@@ -161,10 +179,14 @@ async fn handshakes_never_fail_while_certificates_and_https_settings_change() {
         };
         stack
             .service
-            .set_subsystem_https(blog, detached)
+            .set_subsystem_https(&ChangeContext::system(), blog, detached)
             .await
             .unwrap();
-        stack.service.delete_certificate(uploaded).await.unwrap();
+        stack
+            .service
+            .delete_certificate(&ChangeContext::system(), uploaded)
+            .await
+            .unwrap();
 
         // The open connection is untouched by all of this.
         let request = Request::builder()

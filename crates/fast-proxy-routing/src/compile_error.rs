@@ -52,4 +52,8 @@ pub enum CompileError {
         upstream: String,
         name: String,
     },
+    #[error("maintenance is set for subsystem {id}, which does not exist")]
+    UnknownMaintenanceSubsystem { id: i64 },
+    #[error("maintenance is set for route {id}, which does not exist")]
+    UnknownMaintenanceRoute { id: i64 },
 }

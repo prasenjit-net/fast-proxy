@@ -2,8 +2,11 @@ use axum::extract::State;
 use axum::http::Uri;
 use axum::Json;
 use fast_proxy_balancing::monotonic_ms;
+use std::net::IpAddr;
+
 use fast_proxy_routing::{
-    build_upstream_uri, redirect_target, CompiledRoute, CompiledSubsystem, Lookup, Snapshot,
+    build_upstream_uri, redirect_target, CompiledMaintenance, CompiledRoute, CompiledSubsystem,
+    Lookup, MaintenanceCheck, Snapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,11 +20,14 @@ const MAX_HOST_LEN: usize = 255;
 
 /// Body of `POST /api/resolve`: a request to dry-run against the live config.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolveRequest {
     host: String,
     /// Path with an optional query string, for example `/api/users?page=2`.
     path: String,
+    /// The client to evaluate maintenance bypass networks for; absent means an
+    /// address on no bypass network.
+    client_ip: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -72,6 +78,30 @@ pub struct Resolution {
     route: Option<MatchedRoute>,
     /// How the matched subsystem is reached over HTTPS; `None` for an unknown host.
     https: Option<HttpsResolution>,
+    /// The maintenance scopes that apply to the request; `None` when none is on.
+    maintenance: Option<MaintenanceResolution>,
+}
+
+/// Which maintenance scopes apply to a request and what each would do to it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaintenanceResolution {
+    /// The first scope that would answer with the maintenance 503, if any.
+    answered_by: Option<&'static str>,
+    scopes: Vec<ScopeResolution>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeResolution {
+    scope: &'static str,
+    message: String,
+    expires_at_ms: Option<i64>,
+    /// `respond`, `bypassed` (by the client address) or `inactive`.
+    outcome: &'static str,
+    /// A request carrying the secret in this header would also pass; the
+    /// secret itself can never be evaluated here.
+    bypass_header: Option<String>,
 }
 
 /// What HTTPS means for the request's host, as the data plane would act.
@@ -99,6 +129,7 @@ impl Resolution {
             subsystem,
             route: None,
             https: None,
+            maintenance: None,
         }
     }
 }
@@ -128,8 +159,53 @@ fn named(id: i64, subsystem: &CompiledSubsystem) -> NamedRef {
     }
 }
 
-/// Validates the request and parses the path into a URI.
-fn parse_target(body: &ResolveRequest) -> AppResult<Uri> {
+/// The maintenance scopes (global, subsystem, route) that apply, each judged by
+/// the same pure check the data plane uses.
+fn maintenance_resolution(
+    snapshot: &Snapshot,
+    subsystem: &CompiledSubsystem,
+    route: Option<&CompiledRoute>,
+    client: IpAddr,
+    now_ms: i64,
+) -> Option<MaintenanceResolution> {
+    let applying: Vec<&CompiledMaintenance> = [
+        snapshot.maintenance.as_deref(),
+        subsystem.maintenance.as_deref(),
+        route.and_then(|route| route.maintenance.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if applying.is_empty() {
+        return None;
+    }
+    let scopes: Vec<ScopeResolution> = applying
+        .into_iter()
+        .map(|scope| ScopeResolution {
+            scope: scope.scope.label(),
+            message: scope.settings().message.clone(),
+            expires_at_ms: scope.expires_at_ms(),
+            outcome: match scope.check(now_ms, client, None) {
+                MaintenanceCheck::Respond => "respond",
+                MaintenanceCheck::Bypassed => "bypassed",
+                MaintenanceCheck::Inactive => "inactive",
+            },
+            bypass_header: scope.bypass_header_name().map(str::to_string),
+        })
+        .collect();
+    let answered_by = scopes
+        .iter()
+        .find(|scope| scope.outcome == "respond")
+        .map(|scope| scope.scope);
+    Some(MaintenanceResolution {
+        answered_by,
+        scopes,
+    })
+}
+
+/// Validates the request: the path becomes a URI and the optional client
+/// address an IP.
+fn parse_target(body: &ResolveRequest) -> AppResult<(Uri, IpAddr)> {
     let mut errors = FieldErrors::default();
     if body.host.trim().is_empty() || body.host.len() > MAX_HOST_LEN {
         errors.add("host", "must be 1 to 255 characters");
@@ -146,10 +222,20 @@ fn parse_target(body: &ResolveRequest) -> AppResult<Uri> {
         errors.add("path", "must start with '/'");
         None
     };
+    let client = match body.client_ip.as_deref().map(str::trim) {
+        None | Some("") => Some(IpAddr::from([0, 0, 0, 0])),
+        Some(raw) => match raw.parse::<IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(_) => {
+                errors.add("clientIp", "is not an IP address");
+                None
+            }
+        },
+    };
     errors.finish()?;
-    match uri {
-        Some(uri) => Ok(uri),
-        None => unreachable!("finish() fails when the path is invalid"),
+    match (uri, client) {
+        (Some(uri), Some(client)) => Ok((uri, client)),
+        _ => unreachable!("finish() fails when a field is invalid"),
     }
 }
 
@@ -159,7 +245,7 @@ pub async fn resolve(
     State(state): State<SharedState>,
     ApiJson(body): ApiJson<ResolveRequest>,
 ) -> AppResult<Json<Envelope<Resolution>>> {
-    let uri = parse_target(&body)?;
+    let (uri, client) = parse_target(&body)?;
     let snapshot = state.config.snapshot_holder().load();
     let path = uri.path();
 
@@ -168,14 +254,20 @@ pub async fn resolve(
     let https = |subsystem: &CompiledSubsystem| {
         Some(https_resolution(&snapshot, subsystem, host, &uri, port))
     };
+    let now = crate::clock::now_ms();
+    let scopes = |subsystem: &CompiledSubsystem, route: Option<&CompiledRoute>| {
+        maintenance_resolution(&snapshot, subsystem, route, client, now)
+    };
     let resolution = match snapshot.lookup(host, path) {
         Lookup::UnknownHost => Resolution::unmatched("unknown_host", None),
         Lookup::SubsystemDisabled { id, subsystem } => Resolution {
             https: https(subsystem),
+            maintenance: scopes(subsystem, None),
             ..Resolution::unmatched("subsystem_disabled", Some(named(id.0, subsystem)))
         },
         Lookup::NoRoute { id, subsystem } => Resolution {
             https: https(subsystem),
+            maintenance: scopes(subsystem, None),
             ..Resolution::unmatched("no_route", Some(named(id.0, subsystem)))
         },
         Lookup::Matched {
@@ -190,6 +282,7 @@ pub async fn resolve(
                 subsystem: Some(named(id.0, subsystem)),
                 route: Some(matched_route(route.route, &uri, consumed)),
                 https: https(subsystem),
+                maintenance: scopes(subsystem, Some(route.route)),
             }
         }
     };

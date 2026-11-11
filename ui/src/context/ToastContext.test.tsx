@@ -36,6 +36,16 @@ describe("ToastContext", () => {
     vi.useRealTimers();
   });
 
+  it("leaves no timer running once the provider is gone", async () => {
+    const user = userEvent.setup({ delay: null });
+    const { unmount } = renderToasts();
+    await user.click(screen.getByText("push-success"));
+    await user.click(screen.getByText("push-error"));
+    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(2);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("renders a toast with title and message on push", async () => {
     const user = userEvent.setup({ delay: null });
     renderToasts();

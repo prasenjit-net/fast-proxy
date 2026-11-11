@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::events::Event;
 use crate::runtime_info::RuntimeInfo;
+use crate::security::AdminSecurity;
 use crate::traffic::TrafficSnapshot;
 use crate::ui_config::UiConfig;
 
@@ -32,11 +33,24 @@ pub struct AdminState {
     pub metrics: Arc<Metrics>,
     /// Endpoint health and ejection changes, forwarded to the UI.
     pub endpoint_events: EndpointEvents,
+    /// Authentication, the `Host` allow-list, the throttle and WebSocket tickets.
+    pub security: AdminSecurity,
 }
 
 pub type SharedState = Arc<AdminState>;
 
+/// What changed about one maintenance scope, for [`AdminState::maintenance_changed`].
+pub struct MaintenanceChange<'a> {
+    pub scope: &'static str,
+    pub subsystem: Option<&'a str>,
+    pub route: Option<&'a str>,
+    pub active: bool,
+    pub expires_at_ms: Option<i64>,
+}
+
 impl AdminState {
+    // Each argument is a distinct collaborator the admin plane is wired from.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ui: UiConfig,
         version: &'static str,
@@ -45,6 +59,7 @@ impl AdminState {
         runtime: RuntimeInfo,
         metrics: Arc<Metrics>,
         endpoint_events: EndpointEvents,
+        security: AdminSecurity,
     ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
@@ -60,6 +75,7 @@ impl AdminState {
             access_log,
             metrics,
             endpoint_events,
+            security,
         }
     }
 
@@ -81,6 +97,37 @@ impl AdminState {
             "certificate",
             format!("certificate {change}: {certificate}"),
         );
+    }
+
+    /// Tells every client a token was created or revoked, with a matching
+    /// activity entry. Only the token's name is sent.
+    pub fn token_changed(&self, change: &'static str, token: &str) {
+        self.broadcast(Event::TokenChanged {
+            change,
+            token: token.to_string(),
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        self.activity("token", format!("token {change}: {token}"));
+    }
+
+    /// Tells every client maintenance was turned on or off for a scope, with a
+    /// matching activity entry.
+    pub fn maintenance_changed(&self, change: MaintenanceChange<'_>) {
+        let verb = if change.active { "on" } else { "off" };
+        let target = match (change.subsystem, change.route) {
+            (Some(subsystem), Some(route)) => format!("{subsystem} {route}"),
+            (Some(subsystem), None) => subsystem.to_string(),
+            _ => "the whole proxy".to_string(),
+        };
+        self.broadcast(Event::MaintenanceChanged {
+            scope: change.scope,
+            subsystem: change.subsystem.map(str::to_string),
+            route: change.route.map(str::to_string),
+            active: change.active,
+            expires_at_ms: change.expires_at_ms,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        self.activity("maintenance", format!("maintenance {verb}: {target}"));
     }
 
     /// Push a human-readable entry to every client's activity feed.

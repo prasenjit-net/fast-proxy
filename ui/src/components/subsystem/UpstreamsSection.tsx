@@ -6,6 +6,7 @@ import { useRefreshConfigData } from "../../lib/refreshConfigData";
 import type { EndpointInput, SubsystemDetail, UpstreamSettings } from "../../lib/types";
 import UpstreamForm from "../forms/UpstreamForm";
 import Modal from "../Modal";
+import WriteOnly from "../WriteOnly";
 import UpstreamCard from "./UpstreamCard";
 
 /** The backends a subsystem's routes can send traffic to, with live health. */
@@ -26,9 +27,11 @@ export default function UpstreamsSection({ subsystem }: { subsystem: SubsystemDe
       <div className="card-head">
         <h2>Upstreams</h2>
         <span className="card-hint">where routes send traffic</span>
-        <button className="btn btn-secondary btn-sm ml-auto" onClick={() => setAdding(true)}>
-          <IconPlus size={14} /> Add upstream
-        </button>
+        <WriteOnly>
+          <button className="btn btn-secondary btn-sm ml-auto" onClick={() => setAdding(true)}>
+            <IconPlus size={14} /> Add upstream
+          </button>
+        </WriteOnly>
       </div>
       {subsystem.upstreams.length === 0 ? (
         <p className="text-[0.88rem] text-ink-muted">

@@ -5,6 +5,7 @@ use axum::Json;
 use fast_proxy_store::revision;
 use serde::Serialize;
 
+use super::change::Change;
 use super::config_view::ConfigView;
 use super::envelope::Envelope;
 use super::input::FieldErrors;
@@ -135,11 +136,12 @@ pub async fn get_revision(
 /// new one. The change is validated like any other write.
 pub async fn rollback_revision(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(version): Path<u64>,
 ) -> AppResult<Json<Envelope<RollbackResult>>> {
     let applied = state
         .config
-        .rollback(version)
+        .rollback(&context, version)
         .await
         .map_err(AppError::from)?;
     Ok(Json(Envelope {

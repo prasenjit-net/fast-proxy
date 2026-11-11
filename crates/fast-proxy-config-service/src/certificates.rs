@@ -7,6 +7,8 @@
 //! Certificate material never enters a revision: a material change is recorded
 //! as a summary-only revision (the configuration is unchanged).
 
+use std::sync::Arc;
+
 use fast_proxy_model::{
     CertificateId, CertificateMetadata, CertificateName, CertificateSource, FieldError,
     HostPattern, HttpsPolicy, SubsystemId,
@@ -15,12 +17,12 @@ use fast_proxy_store::repository::certificates::{self, NewCertificate};
 use fast_proxy_store::repository::subsystems;
 use fast_proxy_store::{Connection, Mutation, StoreError, SubsystemFields};
 use fast_proxy_tls::{
-    generate_self_signed, parse_chain, read_metadata, validate_with_key, CertEntry,
+    generate_self_signed, parse_chain, read_metadata, validate_with_key, CertEntry, CertHandle,
     CertificateState, KeyMaterial,
 };
 
 use crate::service::now_ms;
-use crate::{Applied, ConfigService};
+use crate::{Applied, Audited, ChangeContext, ConfigService};
 
 /// What an upload or replacement produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +66,7 @@ impl ConfigService {
     /// Stores an uploaded certificate and key, which seals the key.
     pub async fn upload_certificate(
         &self,
+        context: &ChangeContext,
         name: &str,
         cert_pem: &str,
         key_pem: &str,
@@ -72,13 +75,17 @@ impl ConfigService {
         let validated = fast_proxy_tls::validate_upload(cert_pem, key_pem, now_ms())?;
         let cert_pem = cert_pem.to_string();
         let tls = self.tls.clone();
-        self.apply(move |conn| {
-            let outcome = insert_uploaded(conn, &tls, &name, cert_pem, validated)?;
-            Ok(Mutation {
-                value: outcome,
-                summary: format!("certificate uploaded: {}", name.as_str()),
-            })
-        })
+        self.apply(
+            context,
+            Audited::new("certificate.upload", name.as_str()),
+            move |conn| {
+                let outcome = insert_uploaded(conn, &tls, &name, cert_pem, validated)?;
+                Ok(Mutation {
+                    value: outcome,
+                    summary: format!("certificate uploaded: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 
@@ -88,6 +95,7 @@ impl ConfigService {
     /// hosts it does not cover.
     pub async fn upload_certificate_for_subsystem(
         &self,
+        context: &ChangeContext,
         subsystem: SubsystemId,
         name: &str,
         cert_pem: &str,
@@ -97,76 +105,85 @@ impl ConfigService {
         let validated = fast_proxy_tls::validate_upload(cert_pem, key_pem, now_ms())?;
         let cert_pem = cert_pem.to_string();
         let tls = self.tls.clone();
-        self.apply(move |conn| {
-            let current = subsystems::get(conn, subsystem)?;
-            let uncovered = uncovered_hosts(&current.hosts, &validated.metadata);
-            if !current.hosts.is_empty() && uncovered.len() == current.hosts.len() {
-                return Err(FieldError::new(
-                    "certPem",
-                    "the certificate covers none of this subsystem's hosts",
-                )
-                .into());
-            }
-            let outcome = insert_uploaded(conn, &tls, &name, cert_pem, validated)?;
-            subsystems::update(
-                conn,
-                subsystem,
-                &SubsystemFields {
-                    name: current.name.clone(),
-                    enabled: current.enabled,
-                    description: current.description.clone(),
-                    https: HttpsPolicy {
-                        certificate_id: Some(outcome.id),
-                        ..current.https
+        self.apply(
+            context,
+            Audited::new("certificate.upload", name.as_str()),
+            move |conn| {
+                let current = subsystems::get(conn, subsystem)?;
+                let uncovered = uncovered_hosts(&current.hosts, &validated.metadata);
+                if !current.hosts.is_empty() && uncovered.len() == current.hosts.len() {
+                    return Err(FieldError::new(
+                        "certPem",
+                        "the certificate covers none of this subsystem's hosts",
+                    )
+                    .into());
+                }
+                let outcome = insert_uploaded(conn, &tls, &name, cert_pem, validated)?;
+                subsystems::update(
+                    conn,
+                    subsystem,
+                    &SubsystemFields {
+                        name: current.name.clone(),
+                        enabled: current.enabled,
+                        description: current.description.clone(),
+                        https: HttpsPolicy {
+                            certificate_id: Some(outcome.id),
+                            ..current.https
+                        },
                     },
-                },
-            )?;
-            Ok(Mutation {
-                value: (outcome, uncovered),
-                summary: format!(
-                    "certificate uploaded: {} (attached to {})",
-                    name.as_str(),
-                    current.name.as_str()
-                ),
-            })
-        })
+                )?;
+                Ok(Mutation {
+                    value: (outcome, uncovered),
+                    summary: format!(
+                        "certificate uploaded: {} (attached to {})",
+                        name.as_str(),
+                        current.name.as_str()
+                    ),
+                })
+            },
+        )
         .await
     }
 
     /// Generates and stores a self-signed certificate for `names`.
     pub async fn generate_self_signed(
         &self,
+        context: &ChangeContext,
         name: &str,
         names: Vec<String>,
     ) -> Result<Applied<CertificateId>, StoreError> {
         let name = CertificateName::parse(name)?;
         let tls = self.tls.clone();
-        self.apply(move |conn| {
-            let generated = generate_self_signed(&names, now_ms())
-                .map_err(|err| StoreError::invalid_field("names", &err))?;
-            let metadata = read_metadata(&parse_chain(&generated.chain_pem)?[0])?;
-            let vault = tls.vault_for_sealing(conn)?;
-            let id = certificates::next_id(conn)?;
-            let sealed = vault
-                .seal_key(id, name.as_str(), &generated.key.to_sealed_bytes())
-                .map_err(|err| StoreError::Internal(err.to_string()))?;
-            certificates::insert(
-                conn,
-                id,
-                &NewCertificate {
-                    name: name.clone(),
-                    source: CertificateSource::SelfSigned,
-                    chain_pem: generated.chain_pem,
-                    key_enc: sealed.ciphertext,
-                    key_nonce: sealed.nonce,
-                    metadata,
-                },
-            )?;
-            Ok(Mutation {
-                value: id,
-                summary: format!("certificate generated: {}", name.as_str()),
-            })
-        })
+        self.apply(
+            context,
+            Audited::new("certificate.generate", name.as_str()),
+            move |conn| {
+                let generated = generate_self_signed(&names, now_ms())
+                    .map_err(|err| StoreError::invalid_field("names", &err))?;
+                let metadata = read_metadata(&parse_chain(&generated.chain_pem)?[0])?;
+                let vault = tls.vault_for_sealing(conn)?;
+                let id = certificates::next_id(conn)?;
+                let sealed = vault
+                    .seal_key(id, name.as_str(), &generated.key.to_sealed_bytes())
+                    .map_err(|err| StoreError::Internal(err.to_string()))?;
+                certificates::insert(
+                    conn,
+                    id,
+                    &NewCertificate {
+                        name: name.clone(),
+                        source: CertificateSource::SelfSigned,
+                        chain_pem: generated.chain_pem,
+                        key_enc: sealed.ciphertext,
+                        key_nonce: sealed.nonce,
+                        metadata,
+                    },
+                )?;
+                Ok(Mutation {
+                    value: id,
+                    summary: format!("certificate generated: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 
@@ -177,6 +194,7 @@ impl ConfigService {
     /// it is never auto-replaced.
     pub async fn replace_certificate(
         &self,
+        context: &ChangeContext,
         id: CertificateId,
         change: CertificateChange,
     ) -> Result<Applied<UploadOutcome>, StoreError> {
@@ -186,73 +204,85 @@ impl ConfigService {
             .map(CertificateName::parse)
             .transpose()?;
         let tls = self.tls.clone();
-        self.apply(move |conn| {
-            let row = certificates::get(conn, id)?;
-            let old = &row.certificate;
-            let name = new_name.unwrap_or_else(|| old.name.clone());
-            let vault = tls.vault_for_sealing(conn)?;
-            let key = match &change.key_pem {
-                Some(pem) => fast_proxy_tls::parse_key(pem)?,
-                None => {
-                    let plain = vault
-                        .open_key(id, old.name.as_str(), &sealed_of(old))
-                        .map_err(|_| {
-                            StoreError::Conflict("the stored private key cannot be read".into())
-                        })?;
-                    KeyMaterial::from_sealed_bytes(&plain).ok_or_else(|| {
-                        StoreError::Internal("the stored private key is corrupt".into())
-                    })?
-                }
-            };
-            let material_changed = change.cert_pem.is_some() || change.key_pem.is_some();
-            let (chain_pem, metadata, warnings) = if material_changed {
-                let chain_pem = change
-                    .cert_pem
-                    .clone()
-                    .unwrap_or_else(|| old.chain_pem.clone());
-                let validated = validate_with_key(&chain_pem, key_clone(&key)?, now_ms())?;
-                ensure_users_covered(conn, id, &validated.metadata)?;
-                (chain_pem, validated.metadata, validated.warnings)
-            } else {
-                (old.chain_pem.clone(), old.metadata.clone(), Vec::new())
-            };
-            let sealed = vault
-                .seal_key(id, name.as_str(), &key.to_sealed_bytes())
-                .map_err(|err| StoreError::Internal(err.to_string()))?;
-            certificates::update(
-                conn,
-                id,
-                &NewCertificate {
-                    name: name.clone(),
-                    source: if material_changed {
-                        CertificateSource::Uploaded
-                    } else {
-                        old.source
+        self.apply(
+            context,
+            Audited::new("certificate.replace", format!("certificate:{}", id.0)),
+            move |conn| {
+                let row = certificates::get(conn, id)?;
+                let old = &row.certificate;
+                let name = new_name.unwrap_or_else(|| old.name.clone());
+                let vault = tls.vault_for_sealing(conn)?;
+                let key = match &change.key_pem {
+                    Some(pem) => fast_proxy_tls::parse_key(pem)?,
+                    None => {
+                        let plain = vault
+                            .open_key(id, old.name.as_str(), &sealed_of(old))
+                            .map_err(|_| {
+                                StoreError::Conflict("the stored private key cannot be read".into())
+                            })?;
+                        KeyMaterial::from_sealed_bytes(&plain).ok_or_else(|| {
+                            StoreError::Internal("the stored private key is corrupt".into())
+                        })?
+                    }
+                };
+                let material_changed = change.cert_pem.is_some() || change.key_pem.is_some();
+                let (chain_pem, metadata, warnings) = if material_changed {
+                    let chain_pem = change
+                        .cert_pem
+                        .clone()
+                        .unwrap_or_else(|| old.chain_pem.clone());
+                    let validated = validate_with_key(&chain_pem, key_clone(&key)?, now_ms())?;
+                    ensure_users_covered(conn, id, &validated.metadata)?;
+                    (chain_pem, validated.metadata, validated.warnings)
+                } else {
+                    (old.chain_pem.clone(), old.metadata.clone(), Vec::new())
+                };
+                let sealed = vault
+                    .seal_key(id, name.as_str(), &key.to_sealed_bytes())
+                    .map_err(|err| StoreError::Internal(err.to_string()))?;
+                certificates::update(
+                    conn,
+                    id,
+                    &NewCertificate {
+                        name: name.clone(),
+                        source: if material_changed {
+                            CertificateSource::Uploaded
+                        } else {
+                            old.source
+                        },
+                        chain_pem,
+                        key_enc: sealed.ciphertext,
+                        key_nonce: sealed.nonce,
+                        metadata,
                     },
-                    chain_pem,
-                    key_enc: sealed.ciphertext,
-                    key_nonce: sealed.nonce,
-                    metadata,
-                },
-            )?;
-            Ok(Mutation {
-                value: UploadOutcome { id, warnings },
-                summary: format!("certificate replaced: {}", name.as_str()),
-            })
-        })
+                )?;
+                Ok(Mutation {
+                    value: UploadOutcome { id, warnings },
+                    summary: format!("certificate replaced: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 
     /// Deletes a certificate; a `Conflict` while a subsystem uses it.
-    pub async fn delete_certificate(&self, id: CertificateId) -> Result<Applied<()>, StoreError> {
-        self.apply(move |conn| {
-            let name = certificates::get(conn, id)?.certificate.name;
-            certificates::delete(conn, id)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("certificate deleted: {}", name.as_str()),
-            })
-        })
+    pub async fn delete_certificate(
+        &self,
+        context: &ChangeContext,
+        id: CertificateId,
+    ) -> Result<Applied<()>, StoreError> {
+        self.apply(
+            context,
+            Audited::new("certificate.delete", format!("certificate:{}", id.0)),
+            move |conn| {
+                let name = certificates::get(conn, id)?.certificate.name;
+                certificates::delete(conn, id)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("certificate deleted: {}", name.as_str()),
+                })
+            },
+        )
         .await
     }
 
@@ -264,51 +294,93 @@ impl ConfigService {
     /// certificate in the same write.
     pub async fn update_subsystem(
         &self,
+        context: &ChangeContext,
         id: SubsystemId,
         edit: SubsystemEdit,
     ) -> Result<Applied<Vec<String>>, StoreError> {
         if let Some(https) = &edit.https {
             https.validate()?;
         }
-        self.apply(move |conn| {
-            let current = subsystems::get(conn, id)?;
-            let summary = format!("subsystem updated: {}", edit.name.as_str());
-            let uncovered = write_subsystem(conn, id, &current, edit)?;
-            Ok(Mutation {
-                value: uncovered,
-                summary,
-            })
-        })
+        self.apply(
+            context,
+            Audited::new("subsystem.update", format!("subsystem:{}", id.0)),
+            move |conn| {
+                let current = subsystems::get(conn, id)?;
+                let summary = format!("subsystem updated: {}", edit.name.as_str());
+                let uncovered = write_subsystem(conn, id, &current, edit)?;
+                Ok(Mutation {
+                    value: uncovered,
+                    summary,
+                })
+            },
+        )
         .await
     }
 
     /// Replaces only a subsystem's HTTPS settings (see [`Self::update_subsystem`]).
     pub async fn set_subsystem_https(
         &self,
+        context: &ChangeContext,
         id: SubsystemId,
         https: HttpsPolicy,
     ) -> Result<Applied<Vec<String>>, StoreError> {
         https.validate()?;
-        self.apply(move |conn| {
-            let current = subsystems::get(conn, id)?;
-            let summary = format!("https settings changed: {}", current.name.as_str());
-            let edit = SubsystemEdit {
-                name: current.name.clone(),
-                enabled: current.enabled,
-                description: current.description.clone(),
-                https: Some(https),
-            };
-            let uncovered = write_subsystem(conn, id, &current, edit)?;
-            Ok(Mutation {
-                value: uncovered,
-                summary,
-            })
-        })
+        self.apply(
+            context,
+            Audited::new("subsystem.https", format!("subsystem:{}", id.0)),
+            move |conn| {
+                let current = subsystems::get(conn, id)?;
+                let summary = format!("https settings changed: {}", current.name.as_str());
+                let edit = SubsystemEdit {
+                    name: current.name.clone(),
+                    enabled: current.enabled,
+                    description: current.description.clone(),
+                    https: Some(https),
+                };
+                let uncovered = write_subsystem(conn, id, &current, edit)?;
+                Ok(Mutation {
+                    value: uncovered,
+                    summary,
+                })
+            },
+        )
         .await
     }
 
     /// Every certificate with its state and the subsystems using it (metadata
     /// only; key material never leaves the vault).
+    /// The usable certificate stored under `name`, from the live cache. The
+    /// admin listener asks this on every handshake, so a replacement is live
+    /// for the next connection.
+    pub fn certificate_by_name(&self, name: &str) -> Option<Arc<CertHandle>> {
+        self.tls.cache().entries().find_map(|entry| match entry {
+            CertEntry::Ready(handle) if handle.name.as_str() == name => Some(handle.clone()),
+            _ => None,
+        })
+    }
+
+    /// Makes sure a certificate named `name` exists, generating a self-signed
+    /// one for `names` through the normal write path when there is none. An
+    /// existing certificate (uploaded or generated) is never replaced. Returns
+    /// whether one was generated.
+    pub async fn ensure_self_signed_certificate(
+        &self,
+        context: &ChangeContext,
+        name: &str,
+        names: Vec<String>,
+    ) -> Result<bool, StoreError> {
+        let exists = self
+            .list_certificates()
+            .await?
+            .iter()
+            .any(|certificate| certificate.name.as_str() == name);
+        if exists {
+            return Ok(false);
+        }
+        self.generate_self_signed(context, name, names).await?;
+        Ok(true)
+    }
+
     pub async fn list_certificates(&self) -> Result<Vec<CertificateSummary>, StoreError> {
         let cache = self.tls.cache();
         let applied = self

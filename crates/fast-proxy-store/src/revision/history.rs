@@ -15,6 +15,8 @@ pub struct RevisionSummary {
     pub version: u64,
     pub created_at_ms: i64,
     pub summary: String,
+    /// Who made the change: a token name, `system` or `cli`.
+    pub actor: String,
 }
 
 /// A full revision.
@@ -23,6 +25,7 @@ pub struct Revision {
     pub version: u64,
     pub created_at_ms: i64,
     pub summary: String,
+    pub actor: String,
     pub config: Config,
 }
 
@@ -38,15 +41,22 @@ pub fn current_version(conn: &Connection) -> Result<u64, StoreError> {
 }
 
 /// Stores `config` as the next revision, prunes old ones, returns the new version.
-pub fn append(conn: &Connection, summary: &str, config: &Config) -> Result<u64, StoreError> {
+pub fn append(
+    conn: &Connection,
+    actor: &str,
+    summary: &str,
+    config: &Config,
+) -> Result<u64, StoreError> {
     let version = current_version(conn)? + 1;
     conn.execute(
-        "INSERT INTO revision (version, created_at, summary, config) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO revision (version, created_at, summary, config, actor)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             i64::try_from(version).unwrap_or(i64::MAX),
             now_ms(),
             summary,
-            config_json::to_json(config, &certificates::names(conn)?)?
+            config_json::to_json(config, &certificates::names(conn)?)?,
+            actor
         ],
     )?;
     conn.execute(
@@ -64,7 +74,7 @@ pub fn list(
 ) -> Result<Vec<RevisionSummary>, StoreError> {
     let before = before.map_or(i64::MAX, |v| i64::try_from(v).unwrap_or(i64::MAX));
     let mut statement = conn.prepare(
-        "SELECT version, created_at, summary FROM revision
+        "SELECT version, created_at, summary, actor FROM revision
          WHERE version < ?1 ORDER BY version DESC LIMIT ?2",
     )?;
     let rows = statement.query_map(params![before, limit], |row| {
@@ -72,6 +82,7 @@ pub fn list(
             version: to_version(row.get(0)?),
             created_at_ms: row.get(1)?,
             summary: row.get(2)?,
+            actor: row.get(3)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -79,19 +90,20 @@ pub fn list(
 
 /// One revision with its full configuration.
 pub fn get(conn: &Connection, version: u64) -> Result<Revision, StoreError> {
-    let row: Option<(i64, String, String)> = conn
+    let row: Option<(i64, String, String, String)> = conn
         .query_row(
-            "SELECT created_at, summary, config FROM revision WHERE version = ?1",
+            "SELECT created_at, summary, config, actor FROM revision WHERE version = ?1",
             [i64::try_from(version).unwrap_or(i64::MAX)],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()?;
-    let (created_at_ms, summary, json) =
+    let (created_at_ms, summary, json, actor) =
         row.ok_or_else(|| StoreError::NotFound(format!("revision {version}")))?;
     Ok(Revision {
         version,
         created_at_ms,
         summary,
+        actor,
         config: config_json::from_json(&json)?,
     })
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatCountdown,
   formatDurationMs,
   formatNumber,
   formatPercent,
@@ -86,5 +87,15 @@ describe("formatDurationMs", () => {
     expect(formatDurationMs(1500)).toBe("1.5s");
     expect(formatDurationMs(120_000)).toBe("2m");
     expect(formatDurationMs(90_000)).toBe("1.5m");
+  });
+});
+
+describe("formatCountdown", () => {
+  it("reads like a clock and says ending at zero", () => {
+    expect(formatCountdown(45)).toBe("45s");
+    expect(formatCountdown(125)).toBe("2:05");
+    expect(formatCountdown(3723)).toBe("1:02:03");
+    expect(formatCountdown(0.4)).toBe("ending");
+    expect(formatCountdown(-5)).toBe("ending");
   });
 });

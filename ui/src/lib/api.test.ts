@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
+import { clearToken, getToken, setToken, setUnauthorizedHandler } from "./session";
 
 function mockFetchOnce(response: Partial<Response> & { json?: () => Promise<unknown> }) {
   const fetchMock = vi.fn().mockResolvedValue(response as Response);
@@ -210,5 +211,83 @@ describe("endpoint calls", () => {
     } else {
       expect(JSON.parse(init.body as string)).toEqual(body);
     }
+  });
+
+  describe("authentication", () => {
+    afterEach(() => {
+      clearToken();
+      setUnauthorizedHandler(null);
+    });
+
+    const sentHeaders = (fetchMock: ReturnType<typeof mockFetchOnce>) =>
+      (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+
+    it("sends the signed-in token as a bearer header on every request", async () => {
+      setToken("fp_1.secret");
+      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
+      await api.status();
+      expect(sentHeaders(fetchMock).Authorization).toBe("Bearer fp_1.secret");
+    });
+
+    it("sends no Authorization header when nobody is signed in", async () => {
+      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) });
+      await api.status();
+      expect(sentHeaders(fetchMock).Authorization).toBeUndefined();
+    });
+
+    it("signs the user out when the server answers 401 to a signed-in request", async () => {
+      const handler = vi.fn();
+      setUnauthorizedHandler(handler);
+      setToken("fp_1.secret");
+      mockFetchOnce({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: { code: "UNAUTHORIZED", message: "a valid admin token is required" } }),
+      });
+      await expect(api.status()).rejects.toMatchObject({ status: 401 });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(getToken()).toBeNull();
+    });
+
+    it("does not sign out for a 403 or a 409", async () => {
+      const handler = vi.fn();
+      setUnauthorizedHandler(handler);
+      setToken("fp_1.secret");
+      for (const status of [403, 409]) {
+        mockFetchOnce({ ok: false, status, json: () => Promise.resolve({ error: { code: "X", message: "no" } }) });
+        await expect(api.status()).rejects.toMatchObject({ status });
+      }
+      expect(handler).not.toHaveBeenCalled();
+      expect(getToken()).toBe("fp_1.secret");
+    });
+
+    it("checks a candidate token without storing it or signing anyone out", async () => {
+      const handler = vi.fn();
+      setUnauthorizedHandler(handler);
+      const fetchMock = mockFetchOnce({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: { code: "UNAUTHORIZED", message: "no" } }),
+      });
+      await expect(api.whoami("fp_9.wrong")).rejects.toMatchObject({ status: 401 });
+      expect(sentHeaders(fetchMock).Authorization).toBe("Bearer fp_9.wrong");
+      expect(handler).not.toHaveBeenCalled();
+      expect(getToken()).toBeNull();
+    });
+
+    it("builds the audit query from the filters and the page cursor", async () => {
+      const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ data: [] }) });
+      await api.audit({ actor: "ci", action: "route.create", outcome: "denied", sinceMs: 5 }, 42);
+      const url = new URL(fetchMock.mock.calls[0][0] as string, "http://x");
+      expect(url.pathname).toBe("/api/audit");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        limit: "50",
+        before: "42",
+        actor: "ci",
+        action: "route.create",
+        outcome: "denied",
+        since: "5",
+      });
+    });
   });
 });

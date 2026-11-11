@@ -3,10 +3,23 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{AppConfig, ConfigError};
+use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
+    check(config)?;
+    let state_dir = &config.data_plane.state_dir;
+    std::fs::create_dir_all(state_dir).map_err(|err| {
+        ConfigError::Invalid(format!(
+            "state_dir {} cannot be created: {err}",
+            state_dir.display()
+        ))
+    })
+}
+
+/// Checks cross-field rules and touches nothing on disk (so `config validate`
+/// can run against a machine where the proxy has never started).
+pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
     let listeners = &config.data_plane.listener;
     if listeners.is_empty() {
         return invalid("at least one [[data_plane.listener]] is required");
@@ -39,15 +52,56 @@ pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
         }
     }
 
-    validate_tls(config)?;
+    validate_admin(config)?;
+    validate_tls(config)
+}
 
-    let state_dir = &config.data_plane.state_dir;
-    std::fs::create_dir_all(state_dir).map_err(|err| {
-        ConfigError::Invalid(format!(
-            "state_dir {} cannot be created: {err}",
-            state_dir.display()
-        ))
-    })
+/// Checks `[admin]`: the admin plane may leave loopback only with authentication
+/// on, and only when the operator accepts the missing TLS explicitly.
+fn validate_admin(config: &AppConfig) -> Result<(), ConfigError> {
+    let admin = &config.admin;
+    if !admin.listen.ip().is_loopback() {
+        if admin.auth == AdminAuth::Off {
+            return invalid(format!(
+                "admin.auth = \"off\" is only allowed on a loopback address, but admin.listen is {}; \
+                 set admin.auth = \"required\" or listen on 127.0.0.1",
+                admin.listen
+            ));
+        }
+        if !admin.tls.enabled && !admin.allow_insecure_remote {
+            return invalid(format!(
+                "admin.listen {} is not a loopback address and admin TLS is off, so tokens would \
+                 cross the network in clear text; set admin.tls.enabled = true (or listen on \
+                 127.0.0.1, or set admin.allow_insecure_remote = true to accept clear text)",
+                admin.listen
+            ));
+        }
+    }
+    validate_admin_tls(&admin.tls)?;
+    for host in &admin.allowed_hosts {
+        let usable =
+            !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c == '/' || c == '@');
+        if !usable {
+            return invalid(format!(
+                "admin.allowed_hosts entry \"{host}\" is not a host name"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Checks `[admin.tls]`: when on, it needs a certificate name and at least one name.
+fn validate_admin_tls(tls: &AdminTlsConfig) -> Result<(), ConfigError> {
+    if !tls.enabled {
+        return Ok(());
+    }
+    if tls.certificate.trim().is_empty() {
+        return invalid("admin.tls.certificate must name the stored certificate to serve");
+    }
+    if tls.names.is_empty() || tls.names.iter().any(|name| name.trim().is_empty()) {
+        return invalid("admin.tls.names must list at least one non-empty name");
+    }
+    Ok(())
 }
 
 /// Checks `[data_plane.tls]` and the master key file. The listener clash is only

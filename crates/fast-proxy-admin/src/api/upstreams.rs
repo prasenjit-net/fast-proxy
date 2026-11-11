@@ -5,12 +5,14 @@ use fast_proxy_model::{SubsystemId, UpstreamGroupId};
 use fast_proxy_store::repository::{subsystems, upstreams};
 use fast_proxy_store::Mutation;
 
+use super::change::Change;
 use super::detail::subsystem_name;
 use super::envelope::{Envelope, VersionOnly};
 use super::json::ApiJson;
 use super::upstream_dto::{read_group, upstream_dto, UpstreamDto, UpstreamRequest};
 use crate::state::SharedState;
 use crate::AppResult;
+use fast_proxy_config_service::Audited;
 
 /// `GET /api/subsystems/{id}/upstreams`
 pub async fn list_upstreams(
@@ -36,6 +38,7 @@ pub async fn list_upstreams(
 /// `POST /api/subsystems/{id}/upstreams`: a group with its endpoints.
 pub async fn create_upstream(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<UpstreamRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<UpstreamDto>>)> {
@@ -43,15 +46,19 @@ pub async fn create_upstream(
     let parsed = body.parse(true)?;
     let applied = state
         .config
-        .apply(move |conn| {
-            let subsystem = subsystem_name(conn, id)?;
-            let endpoints = parsed.endpoints.unwrap_or_default();
-            let group = upstreams::create(conn, id, &parsed.fields, &endpoints)?;
-            Ok(Mutation {
-                value: upstream_dto(&read_group(conn, id, group)?),
-                summary: format!("upstream created: {} in {subsystem}", parsed.fields.name),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new("upstream.create", format!("subsystem:{}", id.0)),
+            move |conn| {
+                let subsystem = subsystem_name(conn, id)?;
+                let endpoints = parsed.endpoints.unwrap_or_default();
+                let group = upstreams::create(conn, id, &parsed.fields, &endpoints)?;
+                Ok(Mutation {
+                    value: upstream_dto(&read_group(conn, id, group)?),
+                    summary: format!("upstream created: {} in {subsystem}", parsed.fields.name),
+                })
+            },
+        )
         .await?;
     Ok((
         StatusCode::CREATED,
@@ -66,6 +73,7 @@ pub async fn create_upstream(
 /// policy. Endpoints have their own resources.
 pub async fn update_upstream(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path((id, upstream_id)): Path<(i64, i64)>,
     ApiJson(body): ApiJson<UpstreamRequest>,
 ) -> AppResult<Json<Envelope<UpstreamDto>>> {
@@ -73,14 +81,21 @@ pub async fn update_upstream(
     let parsed = body.parse(false)?;
     let applied = state
         .config
-        .apply(move |conn| {
-            let subsystem = subsystem_name(conn, id)?;
-            upstreams::update(conn, id, upstream_id, &parsed.fields)?;
-            Ok(Mutation {
-                value: upstream_dto(&read_group(conn, id, upstream_id)?),
-                summary: format!("upstream updated: {} in {subsystem}", parsed.fields.name),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new(
+                "upstream.update",
+                format!("subsystem:{}/upstream:{}", id.0, upstream_id.0),
+            ),
+            move |conn| {
+                let subsystem = subsystem_name(conn, id)?;
+                upstreams::update(conn, id, upstream_id, &parsed.fields)?;
+                Ok(Mutation {
+                    value: upstream_dto(&read_group(conn, id, upstream_id)?),
+                    summary: format!("upstream updated: {} in {subsystem}", parsed.fields.name),
+                })
+            },
+        )
         .await?;
     Ok(Json(Envelope {
         data: applied.value,
@@ -91,19 +106,27 @@ pub async fn update_upstream(
 /// `DELETE /api/subsystems/{id}/upstreams/{upstream_id}`
 pub async fn delete_upstream(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path((id, upstream_id)): Path<(i64, i64)>,
 ) -> AppResult<Json<VersionOnly>> {
     let (id, upstream_id) = (SubsystemId(id), UpstreamGroupId(upstream_id));
     let applied = state
         .config
-        .apply(move |conn| {
-            let subsystem = subsystem_name(conn, id)?;
-            upstreams::delete(conn, id, upstream_id)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("upstream deleted from {subsystem}"),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new(
+                "upstream.delete",
+                format!("subsystem:{}/upstream:{}", id.0, upstream_id.0),
+            ),
+            move |conn| {
+                let subsystem = subsystem_name(conn, id)?;
+                upstreams::delete(conn, id, upstream_id)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("upstream deleted from {subsystem}"),
+                })
+            },
+        )
         .await?;
     Ok(Json(VersionOnly {
         version: applied.version,

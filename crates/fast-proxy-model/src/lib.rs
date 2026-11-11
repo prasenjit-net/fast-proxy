@@ -5,6 +5,7 @@
 
 mod bounds;
 mod certificate;
+mod cidr;
 mod config;
 mod endpoint;
 mod endpoint_addr;
@@ -15,9 +16,12 @@ mod health_check;
 mod host_pattern;
 mod https_policy;
 mod lb_policy;
+mod maintenance;
 mod passive_health;
 mod path_prefix;
 mod retry;
+mod role;
+mod secret_hash;
 mod subsystem_name;
 mod timeout;
 mod upstream_tls;
@@ -26,6 +30,7 @@ pub use certificate::{
     covers, validate_san, CertificateId, CertificateMetadata, CertificateName, CertificateSource,
     MAX_CA_BUNDLES, MAX_CERTIFICATES, MAX_CHAIN_LENGTH, MAX_PEM_BYTES,
 };
+pub use cidr::Cidr;
 pub use config::{
     Config, HostId, RouteConfig, RouteId, SubsystemConfig, SubsystemId, UpstreamGroupConfig,
     UpstreamGroupId,
@@ -41,9 +46,16 @@ pub use health_check::{HealthCheck, HealthKind};
 pub use host_pattern::HostPattern;
 pub use https_policy::{Hsts, HttpsPolicy, RedirectMode, MAX_HSTS_AGE_SECS};
 pub use lb_policy::{HashKey, LbAlgorithm, LbPolicy};
+pub use maintenance::{
+    BodyContentType, BypassHeader, BypassRules, CustomBody, MaintenanceSettings, MaintenanceTarget,
+    DEFAULT_RETRY_AFTER_SECS, MAX_BODY_BYTES, MAX_BYPASS_CIDRS, MAX_MESSAGE_CHARS,
+    MAX_RETRY_AFTER_SECS,
+};
 pub use passive_health::PassiveHealth;
 pub use path_prefix::{RoutePrefix, UpstreamPrefix};
 pub use retry::{RetryBudget, RetryPolicy};
+pub use role::{Action, Role, TokenId, TokenName};
+pub use secret_hash::SecretHash;
 pub use subsystem_name::SubsystemName;
 pub use timeout::parse_timeout_ms;
 pub use upstream_tls::UpstreamTls;

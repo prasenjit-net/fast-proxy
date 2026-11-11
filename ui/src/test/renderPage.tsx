@@ -12,7 +12,9 @@ import {
 } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { SessionContext, type SessionValue } from "../context/SessionContext";
 import { ToastProvider } from "../context/ToastContext";
+import type { Role } from "../lib/types";
 
 type Page = () => ReactElement | null;
 
@@ -24,9 +26,19 @@ const STUBS: Record<string, Page> = {
   "/resolver": () => <div>resolver page</div>,
 };
 
+/** A signed-in session for page tests; the default is an administrator. */
+export function sessionOf(role: Role = "admin", name = "test-admin"): SessionValue {
+  return {
+    who: { name, role, tokenExpiresAtMs: null, protectedChannel: true, auth: "required" },
+    canWrite: role === "admin",
+    isAdmin: role === "admin",
+    signOut: () => undefined,
+  };
+}
+
 export function renderPage(
   component: Page,
-  { path, entry = path }: { path: string; entry?: string },
+  { path, entry = path, role = "admin" }: { path: string; entry?: string; role?: Role },
 ) {
   const rootRoute = createRootRoute({ component: Outlet });
   const routes = Object.entries({ ...STUBS, [path]: component }).map(([routePath, routeComponent]) =>
@@ -40,7 +52,9 @@ export function renderPage(
   const view = render(
     <QueryClientProvider client={client}>
       <ToastProvider>
-        <RouterProvider router={router} />
+        <SessionContext.Provider value={sessionOf(role)}>
+          <RouterProvider router={router} />
+        </SessionContext.Provider>
       </ToastProvider>
     </QueryClientProvider>,
   );

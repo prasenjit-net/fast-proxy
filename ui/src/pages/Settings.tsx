@@ -1,7 +1,8 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
 import { useConfig } from "../context/ConfigContext";
 import { useLive } from "../context/LiveContext";
+import { useSession } from "../context/SessionContext";
 import { useTheme, type ThemeMode } from "../context/ThemeContext";
 import { useToast } from "../context/ToastContext";
 import { IconMonitor, IconMoon, IconServer, IconSun } from "../icons";
@@ -28,6 +29,9 @@ export default function SettingsPage() {
   const { mode, setMode } = useTheme();
   const { status, traffic } = useLive();
   const { push, notifyError } = useToast();
+  const { who } = useSession();
+  const adminStatus = useQuery({ queryKey: ["status"], queryFn: api.status });
+  const admin = adminStatus.data?.data.admin;
 
   const healthCheck = useMutation({
     mutationFn: api.health,
@@ -61,6 +65,41 @@ export default function SettingsPage() {
           “System” follows the operating system preference. Until a choice is saved
           here, the UI uses the server-side default (<code>{config.ui.defaultTheme}</code>).
         </p>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>Admin access</h2>
+          <span className="card-hint">how this admin plane is protected</span>
+        </div>
+        <dl className="mb-1 flex flex-col">
+          <ConfigRow label="Signed in as">
+            {who.name} ({who.role})
+          </ConfigRow>
+          <ConfigRow label="Authentication">
+            {admin ? (admin.auth === "required" ? "required: a token for every call" : "off (loopback only)") : "…"}
+          </ConfigRow>
+          <ConfigRow label="Private keys">
+            {admin
+              ? admin.protectedChannel
+                ? "accepted: the channel is protected (loopback or TLS)"
+                : "refused: this channel is not protected"
+              : "…"}
+          </ConfigRow>
+          <ConfigRow label="Admin TLS certificate">
+            {admin ? (admin.tlsCertificate ?? "none: plain HTTP") : "…"}
+          </ConfigRow>
+          <ConfigRow label="Active tokens">{admin ? admin.activeTokens : "…"}</ConfigRow>
+          <ConfigRow label="Token expires">
+            {who.tokenExpiresAtMs === null ? "never" : new Date(who.tokenExpiresAtMs).toLocaleString()}
+          </ConfigRow>
+        </dl>
+        {admin?.auth === "off" ? (
+          <p role="note" className="mt-3 rounded-md bg-warn-soft p-3 text-[0.84rem] text-warn">
+            Authentication is off, so anyone who can reach this page can change the configuration.
+            That is allowed only on a loopback address.
+          </p>
+        ) : null}
       </section>
 
       <section className="card">

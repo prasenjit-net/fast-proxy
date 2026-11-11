@@ -302,3 +302,57 @@ there is nothing to win on the upstream hop: pooled HTTP/1.1 keep-alive
 connections to the upstream cost 1% to 3% (even over TLS), and HTTP/2 on the
 client side is slower than HTTP/1.1 on loopback. **Decision: upstream connections
 stay HTTP/1.1.** Revisit it only for a concrete need (an h2-only backend, gRPC).
+
+## M5 results: maintenance mode
+
+Run with `scripts/bench-m5.sh <results-file>` (builds the release binaries, starts one
+`bench_backend`, and drives the real proxy with `oha`; the admin plane runs with
+authentication off on loopback so the script needs no token). Same machine and tools as
+above; the proxy ran with `--log-level "info,access=off"`; each point is 6 s after a 2 s
+warm-up and nothing else ran on the machine. Plain HTTP, 2-byte responses. Latencies are
+normalised to milliseconds. The run was made with the bypass-header stripping in place and
+before the one-line `nosniff` header was added to the 503 (the header is inserted only on
+the answering path, so the first two tables are unaffected).
+
+### Idle cost: with nothing in maintenance, and with an unrelated subsystem in it
+
+The M3 budget carried over: plain HTTP within about 5% of M3 with maintenance off, and no
+visible cost for a scope elsewhere.
+
+| Connections | M3 (TLS off), rps | No maintenance, rps | vs M3 | Maintenance on *another* subsystem, rps | vs no maintenance |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 17,460 | 17,518 | +0.3% | 17,431 | -0.5% |
+| 16 | 84,190 | 83,057 | -1.3% | 82,938 | -0.1% |
+| 64 | 96,792 | 96,639 | -0.2% | 98,319 | +1.7% |
+
+Nothing M5 added to the request path (the maintenance lookup in the snapshot, the
+effective-client resolution, the bypass-header handling) is measurable when no scope
+applies: every difference is inside the run-to-run noise (about 10%). A request only reads
+the clock when a scope applies to it, and a scope on another subsystem is not looked at.
+p50 at one connection is 0.056 ms, as before.
+
+### Answering with the maintenance page
+
+The rate of 503s the proxy can serve. The request never reaches the backend (no connection,
+no retry budget, no endpoint state), so it is cheaper than a proxied request:
+
+| Connections | Subsystem in maintenance: 503/s (p50 / p99) | Whole proxy in maintenance with bypass rules that do not match: 503/s (p50 / p99) | Proxied request, for reference |
+|---:|---:|---:|---:|
+| 1 | 29,156 (0.033 / 0.052 ms) | 29,463 (0.033 / 0.046 ms) | 17,518 |
+| 16 | 159,992 (0.094 / 0.195 ms) | 162,967 (0.093 / 0.187 ms) | 83,057 |
+| 64 | 188,661 (0.325 / 0.739 ms) | 195,688 (0.313 / 0.670 ms) | 96,639 |
+
+Answering is about 1.7 to 2.0 times as fast as proxying, which is what skipping the upstream
+hop predicts, and it tracks the proxy's own ceiling on this machine (the load generator
+shares the cores). Evaluating a bypass rule that does not match (a network check and one
+constant-time compare of the presented header, only when the header is present) costs
+nothing visible next to building the page. Every request in these runs was answered 503 and
+none reached the backend.
+
+### Caveats
+
+The M1 caveats apply: one machine shared by the load generator, backend and proxy; one run
+per point; differences under about 10% are noise. Not measured: the cost of writing the
+maintenance state (a normal configuration write, see the M2 reload cost), and the admin
+plane's own throughput (it is not on the data path and is protected by the throttle, not
+tuned for load).

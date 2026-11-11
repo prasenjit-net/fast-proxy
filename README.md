@@ -13,8 +13,8 @@ change is recorded so it can be rolled back.
 > **Status: milestones 1 and 2 are feature-complete.** It is a working HTTP
 > reverse proxy with live configuration, load balancing across several endpoints
 > per upstream, active and passive health checking, and safe retries. TLS, ACME
-> and maintenance mode are the next milestones; see the [roadmap](docs/ROADMAP.md). The admin plane has **no
-> authentication yet** (see [Security notes](#security-notes)).
+> and maintenance mode are the next milestones; see the [roadmap](docs/ROADMAP.md). The admin plane needs a
+> bearer token (see [Security notes](#security-notes)).
 
 ## What it does today
 
@@ -59,6 +59,23 @@ change is recorded so it can be rolled back.
 - **Several instances, one database.** Instances sharing a database converge on
   the same configuration and certificates within a few seconds (see
   [Running several instances](#running-several-instances)).
+- **A protected admin plane.** Every admin call needs a bearer token (roles `admin`
+  and `viewer`, hashed at rest, shown once, revocable at once); the first start prints
+  a bootstrap token, and the CLI can make one from the machine if every token is lost.
+  The plane can serve HTTPS with a stored certificate, refuses a foreign `Host`
+  header, throttles repeated failures and sends a strict Content-Security-Policy.
+- **An audit log.** Every change records who made it, from where and what it did, in
+  the same transaction as the change; refusals and failed attempts are recorded too.
+  It is browsable, filterable and exportable, and never holds a secret.
+- **Maintenance mode.** Close the whole proxy, a subsystem or one route with a 503, a
+  message (or your own page), `Retry-After`, a TTL that ends it by itself, and a bypass
+  by network or secret header so you can verify a deploy before reopening. It survives
+  a restart, follows across instances, never touches an upstream and leaves health
+  checks running.
+- **A CLI and a complete admin UI.** `fast-proxy maintenance`, `reload`, `status`,
+  `audit`, `config validate` and the offline `token` commands; the UI adds sign-in,
+  tokens, the audit log, maintenance controls with a live countdown and banner, and a
+  routes and upstreams overview, read-only for a `viewer`.
 - **Graceful shutdown.** Ctrl-C stops accepting, closes idle connections, and
   lets in-flight requests and open WebSockets finish for up to
   `data_plane.shutdown_grace`.
@@ -81,7 +98,13 @@ cargo run --release
 # the proxy       -> http://0.0.0.0:8000
 ```
 
-Or just `make build` / `make run`. Then open the admin UI, create a subsystem,
+Or just `make build` / `make run`. The first start prints an **admin token** once
+(`admin token (shown once, store it now): fp_1.…`). Open the admin UI and paste it
+into the sign-in page; it is kept for that browser tab only. A `viewer` token shows
+the UI read-only (every control that would change something is hidden), and the
+**Tokens** page (admins) creates and revokes tokens, showing a new one's secret once.
+The **Audit log** page shows who changed what and who was refused, with filters and an
+NDJSON export. Then create a subsystem,
 add its host name, an upstream (your backend's `host:port` as its first
 endpoint) and a route with prefix `/`, and send a request with that `Host` header to port 8000.
 
@@ -154,17 +177,23 @@ and the decision records in [docs/adr/](docs/adr/).
 | Active and passive health checking, safe retries, drain and disable | Done | M2 |
 | TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
 | ACME automatic certificates | Planned | M4 |
-| Maintenance mode, admin authentication, audit log | Planned | M5 |
+| Admin authentication, admin TLS, maintenance mode, audit log, CLI, UI pages | Done | M5 |
 | Request sampling of unusual requests | Planned | M6 |
 | Rate and connection limits, hardening, 1.0 | Planned | M7 |
 
 ## CLI
 
+With no subcommand `fast-proxy` runs the server. The flags below override the
+config file and go **before** a subcommand; `--config` and `--database` also work
+after one.
+
 ```
-fast-proxy [OPTIONS]
+fast-proxy [OPTIONS] [COMMAND]
 
   -c, --config <CONFIG>             Path to the TOML configuration file [default: config.toml]
       --admin-listen <ADDR>         Override [admin].listen
+      --admin-auth <required|off>   Override [admin].auth (off only on loopback)
+      --admin-tls                   Serve the admin plane over HTTPS
       --database <PATH>             Override [data_plane].database
       --state-dir <PATH>            Override [data_plane].state_dir
       --log-level <LOG_LEVEL>       Override [logging].level (trace, debug, info, warn, error)
@@ -173,6 +202,40 @@ fast-proxy [OPTIONS]
       --tls / --no-tls              Turn TLS on or off, overriding [data_plane.tls].enabled
       --https-listen <ADDR>         Override [data_plane.tls].listen (the HTTPS address)
 ```
+
+### Subcommands
+
+Operations on a **running proxy** talk to its admin API. They find it from the
+`[admin]` section of the config file (or `--url`), and take a token from
+`--token`, `--token-file` (refused on Unix unless only you can read it), or
+`FAST_PROXY_TOKEN`, in that order of precedence (prefer the file or the variable: a
+`--token` flag shows in the process list). For an admin plane served over
+TLS, `--ca-file <pem>` trusts the CA that issued its certificate and
+`--insecure` accepts a self-signed one. Add `--json` for the proxy's own answer.
+
+```sh
+export FAST_PROXY_TOKEN=fp_1...                      # the token printed on first start
+
+fast-proxy maintenance on --ttl 30m --message "Upgrading the database" \
+    --bypass-cidr 10.0.0.0/8                         # the whole proxy
+fast-proxy maintenance on --subsystem shop --route /api --ttl 5m
+fast-proxy maintenance status                        # what is on, with countdowns
+fast-proxy maintenance off --subsystem shop
+fast-proxy reload                                    # re-read the database now
+fast-proxy status                                    # version, listeners, admin protection
+fast-proxy audit --limit 20 --actor ci               # the audit tail, oldest first
+```
+
+| Command | Works on | Does |
+|---|---|---|
+| `maintenance on\|off\|status` | a running proxy | `--subsystem <name\|id>`, `--route <prefix>` choose the scope (default: the whole proxy); `on` takes `--ttl`, `--message`, `--retry-after`, `--bypass-cidr` (repeatable), `--bypass-header` and `--bypass-secret` |
+| `reload`, `status`, `audit` | a running proxy | as above |
+| `config validate [--check-database [PATH]]` | files only | parses and checks the config file with the command-line overrides applied, **creating nothing**; with `--check-database` it also opens the database **read-only** and compiles the stored configuration (certificates stay sealed, so HTTPS settings are not checked against them, and the output says so) |
+| `token create\|list\|revoke` | the database file | the way back in when every token is lost: it works directly on the file (also while the proxy runs, which picks the change up at its next sync), prints a new token **once**, never lists a secret, writes an audit entry as `cli`, and keeps the last admin token from being revoked |
+
+Exit codes: **0** success, **1** the proxy refused the request or the check
+failed (the message carries the proxy's own reason and names each bad field),
+**2** usage or connection errors (an unreachable proxy, a bad flag, a missing file).
 
 ## Configuration (`config.toml`)
 
@@ -193,7 +256,13 @@ fast-proxy [OPTIONS]
 | `data_plane.tls.reject_unknown_sni` | `false` | Fail the handshake for an unknown name instead of presenting a placeholder certificate |
 | `data_plane.tls.handshake_timeout`, `max_concurrent_handshakes` | `10s`, `256` | Bounds on handshakes so a flood cannot starve established traffic |
 | `data_plane.tls.http2_max_concurrent_streams`, `http2_max_header_list_size`, `http2_keep_alive_interval`, `http2_keep_alive_timeout` | `128`, `65536`, `30s`, `20s` | HTTP/2 limits |
-| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener (no authentication yet, keep it on loopback) |
+| `admin.listen` | `127.0.0.1:9000` | Admin plane address; must differ from every listener. Leaving loopback needs `admin.tls.enabled = true` (or, to accept clear-text tokens, `admin.allow_insecure_remote = true`) |
+| `admin.auth` | `required` | `required`: every API call and the WebSocket need a token; `off` is accepted only on loopback and is warned about |
+| `admin.allowed_hosts` | `[]` | Extra names accepted in the `Host` header (the listen address and `localhost`, `127.0.0.1`, `[::1]` always are) |
+| `admin.allow_insecure_remote` | `false` | Accept a non-loopback admin listener without TLS; tokens then cross the network in clear text |
+| `admin.tls.enabled` | `false` | Serve the admin plane over HTTPS (the plain port is then not open). `--admin-tls` turns it on |
+| `admin.tls.names` | `["localhost"]` | Names and IP addresses of the self-signed certificate generated the first time it is needed |
+| `admin.tls.certificate` | `admin` | The stored certificate to serve, by name. Upload a certificate and key of that name on the Certificates page to replace the generated one, live |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
@@ -209,9 +278,22 @@ message.
 
 ## API
 
+All routes except `/api/health` need `Authorization: Bearer <token>`; a missing or wrong token is 401, a `viewer` token on anything but a read is 403.
+
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | Liveness + version |
+| GET | `/api/health` | Liveness + version (open) |
+| GET | `/api/whoami` | The caller's token name and role, its expiry, and whether the channel is protected |
+| POST | `/api/ws-ticket` | A single-use ticket (30 s) to open `/ws?ticket=…`: browsers cannot set headers on a WebSocket |
+| GET, POST | `/api/tokens` | List / create (`name`, `role`, optional `expiresInDays`; the secret appears only in the creation response) |
+| DELETE | `/api/tokens/{id}` | Revoke at once (409 for the last usable admin token) |
+| POST | `/api/reload` | Re-read the database now and recompile; answers with the live version |
+| GET | `/api/audit?limit=&before=&actor=&action=&outcome=&since=` | The audit log, newest first, paged (`nextBefore`); readable by a `viewer` |
+| GET | `/api/audit/export?since=` | Every entry since a time as NDJSON, oldest first, streamed (admin only) |
+| GET | `/api/maintenance` | Every maintenance scope that is on, with its target names, message, `secondsLeft`, who set it and its bypass rules (never a secret) |
+| PUT, DELETE | `/api/maintenance/global` | Turn maintenance on (replacing earlier settings) or off for the whole proxy |
+| PUT, DELETE | `/api/subsystems/{id}/maintenance` | The same for one subsystem |
+| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}/maintenance` | The same for one route |
 | GET | `/api/config` | UI bootstrap config (the `[ui]` table, camelCased) |
 | GET | `/api/status` | Listeners, database path, subsystem counts, upstream health summary, uptime, live config version |
 | GET | `/api/traffic` | Latest live traffic sample: requests/s, 5xx error rate, connections, per subsystem |
@@ -241,7 +323,7 @@ message.
 | DELETE | `/api/ca-bundles/{id}` | Delete (409 while an upstream group names it) |
 | GET | `/ws` | WebSocket: server-push events |
 
-A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) are accepted **only from a loopback peer** until admin authentication exists.
+A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) need an `admin` token and a **protected channel** (the admin plane on loopback, or served over TLS).
 
 Config responses are `{ "data": ..., "version": N }`, where `version` is the config
 revision the response reflects (for a write, the one it created); deletes return
@@ -270,6 +352,51 @@ WebSocket events are JSON discriminated by `type`:
 { "type": "certState", "change": "uploaded", "certificate": "shop", "timestampMs": 0 }
 { "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```
+
+## Maintenance mode
+
+Take a whole proxy, one subsystem or one route out of service **temporarily**,
+with an explanation, instead of disabling it (a disabled subsystem answers a bare
+503 with no expiry). A request in a maintenance scope gets a **503** with
+`Retry-After`, `Cache-Control: no-store` and a page (HTML, plain text or JSON,
+chosen by `Accept`); it **never reaches an upstream**, consumes no retry budget
+and touches no endpoint's health. Unknown hosts are still 404, plain HTTP still
+redirects to HTTPS, and a WebSocket handshake gets the 503 (connections already
+upgraded stay open). Health checks keep running, so the group is ready the moment
+maintenance ends, and the admin plane is never in maintenance.
+
+```sh
+# the whole proxy for 30 minutes, with a custom message and a way in for you
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"Upgrading the database","ttlSecs":1800,
+       "bypass":{"cidrs":["10.0.0.0/8"],"header":"X-Maintenance-Pass"}}' \
+  http://127.0.0.1:9000/api/maintenance/global
+# -> {"data":{...},"version":N,"bypassSecret":"<shown once>"}
+
+curl -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9000/api/maintenance/global
+```
+
+- **Scopes** are global, subsystem and route; any applicable scope that is on and
+  does not let the request through answers it (widest first). A bypass belongs to
+  its scope: passing a route's scope does not pass a subsystem-wide one.
+- **`ttlSecs`** (up to 30 days) ends it by itself: the clock is checked on every
+  request, so the end is exact, and a sweeper then clears the stored row. A
+  restart during maintenance stays in maintenance.
+- **Bypass** lets chosen source networks (`bypass.cidrs`) or requests carrying a
+  secret header (`bypass.header`; the secret is generated and returned once if
+  you do not give one of at least 16 characters) through, so you can verify a
+  deploy before reopening. A request that passed carries
+  `X-Maintenance-Bypass: <scope>`. The source address is the peer's, or the
+  client behind a `trusted_proxies` peer, never a forged `X-Forwarded-For`.
+- **`message`**, `body` and `contentType` (`text/html`, `text/plain`,
+  `application/json`, up to 16 KiB) shape the answer; the built-in page escapes
+  the message. `retryAfterSecs` overrides the value derived from the TTL (120 s
+  when there is none).
+- A **rollback never changes maintenance**, and maintenance is not part of the
+  stored configuration. `POST /api/resolve` (optionally with `clientIp`) shows
+  which scopes apply to a host and what each would do.
+- To take a *backend* out of rotation use an endpoint's `draining`/`disabled`
+  state instead; maintenance is for a *site*.
 
 ## TLS
 
@@ -322,6 +449,14 @@ read, and never serves the ones it cannot.
   `fastproxy_endpoint_ejections_total` and `fastproxy_health_checks_total`; per
   group `fastproxy_upstream_retries_total`, `fastproxy_retry_budget_exhausted_total`
   and `fastproxy_upstream_panic_total`; and `fastproxy_requests_cancelled_total`.
+  Maintenance adds `fastproxy_maintenance_active{scope,subsystem,route}` (1 while
+  on), `fastproxy_maintenance_responses_total{scope,subsystem,route}` and
+  `fastproxy_maintenance_bypass_total{scope,subsystem}`; the dashboard's error
+  rate does not count maintenance answers, which are intended.
+  The admin plane adds `fastproxy_admin_requests_total{result}` (`ok`,
+  `unauthenticated`, `forbidden`, `throttled`, `host_refused`) and
+  `fastproxy_audit_entries_total{outcome}` (`ok`, `denied`, `failed`): a rise in
+  `unauthenticated` or `throttled` is someone guessing tokens.
   TLS adds `fastproxy_tls_handshakes_total` (by listener, result and version),
   `fastproxy_tls_cert_expiry_seconds{cert,source}` and
   `fastproxy_tls_cert_unreadable{cert}` (labels are certificate names you chose),
@@ -346,14 +481,36 @@ read, and never serves the ones it cannot.
 
 ## Security notes
 
-- **The admin plane has no authentication yet** (authentication arrives in M5).
-  It binds to `127.0.0.1` by default and logs a warning if you bind it
-  elsewhere. Anyone who can reach it can reconfigure the proxy, so do not
-  expose it to a network you do not trust.
+- **Everything is audited.** Each committed change writes an audit entry in the
+  same transaction as the change and its revision, naming who (the token's name
+  and role), from where, what and the revision it created. The log also records
+  what changed nothing: authentication failures (with the reason, and whether that
+  failure tripped the throttle), refusals (`access.denied`), a foreign `Host`, a
+  write the server rejected (400 or 409), and a token's first use. Entries hold
+  names, ids and a short reason, never a body, a token, a ticket, a key or a PEM.
+  Entries for unauthenticated requests are capped at 60 a minute for the whole
+  process, so a flood cannot grow the log; the log is pruned to 90 days and
+  200,000 rows.
+- **The admin plane needs a bearer token.** Every API call and the WebSocket
+  need one (only `GET /api/health` is open). The first start prints a bootstrap
+  admin token once; `POST /api/tokens` creates more, with the role `admin`
+  (everything) or `viewer` (read-only), and `DELETE /api/tokens/{id}` revokes
+  one at once. Only a hash is stored, and the last admin token cannot be
+  revoked. A `Host` header that is not an allowed admin name is refused (DNS
+  rebinding), ten failed attempts from one address are throttled, and
+  responses carry a strict `Content-Security-Policy`. The plane still binds to
+  `127.0.0.1` by default. Leaving loopback needs **admin TLS**
+  (`admin.tls.enabled`): the plane then serves HTTPS with a certificate stored in
+  the database (a self-signed `admin` one is generated the first time; browsers
+  warn about it until you upload your own of the same name), and the plain port
+  is not open. The only way to leave loopback without TLS is the explicit,
+  warned `admin.allow_insecure_remote = true`, which sends tokens in clear text.
+  A reverse proxy in front makes every request look local to the admin plane, so
+  it needs its own access control.
 - **Private keys are write-only.** No endpoint, log line, metric, event, error or
   revision ever contains one; they are stored encrypted (AES-256-GCM) under a master
-  key that lives outside the database, and requests that carry a key are accepted
-  only from the machine the proxy runs on until authentication exists. See
+  key that lives outside the database, and requests that carry a key need an `admin`
+  token over a protected channel (the admin plane on loopback, or served over TLS). See
   [docs/security-review-m3.md](docs/security-review-m3.md).
 - **Back up the master key separately from the database.** The database alone does
   not expose the keys, and cannot be used without the master key: if the key is
@@ -456,6 +613,17 @@ cargo llvm-cov --workspace --summary-only   # coverage (needs cargo-llvm-cov)
 - `tests/reload_under_load.rs` also changes endpoints (drain, disable, add,
   remove) under load and checks that no request starts on an endpoint after the
   write that took it out returned.
+- `tests/operations.rs` is the M5 exit criteria against the real binary with
+  authentication on: each maintenance scope closes only what it covers and nothing
+  reaches the upstream, a bypass cannot be forged, health checks keep running, the audit
+  trail names who did what (refusals included), a token can be made, used and revoked,
+  and a flood of bad tokens is throttled. `tests/maintenance_under_load.rs` toggles
+  maintenance on every scope under traffic (no failed request, the sharp rule after each
+  toggle, and the backend sees exactly the requests answered 200),
+  `tests/secret_hygiene.rs` scans every file, response, event, metric and log line for
+  any secret, and `tests/cluster_operations.rs` runs two processes with different master
+  keys on one database (`admin_auth.rs`, `admin_tls.rs`, `maintenance.rs` and `cli.rs`
+  cover the rest). `docs/security-review-m5.md` records the review.
 - Timing measurements are `#[ignore]`d tests, run in release mode (see
   [docs/benchmarks.md](docs/benchmarks.md)).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check`

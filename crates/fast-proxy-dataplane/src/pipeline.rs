@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fast_proxy_routing::{
-    redirect_target, CompiledRoute, CompiledSubsystem, Lookup, Snapshot, SnapshotHolder,
+    redirect_target, CompiledMaintenance, CompiledRoute, CompiledSubsystem, Lookup, Snapshot,
+    SnapshotHolder,
 };
 use fast_proxy_telemetry::{DataPlaneFields, Metrics, NO_ROUTE, UNMATCHED_SUBSYSTEM};
 use http::{header, Request, Response};
@@ -11,12 +12,14 @@ use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
 use crate::connections::{ConnectionContext, TlsConnection};
+use crate::maintenance::{self, evaluate, BypassedScopes, ScopeOutcome, BYPASS_HEADER};
 use crate::pending_request::PendingRequest;
 use crate::redirect::{hsts_value, render_redirect};
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
 use crate::responses::accepts_json;
 use crate::selection::select_endpoint;
 use crate::tracked_body::TrackedBody;
+use crate::trusted_proxies::TrustedProxies;
 use crate::{FixedResponse, Forward, Observability, ResponseBody, Target};
 
 /// What the snapshot says should happen to a request.
@@ -31,6 +34,13 @@ enum Resolved<'snapshot> {
         status: http::StatusCode,
         location: String,
         subsystem: &'snapshot CompiledSubsystem,
+    },
+    /// A maintenance scope answers: nothing is routed, no endpoint is touched.
+    Maintenance {
+        scope: &'snapshot CompiledMaintenance,
+        subsystem: &'snapshot CompiledSubsystem,
+        /// The route, when the scope that answered is the route's own.
+        route: Option<&'snapshot CompiledRoute>,
     },
     Forward {
         subsystem: &'snapshot CompiledSubsystem,
@@ -49,6 +59,9 @@ pub struct RequestPipeline<F> {
     observability: Observability,
     /// The port plain-HTTP redirects point at; 443 unless told otherwise.
     https_port: u16,
+    /// Peers whose `X-Forwarded-For` is believed when deciding who the client
+    /// is for a maintenance bypass.
+    trusted_proxies: TrustedProxies,
 }
 
 impl<F: Forward> RequestPipeline<F> {
@@ -58,6 +71,7 @@ impl<F: Forward> RequestPipeline<F> {
             forwarder,
             observability,
             https_port: 443,
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 
@@ -65,6 +79,13 @@ impl<F: Forward> RequestPipeline<F> {
     /// listener); it is left out of the URL when it is 443.
     pub fn with_https_port(mut self, port: u16) -> Self {
         self.https_port = port;
+        self
+    }
+
+    /// Sets the trusted proxies, so a maintenance bypass by network sees the
+    /// client behind them and never a forged `X-Forwarded-For` from anyone else.
+    pub fn with_trusted_proxies(mut self, trusted_proxies: TrustedProxies) -> Self {
+        self.trusted_proxies = trusted_proxies;
         self
     }
 
@@ -76,7 +97,7 @@ impl<F: Forward> RequestPipeline<F> {
     /// Handles one request. Never fails: every problem becomes a response.
     pub async fn handle(
         &self,
-        request: Request<Incoming>,
+        mut request: Request<Incoming>,
         client_addr: SocketAddr,
     ) -> Response<ResponseBody> {
         let started = Instant::now();
@@ -104,6 +125,7 @@ impl<F: Forward> RequestPipeline<F> {
             request_id: request_id.clone(),
             upstream_time: None,
             bytes_out: 0,
+            maintenance: None,
         };
         // If the client leaves before there is a response, dropping this
         // reports the request as cancelled (499) instead of losing it.
@@ -119,7 +141,15 @@ impl<F: Forward> RequestPipeline<F> {
         // body has been fully sent (or the client went away).
         let mut in_flight = None;
         let mut hsts_from = None;
-        let mut response = match resolve(&snapshot, &request, tls.as_deref(), self.https_port) {
+        let client = self
+            .trusted_proxies
+            .effective_client(client_addr.ip(), request.headers());
+        let (resolved, bypassed) = resolve(
+            &snapshot,
+            &request,
+            (tls.as_deref(), self.https_port, client),
+        );
+        let mut response = match resolved {
             Resolved::Respond { fixed, subsystem } => {
                 if let Some(subsystem) = subsystem {
                     pending.fields_mut().subsystem = subsystem.name.as_str().to_string();
@@ -136,6 +166,25 @@ impl<F: Forward> RequestPipeline<F> {
                 render_redirect(status, &location, &request_id)
                     .unwrap_or_else(|| FixedResponse::UnknownHost.render(&request_id, wants_json))
             }
+            Resolved::Maintenance {
+                scope,
+                subsystem,
+                route,
+            } => {
+                hsts_from = Some(subsystem);
+                let known = pending.fields_mut();
+                known.subsystem = subsystem.name.as_str().to_string();
+                if let Some(route) = route {
+                    known.route = route.prefix.clone();
+                }
+                known.maintenance = Some(scope.scope.label().to_string());
+                self.observability.metrics.maintenance_response(
+                    scope.scope.label(),
+                    &known.subsystem,
+                    &known.route,
+                );
+                maintenance::render(scope, request.headers(), &request_id)
+            }
             Resolved::Forward {
                 subsystem,
                 route,
@@ -146,6 +195,7 @@ impl<F: Forward> RequestPipeline<F> {
                 known.subsystem = subsystem.name.as_str().to_string();
                 known.route = route.prefix.clone();
                 let upstream = &route.upstream;
+                bypassed.strip_secrets(request.headers_mut());
                 match select_endpoint(upstream, request.headers(), client_addr.ip(), None) {
                     None => FixedResponse::NoHealthyUpstream.render(&request_id, wants_json),
                     Some(selection) => {
@@ -193,6 +243,17 @@ impl<F: Forward> RequestPipeline<F> {
             }
         };
 
+        // A request that passed through maintenance says so, and is counted.
+        if let Some(value) = bypassed.header_value() {
+            response.headers_mut().insert(BYPASS_HEADER, value);
+            let subsystem = pending.fields_mut().subsystem.clone();
+            for scope in bypassed.scopes() {
+                self.observability
+                    .metrics
+                    .maintenance_bypass(scope.label(), &subsystem);
+            }
+        }
+
         // HSTS is only ever sent over HTTPS (RFC 6797).
         if tls.is_some() {
             if let Some(value) = hsts_from.and_then(|subsystem| hsts_value(&snapshot, subsystem)) {
@@ -235,12 +296,13 @@ fn is_misdirected(subsystem: &CompiledSubsystem, tls: &TlsConnection) -> bool {
     tls.sni.is_some() && tls.certificate_id != subsystem.https.certificate_id
 }
 
+/// Routes a request. `connection` is the TLS state of the connection, the
+/// port redirects point at, and the effective client address.
 fn resolve<'snapshot>(
     snapshot: &'snapshot Snapshot,
     request: &Request<Incoming>,
-    tls: Option<&TlsConnection>,
-    https_port: u16,
-) -> Resolved<'snapshot> {
+    (tls, https_port, client): (Option<&TlsConnection>, u16, std::net::IpAddr),
+) -> (Resolved<'snapshot>, BypassedScopes) {
     let path = request.uri().path();
     let host = host_of(request);
     let lookup = snapshot.lookup(host, path);
@@ -254,11 +316,14 @@ fn resolve<'snapshot>(
             if let Some((status, location)) =
                 redirect_target(snapshot, subsystem, host, request.uri(), https_port)
             {
-                return Resolved::Redirect {
-                    status,
-                    location,
-                    subsystem,
-                };
+                return (
+                    Resolved::Redirect {
+                        status,
+                        location,
+                        subsystem,
+                    },
+                    BypassedScopes::default(),
+                );
             }
         }
     }
@@ -270,13 +335,41 @@ fn resolve<'snapshot>(
     ) = (tls, &lookup)
     {
         if is_misdirected(subsystem, tls) {
-            return Resolved::Respond {
-                fixed: FixedResponse::MisdirectedRequest,
-                subsystem: Some(subsystem),
-            };
+            return (
+                Resolved::Respond {
+                    fixed: FixedResponse::MisdirectedRequest,
+                    subsystem: Some(subsystem),
+                },
+                BypassedScopes::default(),
+            );
         }
     }
-    match lookup {
+    // Maintenance comes after the 421 and redirect rules and before routing:
+    // the whole proxy's scope, then the subsystem's.
+    let mut bypassed = BypassedScopes::default();
+    if let Lookup::SubsystemDisabled { subsystem, .. }
+    | Lookup::NoRoute { subsystem, .. }
+    | Lookup::Matched { subsystem, .. } = &lookup
+    {
+        let scopes = [
+            snapshot.maintenance.as_deref(),
+            subsystem.maintenance.as_deref(),
+        ];
+        match evaluate(&scopes, request.headers(), client, bypassed) {
+            ScopeOutcome::Respond(scope) => {
+                return (
+                    Resolved::Maintenance {
+                        scope,
+                        subsystem,
+                        route: None,
+                    },
+                    BypassedScopes::default(),
+                );
+            }
+            ScopeOutcome::Pass(passed) => bypassed = passed,
+        }
+    }
+    let resolved = match lookup {
         Lookup::UnknownHost => Resolved::Respond {
             fixed: FixedResponse::UnknownHost,
             subsystem: None,
@@ -291,12 +384,34 @@ fn resolve<'snapshot>(
         },
         Lookup::Matched {
             subsystem, route, ..
-        } => Resolved::Forward {
-            subsystem,
-            route: route.route,
-            consumed_prefix_len: path.len() - route.remainder.len(),
-        },
-    }
+        } => {
+            // The route's own scope, once the route is known.
+            match evaluate(
+                &[route.route.maintenance.as_deref()],
+                request.headers(),
+                client,
+                bypassed,
+            ) {
+                ScopeOutcome::Respond(scope) => {
+                    return (
+                        Resolved::Maintenance {
+                            scope,
+                            subsystem,
+                            route: Some(route.route),
+                        },
+                        BypassedScopes::default(),
+                    );
+                }
+                ScopeOutcome::Pass(passed) => bypassed = passed,
+            }
+            Resolved::Forward {
+                subsystem,
+                route: route.route,
+                consumed_prefix_len: path.len() - route.remainder.len(),
+            }
+        }
+    };
+    (resolved, bypassed)
 }
 
 /// The request's host: the `Host` header, else the URI authority (absolute

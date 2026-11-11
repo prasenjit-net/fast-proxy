@@ -82,6 +82,33 @@ impl TrustedProxies {
         Ok(Self { networks })
     }
 
+    /// The address to treat as the client: the peer itself, unless the peer is a
+    /// trusted proxy, in which case the nearest `X-Forwarded-For` entry that is
+    /// not itself a trusted proxy (read from the right, where each proxy
+    /// appended what it saw, so a client cannot choose it by writing the
+    /// header). Falls back to the peer when the header is absent or unusable.
+    pub fn effective_client(&self, peer: IpAddr, headers: &http::HeaderMap) -> IpAddr {
+        if !self.contains(peer) {
+            return peer;
+        }
+        let entries = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        for entry in entries.into_iter().rev() {
+            let Ok(ip) = entry.parse::<IpAddr>() else {
+                return peer;
+            };
+            if !self.contains(ip) {
+                return ip;
+            }
+        }
+        peer
+    }
+
     /// Whether `ip` (IPv4-mapped IPv6 addresses count as IPv4) is trusted.
     pub fn contains(&self, ip: IpAddr) -> bool {
         let ip = ip.to_canonical();
@@ -144,6 +171,58 @@ mod tests {
         ] {
             let err = TrustedProxies::parse(&[entry.to_string()]).unwrap_err();
             assert!(err.to_string().contains(entry), "{entry}: {err}");
+        }
+    }
+
+    fn forwarded(values: &[&str]) -> http::HeaderMap {
+        let mut headers = http::HeaderMap::new();
+        for value in values {
+            headers.append("x-forwarded-for", value.parse().unwrap());
+        }
+        headers
+    }
+
+    fn proxies() -> TrustedProxies {
+        TrustedProxies::parse(&["10.0.0.0/8".to_string()]).unwrap()
+    }
+
+    #[test]
+    fn an_untrusted_peer_is_always_itself() {
+        let peer = ip("203.0.113.9");
+        let client = proxies().effective_client(peer, &forwarded(&["1.2.3.4"]));
+        assert_eq!(client, peer);
+    }
+
+    #[test]
+    fn a_trusted_peer_stands_for_the_nearest_client_it_forwarded() {
+        let client = proxies().effective_client(ip("10.0.0.1"), &forwarded(&["198.51.100.7"]));
+        assert_eq!(client, ip("198.51.100.7"));
+    }
+
+    #[test]
+    fn trusted_hops_are_skipped_from_the_right_and_left_entries_are_ignored() {
+        let headers = forwarded(&["6.6.6.6, 198.51.100.7", "10.0.0.2"]);
+        assert_eq!(
+            proxies().effective_client(ip("10.0.0.1"), &headers),
+            ip("198.51.100.7"),
+            "what the client wrote on the left never wins"
+        );
+    }
+
+    #[test]
+    fn a_trusted_peer_without_a_usable_header_is_itself() {
+        let peer = ip("10.0.0.1");
+        for headers in [
+            forwarded(&[]),
+            forwarded(&["not-an-ip"]),
+            forwarded(&["10.0.0.5, 10.0.0.6"]),
+            forwarded(&["198.51.100.7, garbage"]),
+        ] {
+            assert_eq!(
+                proxies().effective_client(peer, &headers),
+                peer,
+                "{headers:?}"
+            );
         }
     }
 }

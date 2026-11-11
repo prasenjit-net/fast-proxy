@@ -1,6 +1,7 @@
 //! Certificate writes, the certificate guarantee, startup and key protection,
 //! against a real database file and master key file.
 
+use crate::{Audited, ChangeContext};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -52,11 +53,11 @@ impl Env {
 
 async fn add_shop(service: &ConfigService) -> SubsystemId {
     service
-        .apply(create_site(
-            "shop",
-            "shop.example.com".into(),
-            "127.0.0.1:3000",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+        )
         .await
         .unwrap()
         .value
@@ -100,7 +101,7 @@ async fn enabling_https_with_tls_on_generates_and_attaches_a_dev_certificate_in_
     let before = service.snapshot_holder().load().version;
 
     let applied = service
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
     assert_eq!(applied.version, before + 1, "one write, one revision");
@@ -120,7 +121,7 @@ async fn with_tls_off_nothing_is_generated_and_no_master_key_is_created() {
     let service = env.start(env.settings(false)).await;
     let site = add_shop(&service).await;
     service
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
     assert!(service.list_certificates().await.unwrap().is_empty());
@@ -140,12 +141,21 @@ async fn the_master_key_is_created_once_only_when_a_key_must_be_sealed() {
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com"]);
     service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap();
     let key_bytes = std::fs::read(env.key_file()).unwrap();
     service
-        .generate_self_signed("scratch", vec!["x.example.com".into()])
+        .generate_self_signed(
+            &ChangeContext::system(),
+            "scratch",
+            vec!["x.example.com".into()],
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -180,12 +190,17 @@ async fn an_uploaded_certificate_is_attached_served_and_never_replaced() {
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com", "*.shop.example.com"]);
     let uploaded = service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap()
         .value;
     let applied = service
-        .set_subsystem_https(site, https_on(Some(uploaded.id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(uploaded.id)))
         .await
         .unwrap();
     assert!(applied.value.is_empty(), "no uncovered host");
@@ -194,17 +209,21 @@ async fn an_uploaded_certificate_is_attached_served_and_never_replaced() {
 
     // A host change must not touch an uploaded certificate.
     service
-        .apply(move |conn| {
-            hosts::add(
-                conn,
-                site,
-                &HostPattern::parse("other.example.com").unwrap(),
-            )?;
-            Ok(Mutation {
-                value: (),
-                summary: "host added".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                hosts::add(
+                    conn,
+                    site,
+                    &HostPattern::parse("other.example.com").unwrap(),
+                )?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "host added".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let after = certificate_for(&service, "shop.example.com").unwrap();
@@ -218,20 +237,24 @@ async fn adding_a_host_regenerates_the_dev_certificate_in_the_same_write() {
     let service = env.start(env.settings(true)).await;
     let site = add_shop(&service).await;
     service
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
     let first = certificate_for(&service, "shop.example.com").unwrap();
     assert!(certificate_for(&service, "new.example.com").is_none());
 
     service
-        .apply(move |conn| {
-            hosts::add(conn, site, &HostPattern::parse("new.example.com").unwrap())?;
-            Ok(Mutation {
-                value: (),
-                summary: "host added".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                hosts::add(conn, site, &HostPattern::parse("new.example.com").unwrap())?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "host added".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let second = certificate_for(&service, "new.example.com").expect("covers the new host");
@@ -248,22 +271,30 @@ async fn detaching_falls_back_to_a_dev_certificate() {
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com"]);
     let uploaded = service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     service
-        .set_subsystem_https(site, https_on(Some(uploaded)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(uploaded)))
         .await
         .unwrap();
     service
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
     let handle = certificate_for(&service, "shop.example.com").unwrap();
     assert_eq!(handle.name.as_str(), "dev-shop");
-    service.delete_certificate(uploaded).await.unwrap();
+    service
+        .delete_certificate(&ChangeContext::system(), uploaded)
+        .await
+        .unwrap();
     assert_eq!(names_of(&service).await, ["dev-shop"]);
 }
 
@@ -274,7 +305,7 @@ async fn startup_fills_a_certificate_gap_while_tls_is_on() {
         let service = env.start(env.settings(false)).await;
         let site = add_shop(&service).await;
         service
-            .set_subsystem_https(site, https_on(None))
+            .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
             .await
             .unwrap();
     }
@@ -297,7 +328,7 @@ async fn a_restart_with_tls_on_and_nothing_missing_writes_nothing() {
         let service = env.start(env.settings(true)).await;
         let site = add_shop(&service).await;
         service
-            .set_subsystem_https(site, https_on(None))
+            .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
             .await
             .unwrap();
         service.snapshot_holder().load().version
@@ -340,7 +371,7 @@ async fn an_invalid_upload_changes_nothing() {
     ];
     for (name, cert, key, field) in cases {
         let err = service
-            .upload_certificate(name, cert, key)
+            .upload_certificate(&ChangeContext::system(), name, cert, key)
             .await
             .unwrap_err();
         assert!(
@@ -364,21 +395,34 @@ async fn a_duplicate_name_is_a_conflict_and_a_used_certificate_cannot_be_deleted
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com"]);
     let id = service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     let dup = service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap_err();
     assert!(matches!(dup, StoreError::Conflict(_)));
     service
-        .set_subsystem_https(site, https_on(Some(id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(id)))
         .await
         .unwrap();
-    let err = service.delete_certificate(id).await.unwrap_err();
+    let err = service
+        .delete_certificate(&ChangeContext::system(), id)
+        .await
+        .unwrap_err();
     assert!(
         matches!(&err, StoreError::Conflict(m) if m.contains("shop")),
         "{err}"
@@ -392,26 +436,35 @@ async fn attaching_a_certificate_needs_it_to_cover_a_host_and_reports_the_rest()
     let service = env.start(env.settings(true)).await;
     let site = add_shop(&service).await;
     service
-        .apply(move |conn| {
-            hosts::add(conn, site, &HostPattern::parse("old.example.com").unwrap())?;
-            Ok(Mutation {
-                value: (),
-                summary: "host added".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            move |conn| {
+                hosts::add(conn, site, &HostPattern::parse("old.example.com").unwrap())?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "host added".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     let ca = TestCa::new("ca");
     let wrong = leaf(&ca, &["unrelated.example.com"]);
     let wrong_id = service
-        .upload_certificate("wrong", &wrong.chain_pem, &wrong.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "wrong",
+            &wrong.chain_pem,
+            &wrong.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     let before = certificate_for(&service, "shop.example.com");
     let err = service
-        .set_subsystem_https(site, https_on(Some(wrong_id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(wrong_id)))
         .await
         .unwrap_err();
     assert!(
@@ -422,19 +475,28 @@ async fn attaching_a_certificate_needs_it_to_cover_a_host_and_reports_the_rest()
 
     let partial = leaf(&ca, &["shop.example.com"]);
     let partial_id = service
-        .upload_certificate("partial", &partial.chain_pem, &partial.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "partial",
+            &partial.chain_pem,
+            &partial.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     let applied = service
-        .set_subsystem_https(site, https_on(Some(partial_id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(partial_id)))
         .await
         .unwrap();
     assert_eq!(applied.value, ["old.example.com"]);
 
     let missing = service
-        .set_subsystem_https(site, https_on(Some(CertificateId(99))))
+        .set_subsystem_https(
+            &ChangeContext::system(),
+            site,
+            https_on(Some(CertificateId(99))),
+        )
         .await
         .unwrap_err();
     assert!(matches!(&missing, StoreError::Invalid(f) if f[0].field == "https.certificateId"));
@@ -449,13 +511,18 @@ async fn renewing_with_the_same_key_replaces_one_entry_and_keeps_the_rest() {
     // One key, two certificates: issue the renewal for the same key pair.
     let first = leaf(&ca, &["shop.example.com"]);
     let id = service
-        .upload_certificate("shop", &first.chain_pem, &first.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &first.chain_pem,
+            &first.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     service
-        .set_subsystem_https(site, https_on(Some(id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(id)))
         .await
         .unwrap();
     let before = certificate_for(&service, "shop.example.com").unwrap();
@@ -463,6 +530,7 @@ async fn renewing_with_the_same_key_replaces_one_entry_and_keeps_the_rest() {
     let other = leaf(&ca, &["shop.example.com"]);
     let err = service
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 cert_pem: Some(other.chain_pem.clone()),
@@ -478,6 +546,7 @@ async fn renewing_with_the_same_key_replaces_one_entry_and_keeps_the_rest() {
 
     service
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 cert_pem: Some(other.chain_pem),
@@ -500,17 +569,23 @@ async fn renaming_reseals_the_key_and_a_replacement_must_still_cover_a_host() {
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com"]);
     let id = service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     service
-        .set_subsystem_https(site, https_on(Some(id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(id)))
         .await
         .unwrap();
     service
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 name: Some("renamed".into()),
@@ -537,6 +612,7 @@ async fn renaming_reseals_the_key_and_a_replacement_must_still_cover_a_host() {
     let elsewhere = leaf(&ca, &["unrelated.example.com"]);
     let err = restarted
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 cert_pem: Some(elsewhere.chain_pem),
@@ -558,7 +634,7 @@ async fn a_vetoed_write_leaves_the_certificates_and_the_cache_as_they_were() {
     let service = env.start(env.settings(true)).await;
     let site = add_shop(&service).await;
     service
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
     let before = certificate_for(&service, "shop.example.com").unwrap();
@@ -566,27 +642,31 @@ async fn a_vetoed_write_leaves_the_certificates_and_the_cache_as_they_were() {
 
     // A subsystem with no host has nothing to certify, so HTTPS cannot be enabled.
     let hostless = service
-        .apply(|conn| {
-            let id = subsystems::create(
-                conn,
-                &SubsystemFields {
-                    name: fast_proxy_model::SubsystemName::parse("hostless").unwrap(),
-                    enabled: true,
-                    description: String::new(),
-                    https: HttpsPolicy::default(),
-                },
-            )?;
-            Ok(Mutation {
-                value: id,
-                summary: "subsystem created".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            |conn| {
+                let id = subsystems::create(
+                    conn,
+                    &SubsystemFields {
+                        name: fast_proxy_model::SubsystemName::parse("hostless").unwrap(),
+                        enabled: true,
+                        description: String::new(),
+                        https: HttpsPolicy::default(),
+                    },
+                )?;
+                Ok(Mutation {
+                    value: id,
+                    summary: "subsystem created".into(),
+                })
+            },
+        )
         .await
         .unwrap()
         .value;
     let version = version + 1;
     let err = service
-        .set_subsystem_https(hostless, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), hostless, https_on(None))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("no certificate"), "{err}");
@@ -604,10 +684,11 @@ async fn concurrent_certificate_and_configuration_writes_serialize() {
     let site = add_shop(&service).await;
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com"]);
+    let context = ChangeContext::system();
     let (a, b, c) = tokio::join!(
-        service.upload_certificate("one", &issued.chain_pem, &issued.key_pem),
-        service.generate_self_signed("two", vec!["two.example.com".into()]),
-        service.set_subsystem_https(site, https_on(None)),
+        service.upload_certificate(&context, "one", &issued.chain_pem, &issued.key_pem),
+        service.generate_self_signed(&context, "two", vec!["two.example.com".into()]),
+        service.set_subsystem_https(&context, site, https_on(None)),
     );
     let mut versions = vec![a.unwrap().version, b.unwrap().version, c.unwrap().version];
     versions.sort_unstable();
@@ -623,7 +704,7 @@ async fn a_wrong_master_key_starts_reports_and_keeps_serving_plain_config() {
         let service = env.start(env.settings(true)).await;
         let site = add_shop(&service).await;
         service
-            .set_subsystem_https(site, https_on(None))
+            .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
             .await
             .unwrap();
     }
@@ -641,7 +722,11 @@ async fn a_wrong_master_key_starts_reports_and_keeps_serving_plain_config() {
         "no handle for an unreadable key"
     );
     let err = service
-        .generate_self_signed("more", vec!["x.example.com".into()])
+        .generate_self_signed(
+            &ChangeContext::system(),
+            "more",
+            vec!["x.example.com".into()],
+        )
         .await
         .unwrap_err();
     assert!(
@@ -649,11 +734,11 @@ async fn a_wrong_master_key_starts_reports_and_keeps_serving_plain_config() {
         "{err}"
     );
     service
-        .apply(create_site(
-            "blog",
-            "blog.example.com".into(),
-            "127.0.0.1:3001",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("blog", "blog.example.com".into(), "127.0.0.1:3001"),
+        )
         .await
         .expect("configuration writes still work");
 }
@@ -665,13 +750,18 @@ async fn a_corrupt_certificate_row_is_skipped_and_reported_not_fatal() {
         let service = env.start(env.settings(true)).await;
         let site = add_shop(&service).await;
         service
-            .set_subsystem_https(site, https_on(None))
+            .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
             .await
             .unwrap();
         let ca = TestCa::new("ca");
         let issued = leaf(&ca, &["other.example.com"]);
         service
-            .upload_certificate("other", &issued.chain_pem, &issued.key_pem)
+            .upload_certificate(
+                &ChangeContext::system(),
+                "other",
+                &issued.chain_pem,
+                &issued.key_pem,
+            )
             .await
             .unwrap();
     }
@@ -739,17 +829,23 @@ async fn the_database_file_never_contains_private_key_text_or_bytes() {
             .unwrap()
     };
     let id = service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     service
-        .set_subsystem_https(site, https_on(Some(id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(id)))
         .await
         .unwrap();
     service
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 name: Some("renamed".into()),
@@ -759,10 +855,13 @@ async fn the_database_file_never_contains_private_key_text_or_bytes() {
         .await
         .unwrap();
     service
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
-    service.delete_certificate(id).await.unwrap();
+    service
+        .delete_certificate(&ChangeContext::system(), id)
+        .await
+        .unwrap();
 
     let bytes = database_bytes(&env.database());
     assert!(
@@ -787,7 +886,12 @@ async fn certificate_changes_are_summary_only_revisions_without_pem() {
     let ca = TestCa::new("ca");
     let issued = leaf(&ca, &["shop.example.com"]);
     service
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap();
     let rows = service
@@ -816,7 +920,11 @@ async fn expiry_and_cache_metrics_are_published_with_certificate_names() {
         .await
         .unwrap();
     service
-        .generate_self_signed("scratch", vec!["x.example.com".into()])
+        .generate_self_signed(
+            &ChangeContext::system(),
+            "scratch",
+            vec!["x.example.com".into()],
+        )
         .await
         .unwrap();
     let text = metrics.render();
@@ -837,7 +945,11 @@ async fn the_key_can_come_from_the_environment_without_any_file() {
     };
     let service = env.start(settings.clone()).await;
     service
-        .generate_self_signed("scratch", vec!["x.example.com".into()])
+        .generate_self_signed(
+            &ChangeContext::system(),
+            "scratch",
+            vec!["x.example.com".into()],
+        )
         .await
         .unwrap();
     assert!(!env.key_file().exists());
@@ -857,11 +969,77 @@ async fn without_any_master_key_source_sealing_is_refused_clearly() {
     let env = Env::new();
     let service = env.start(TlsSettings::default()).await;
     let err = service
-        .generate_self_signed("scratch", vec!["x.example.com".into()])
+        .generate_self_signed(
+            &ChangeContext::system(),
+            "scratch",
+            vec!["x.example.com".into()],
+        )
         .await
         .unwrap_err();
     assert!(
         matches!(&err, StoreError::Conflict(m) if m.contains("no master key")),
         "{err}"
     );
+}
+
+#[tokio::test]
+async fn a_certificate_is_generated_once_by_name_and_never_replaced() {
+    let env = Env::new();
+    let service = env.start(env.settings(false)).await;
+    let context = ChangeContext::system();
+    assert!(service.certificate_by_name("admin").is_none());
+
+    let generated = service
+        .ensure_self_signed_certificate(&context, "admin", vec!["localhost".into()])
+        .await
+        .unwrap();
+    assert!(generated);
+    let first = service.certificate_by_name("admin").expect("usable");
+    assert_eq!(first.name.as_str(), "admin");
+
+    let again = service
+        .ensure_self_signed_certificate(&context, "admin", vec!["other.example.com".into()])
+        .await
+        .unwrap();
+    assert!(!again, "an existing certificate is left alone");
+    let second = service.certificate_by_name("admin").unwrap();
+    assert_eq!(first.version, second.version);
+    assert_eq!(second.metadata.names, ["localhost"]);
+}
+
+#[tokio::test]
+async fn a_replaced_certificate_is_what_the_next_lookup_returns() {
+    let env = Env::new();
+    let service = env.start(env.settings(false)).await;
+    let context = ChangeContext::system();
+    service
+        .ensure_self_signed_certificate(&context, "admin", vec!["localhost".into()])
+        .await
+        .unwrap();
+    let before = service.certificate_by_name("admin").unwrap();
+
+    let ca = TestCa::new("ca");
+    let issued = leaf(&ca, &["localhost"]);
+    service
+        .replace_certificate(
+            &context,
+            before.id,
+            CertificateChange {
+                cert_pem: Some(issued.chain_pem.clone()),
+                key_pem: Some(issued.key_pem.clone()),
+                ..CertificateChange::default()
+            },
+        )
+        .await
+        .unwrap();
+    let after = service.certificate_by_name("admin").unwrap();
+    assert_eq!(after.id, before.id);
+    assert_ne!(after.version.fingerprint, before.version.fingerprint);
+}
+
+#[tokio::test]
+async fn a_name_that_is_not_stored_or_not_readable_finds_nothing() {
+    let env = Env::new();
+    let service = env.start(env.settings(false)).await;
+    assert!(service.certificate_by_name("nope").is_none());
 }

@@ -48,6 +48,28 @@ pub enum Event {
         timestamp_ms: i64,
     },
 
+    /// A token was created or revoked; only its name is sent. `change` is
+    /// `created` or `revoked`.
+    #[serde(rename_all = "camelCase")]
+    TokenChanged {
+        change: &'static str,
+        token: String,
+        timestamp_ms: i64,
+    },
+
+    /// Maintenance was turned on or off for a scope, by an operator or by its
+    /// expiry. The names are the subsystem and route the scope covers, when it
+    /// covers one.
+    #[serde(rename_all = "camelCase")]
+    MaintenanceChanged {
+        scope: &'static str,
+        subsystem: Option<String>,
+        route: Option<String>,
+        active: bool,
+        expires_at_ms: Option<i64>,
+        timestamp_ms: i64,
+    },
+
     #[serde(rename_all = "camelCase")]
     Activity {
         kind: String,
@@ -95,6 +117,32 @@ mod tests {
         assert_eq!(cert["type"], "certState");
         assert_eq!(cert["change"], "uploaded");
         assert_eq!(cert["certificate"], "shop");
+
+        let token = serde_json::to_value(Event::TokenChanged {
+            change: "revoked",
+            token: "ci".into(),
+            timestamp_ms: 5,
+        })
+        .unwrap();
+        assert_eq!(token["type"], "tokenChanged");
+        assert_eq!(token["change"], "revoked");
+        assert_eq!(token["token"], "ci");
+
+        let maintenance = serde_json::to_value(Event::MaintenanceChanged {
+            scope: "route",
+            subsystem: Some("shop".into()),
+            route: Some("/api".into()),
+            active: true,
+            expires_at_ms: Some(9),
+            timestamp_ms: 3,
+        })
+        .unwrap();
+        assert_eq!(maintenance["type"], "maintenanceChanged");
+        assert_eq!(maintenance["scope"], "route");
+        assert_eq!(maintenance["subsystem"], "shop");
+        assert_eq!(maintenance["route"], "/api");
+        assert_eq!(maintenance["active"], true);
+        assert_eq!(maintenance["expiresAtMs"], 9);
 
         let hello = serde_json::to_value(Event::Hello {
             message: "hi".into(),

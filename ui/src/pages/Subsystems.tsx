@@ -6,6 +6,8 @@ import EmptyState from "../components/EmptyState";
 import SubsystemForm from "../components/forms/SubsystemForm";
 import Modal from "../components/Modal";
 import Toggle from "../components/Toggle";
+import WriteOnly from "../components/WriteOnly";
+import { useCanWrite } from "../context/SessionContext";
 import { useToast } from "../context/ToastContext";
 import { IconPlus } from "../icons";
 import { api } from "../lib/api";
@@ -31,6 +33,7 @@ function HostChips({ hosts }: { hosts: string[] }) {
 export default function SubsystemsPage() {
   const navigate = useNavigate();
   const { push, notifyError } = useToast();
+  const canWrite = useCanWrite();
   const [creating, setCreating] = useState(false);
   const query = useQuery({ queryKey: ["subsystems"], queryFn: api.subsystems });
 
@@ -57,9 +60,11 @@ export default function SubsystemsPage() {
   }
 
   const newButton = (
-    <button className="btn btn-primary" onClick={() => setCreating(true)}>
-      <IconPlus size={16} /> New subsystem
-    </button>
+    <WriteOnly>
+      <button className="btn btn-primary" onClick={() => setCreating(true)}>
+        <IconPlus size={16} /> New subsystem
+      </button>
+    </WriteOnly>
   );
 
   let body;
@@ -113,12 +118,18 @@ export default function SubsystemsPage() {
                 </td>
                 <td className="py-3 pr-4 text-ink-muted">{subsystem.routeCount}</td>
                 <td className="py-3 pr-4">
-                  <Toggle
-                    checked={subsystem.enabled}
-                    disabled={setEnabled.isPending}
-                    onChange={(enabled) => setEnabled.mutate({ subsystem, enabled })}
-                    label={subsystem.enabled ? "On" : "Off"}
-                  />
+                  {canWrite ? (
+                    <Toggle
+                      checked={subsystem.enabled}
+                      disabled={setEnabled.isPending}
+                      onChange={(enabled) => setEnabled.mutate({ subsystem, enabled })}
+                      label={subsystem.enabled ? "On" : "Off"}
+                    />
+                  ) : (
+                    <Badge tone={subsystem.enabled ? "ok" : "warn"} dot>
+                      {subsystem.enabled ? "On" : "Off"}
+                    </Badge>
+                  )}
                 </td>
                 <td className="py-3 text-ink-faint">{timeAgo(subsystem.updatedAtMs)}</td>
               </tr>

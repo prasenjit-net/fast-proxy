@@ -4,6 +4,7 @@
 mod common;
 
 use common::tls_stack::{Options, Stack};
+use fast_proxy_config_service::ChangeContext;
 use fast_proxy_model::{CertificateId, Hsts, HttpsPolicy, RedirectMode, SubsystemId};
 use fast_proxy_test_pki::{request, ClientHello, TestCa};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -73,7 +74,7 @@ async fn configure(stack: &Stack, shop: &Shop, redirect: RedirectMode, hsts: Hst
     };
     stack
         .service
-        .set_subsystem_https(shop.site, https)
+        .set_subsystem_https(&ChangeContext::system(), shop.site, https)
         .await
         .unwrap();
 }
@@ -177,7 +178,10 @@ async fn no_redirect_when_off_when_https_is_disabled_or_when_tls_is_off() {
         redirect: RedirectMode::Permanent308,
         ..HttpsPolicy::default()
     };
-    off.service.set_subsystem_https(site, https).await.unwrap();
+    off.service
+        .set_subsystem_https(&ChangeContext::system(), site, https)
+        .await
+        .unwrap();
     let answer = plain(&off, "shop.example.com", "/").await;
     assert_eq!(
         answer.status, 200,
@@ -202,7 +206,7 @@ async fn a_host_with_odd_characters_is_never_turned_into_a_location() {
     };
     stack
         .service
-        .set_subsystem_https(wild, https)
+        .set_subsystem_https(&ChangeContext::system(), wild, https)
         .await
         .unwrap();
 
@@ -256,4 +260,46 @@ async fn the_redirect_and_hsts_follow_live_edits() {
     assert_eq!(plain(&stack, "shop.example.com", "/").await.status, 308);
     configure(&stack, &shop, RedirectMode::Off, Hsts::default()).await;
     assert_eq!(plain(&stack, "shop.example.com", "/").await.status, 200);
+}
+
+#[tokio::test]
+async fn maintenance_is_served_on_the_same_terms_as_the_site_redirect_first_hsts_with_it() {
+    use fast_proxy_model::{BypassRules, MaintenanceSettings, MaintenanceTarget};
+
+    let stack = Stack::start(Options::default()).await;
+    let ca = TestCa::new("ca");
+    let shop = shop(&stack, &ca).await;
+    configure(&stack, &shop, RedirectMode::Permanent308, hsts(false)).await;
+    stack
+        .service
+        .set_maintenance(
+            &ChangeContext::system(),
+            MaintenanceTarget::Global,
+            MaintenanceSettings {
+                message: "deploying".into(),
+                body: None,
+                retry_after_secs: None,
+                bypass: BypassRules::default(),
+                expires_at_ms: None,
+                set_by: String::new(),
+                set_at_ms: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Plain HTTP is still sent to HTTPS first: the redirect is not hidden by maintenance.
+    let plain = plain(&stack, "shop.example.com", "/cart").await;
+    assert_eq!(plain.status, 308);
+    assert!(plain
+        .header("location")
+        .unwrap()
+        .starts_with("https://shop.example.com"));
+
+    // On HTTPS the site answers with the maintenance page, and HSTS still goes with it.
+    let secure = secure(&stack, &ca, "shop.example.com").await;
+    assert_eq!(secure.status, 503);
+    assert!(secure.text.contains("deploying"));
+    assert!(secure.header("retry-after").is_some());
+    assert!(secure.header("strict-transport-security").is_some());
 }

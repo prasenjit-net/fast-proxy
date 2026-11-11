@@ -123,6 +123,7 @@ impl Drop for TrackedBody {
             status: summary.status,
             elapsed,
             data_plane: Some(&summary.fields),
+            actor: None,
         });
     }
 }

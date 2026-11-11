@@ -8,7 +8,12 @@ exit criteria and uses `curl` so every step is explicit.
 This walkthrough also covers TLS (section 16).
 
 **Prefer clicking?** Everything below can also be done in the admin UI at
-http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`):
+http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`). It asks for an
+admin token first: paste the one printed on the first start (or start with
+`--admin-auth off`, loopback only, to skip it). The token stays in that tab only, and
+**Sign out** in the top bar forgets it. Tokens, the audit log and (when you serve the
+admin plane over TLS) its certificate each have a page; a `viewer` token sees every page
+read-only:
 
 - **Subsystems**: create a subsystem, then on its page add hosts, upstreams (each
   with its endpoints, load-balancing and health settings) and routes. Forms check your input and show the server's messages next to the
@@ -17,6 +22,10 @@ http://127.0.0.1:9000 (or http://localhost:5173 with `npm run dev`):
   roll back.
 - **Resolver**: try a host and path and see the subsystem, route, the upstream's
   algorithm and every endpoint's URL and eligibility, or why nothing matched.
+- **Maintenance**: turn the whole proxy, a subsystem (on its page) or one route (in its
+  row) into a temporary 503 with a message, a countdown and a bypass; a banner under the
+  top bar shows while anything is closed. **Routes** lists every route and upstream
+  group with its health and maintenance state.
 - **Dashboard**: live requests/s, error rate and connections by subsystem, and
   which upstream endpoints are out of rotation and why.
 
@@ -31,6 +40,28 @@ With the default config the **admin plane** is on `127.0.0.1:9000` and the
 **data plane** (the proxy itself) is on `0.0.0.0:8000`. State, including the
 SQLite database, lives in `./state/`. Delete that directory to start again from
 an empty database.
+
+**The admin plane needs a token.** On the first start the proxy prints one,
+once, on the console:
+
+```
+admin token (shown once, store it now): fp_1.<secret>
+```
+
+Keep it in a variable for the rest of this walkthrough (a later start prints
+nothing; create more tokens with `POST /api/tokens`). For throwaway local
+experiments you can instead start with `--admin-auth off`, which is accepted only
+while the admin plane listens on loopback and is warned about on every start.
+
+```sh
+export TOKEN=fp_1.<the secret printed above>
+```
+
+To reach the admin plane from another machine, serve it over HTTPS instead
+(`cargo run -- --admin-tls`, or `[admin.tls] enabled = true`, and an
+`admin.listen` address of your choice). It then generates a self-signed `admin`
+certificate on first start, so use `curl -k` (or trust it) until you upload your
+own under the same name on the Certificates page.
 
 ## 2. Start two backends
 
@@ -59,18 +90,19 @@ prints the resource and the config `version` it created.
 ```sh
 A=http://127.0.0.1:9000/api
 J='Content-Type: application/json'
+H="Authorization: Bearer $TOKEN"      # admin calls below carry this; calls to :8000 do not
 
 # shop
-curl -s -H "$J" -d '{"name":"shop"}' $A/subsystems
-curl -s -H "$J" -d '{"pattern":"shop.example.com"}' $A/subsystems/1/hosts
-curl -s -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
-curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":1}' $A/subsystems/1/routes
+curl -s -H "$H" -H "$J" -d '{"name":"shop"}' $A/subsystems
+curl -s -H "$H" -H "$J" -d '{"pattern":"shop.example.com"}' $A/subsystems/1/hosts
+curl -s -H "$H" -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
+curl -s -H "$H" -H "$J" -d '{"prefix":"/","upstreamGroupId":1}' $A/subsystems/1/routes
 
 # blog
-curl -s -H "$J" -d '{"name":"blog"}' $A/subsystems
-curl -s -H "$J" -d '{"pattern":"blog.example.com"}' $A/subsystems/2/hosts
-curl -s -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3002"}]}' $A/subsystems/2/upstreams
-curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":2}' $A/subsystems/2/routes
+curl -s -H "$H" -H "$J" -d '{"name":"blog"}' $A/subsystems
+curl -s -H "$H" -H "$J" -d '{"pattern":"blog.example.com"}' $A/subsystems/2/hosts
+curl -s -H "$H" -H "$J" -d '{"name":"backend","endpoints":[{"addr":"127.0.0.1:3002"}]}' $A/subsystems/2/upstreams
+curl -s -H "$H" -H "$J" -d '{"prefix":"/","upstreamGroupId":2}' $A/subsystems/2/routes
 ```
 
 The ids above assume a fresh database; use the `id` values from the responses
@@ -90,8 +122,8 @@ curl -si -H 'Host: other.example.com' http://127.0.0.1:8000/           # 404 unk
 No restart was needed. Look at what is configured:
 
 ```sh
-curl -s $A/subsystems          # list: host patterns, route counts
-curl -s $A/subsystems/1        # detail: hosts, upstreams, routes (longest prefix first)
+curl -s -H "$H" $A/subsystems          # list: host patterns, route counts
+curl -s -H "$H" $A/subsystems/1        # detail: hosts, upstreams, routes (longest prefix first)
 ```
 
 ## 6. Edit live
@@ -99,7 +131,7 @@ curl -s $A/subsystems/1        # detail: hosts, upstreams, routes (longest prefi
 Point the shop at the blog's backend, and watch the very next request change:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"addr":"127.0.0.1:3002"}' $A/subsystems/1/upstreams/1/endpoints/1
+curl -s -H "$H" -X PUT -H "$J" -d '{"addr":"127.0.0.1:3002"}' $A/subsystems/1/upstreams/1/endpoints/1
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # hello from blog
 ```
 
@@ -107,17 +139,17 @@ Add a path-based route with a rewrite (here `/old/x` is sent to the backend as `
 The new upstream gets id `3`:
 
 ```sh
-curl -s -H "$J" -d '{"name":"legacy","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
-curl -s -H "$J" -d '{"prefix":"/old","upstreamGroupId":3,"stripPrefix":true}' $A/subsystems/1/routes
+curl -s -H "$H" -H "$J" -d '{"name":"legacy","endpoints":[{"addr":"127.0.0.1:3001"}]}' $A/subsystems/1/upstreams
+curl -s -H "$H" -H "$J" -d '{"prefix":"/old","upstreamGroupId":3,"stripPrefix":true}' $A/subsystems/1/routes
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/old/index.html   # hello from shop
 ```
 
 Switch a subsystem off (503) and on again:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"name":"shop","enabled":false}' $A/subsystems/1
+curl -s -H "$H" -X PUT -H "$J" -d '{"name":"shop","enabled":false}' $A/subsystems/1
 curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/ | head -1      # 503
-curl -s -X PUT -H "$J" -d '{"name":"shop","enabled":true}' $A/subsystems/1
+curl -s -H "$H" -X PUT -H "$J" -d '{"name":"shop","enabled":true}' $A/subsystems/1
 ```
 
 ## 7. Dry-run a request with the resolver
@@ -127,10 +159,10 @@ would happen, including the exact URL for each endpoint of the upstream and whet
 take a request right now, without sending anything:
 
 ```sh
-curl -s -H "$J" -d '{"host":"shop.example.com","path":"/old/index.html?x=1"}' $A/resolve
+curl -s -H "$H" -H "$J" -d '{"host":"shop.example.com","path":"/old/index.html?x=1"}' $A/resolve
 # matched: true, route.prefix "/old", route.algorithm "round_robin",
 # route.endpoints[0].upstreamUrl "http://127.0.0.1:3001/index.html?x=1", eligible: true
-curl -s -H "$J" -d '{"host":"nope.example.com","path":"/"}' $A/resolve
+curl -s -H "$H" -H "$J" -d '{"host":"nope.example.com","path":"/"}' $A/resolve
 # matched: false, reason: "unknown_host"   (or "subsystem_disabled" / "no_route")
 ```
 
@@ -140,17 +172,17 @@ Every successful change is a numbered revision holding the full configuration
 at that moment:
 
 ```sh
-curl -s "$A/revisions?limit=5"       # newest first; pass before=<nextBefore> for older ones
-curl -s $A/revisions/4               # the whole configuration as of revision 4
+curl -s -H "$H" "$A/revisions?limit=5"       # newest first; pass before=<nextBefore> for older ones
+curl -s -H "$H" $A/revisions/4               # the whole configuration as of revision 4
 ```
 
 Undo a mistake by rolling back, which re-applies an earlier revision as a **new**
 revision (nothing is rewritten). Ids are kept:
 
 ```sh
-curl -s -X DELETE $A/subsystems/1                        # oops
+curl -s -H "$H" -X DELETE $A/subsystems/1                        # oops
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # 404
-curl -s -X POST $A/revisions/4/rollback                  # restoredFrom: 4
+curl -s -H "$H" -X POST $A/revisions/4/rollback                  # restoredFrom: 4
 curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html   # works again
 ```
 
@@ -159,7 +191,7 @@ The last 100 revisions are kept.
 ## 9. What is running
 
 ```sh
-curl -s $A/status      # listeners, database path, subsystem counts, upstream health, uptime, live config version
+curl -s -H "$H" $A/status      # listeners, database path, subsystem counts, upstream health, uptime, live config version
 ```
 
 ## 10. Metrics, access log, and live traffic
@@ -169,7 +201,7 @@ is written to the access log (console, and the file named by
 `logging.access_log` if set):
 
 ```sh
-curl -s http://127.0.0.1:9000/metrics | grep fastproxy_
+curl -s -H "$H" http://127.0.0.1:9000/metrics | grep fastproxy_
 # fastproxy_requests_total{route="/",status_class="2xx",subsystem="shop"} 6
 # fastproxy_request_duration_seconds_bucket / _sum / _count
 # fastproxy_upstream_errors_total{kind="connect|timeout|other",subsystem="shop"}
@@ -199,7 +231,7 @@ client left before the response is logged with status `499` and counted in
 The dashboard's numbers come from the same counters, sampled every 2 seconds:
 
 ```sh
-curl -s http://127.0.0.1:9000/api/traffic      # requests/s, error rate, connections, per subsystem
+curl -s -H "$H" http://127.0.0.1:9000/api/traffic      # requests/s, error rate, connections, per subsystem
 ```
 
 ## 11. WebSockets and other protocol upgrades
@@ -212,7 +244,7 @@ proxy with the subsystem's `Host`; no extra configuration is needed.
 ## 12. Validation errors name every bad field
 
 ```sh
-curl -s -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":5}' \
+curl -s -H "$H" -H "$J" -d '{"prefix":"no-slash","upstreamGroupId":1,"connectTimeoutMs":5}' \
   $A/subsystems/1/routes
 # {"error":{"code":"VALIDATION_FAILED", ..., "fields":[
 #   {"field":"prefix", ...}, {"field":"connectTimeoutMs", ...}]}}
@@ -244,13 +276,13 @@ mkdir -p /tmp/shop2 /tmp/shop3 && echo "hello from shop 2" > /tmp/shop2/index.ht
 (cd /tmp/shop2 && python3 -m http.server 3003 --bind 127.0.0.1)    # terminal
 (cd /tmp/shop3 && python3 -m http.server 3004 --bind 127.0.0.1)    # terminal
 
-curl -s -H "$J" -d '{
+curl -s -H "$H" -H "$J" -d '{
   "name": "pool",
   "lb": { "algorithm": "round_robin" },
   "health": { "check": "http", "path": "/index.html", "intervalMs": 1000, "timeoutMs": 500 },
   "endpoints": [ {"addr":"127.0.0.1:3001"}, {"addr":"127.0.0.1:3003"}, {"addr":"127.0.0.1:3004"} ]
 }' $A/subsystems/1/upstreams                                    # the new upstream gets id 4 (its endpoints 4, 5, 6)
-curl -s -X PUT -H "$J" -d '{"prefix":"/","upstreamGroupId":4}' $A/subsystems/1/routes/1   # point "/" at the pool
+curl -s -H "$H" -X PUT -H "$J" -d '{"prefix":"/","upstreamGroupId":4}' $A/subsystems/1/routes/1   # point "/" at the pool
 for i in 1 2 3 4 5 6; do curl -s -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html; done
 # hello from shop, shop 2, shop 3, shop, shop 2, shop 3
 ```
@@ -266,8 +298,8 @@ The health checks notice too, with no traffic at all:
 
 ```sh
 for i in $(seq 1 12); do curl -s -o /dev/null -w '%{http_code} ' -H 'Host: shop.example.com' http://127.0.0.1:8000/index.html; done   # 200 x12
-curl -s $A/subsystems/1/upstreams/4/status    # 127.0.0.1:3003 -> effective "ejected" or "unhealthy", with the reason
-curl -s $A/status                             # upstreams: 2 of 3 healthy, and which one is out
+curl -s -H "$H" $A/subsystems/1/upstreams/4/status    # 127.0.0.1:3003 -> effective "ejected" or "unhealthy", with the reason
+curl -s -H "$H" $A/status                             # upstreams: 2 of 3 healthy, and which one is out
 ```
 
 **Watch it return.** Start the backend on 3003 again. Within a few seconds
@@ -279,9 +311,9 @@ to an endpoint while the ones already on it finish; the state is saved and
 survives a restart:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"state":"draining"}' $A/subsystems/1/upstreams/4/endpoints/5/state
-curl -s $A/subsystems/1/upstreams/4/status    # inFlight shows what is left; 0 means it is drained
-curl -s -X PUT -H "$J" -d '{"state":"enabled"}'  $A/subsystems/1/upstreams/4/endpoints/5/state
+curl -s -H "$H" -X PUT -H "$J" -d '{"state":"draining"}' $A/subsystems/1/upstreams/4/endpoints/5/state
+curl -s -H "$H" $A/subsystems/1/upstreams/4/status    # inFlight shows what is left; 0 means it is drained
+curl -s -H "$H" -X PUT -H "$J" -d '{"state":"enabled"}'  $A/subsystems/1/upstreams/4/endpoints/5/state
 ```
 
 Endpoints can also be added, changed (`weight`, `addr`) and removed one by one
@@ -303,7 +335,7 @@ listener on 8443 next to the plain one on 8000:
 
 ```sh
 cargo run -- --tls          # or [data_plane.tls] enabled = true in config.toml
-curl -s $A/tls              # enabled: true, listen "0.0.0.0:8443", vault "ok" or "not created"
+curl -s -H "$H" $A/tls              # enabled: true, listen "0.0.0.0:8443", vault "ok" or "not created"
 ```
 
 **Enable HTTPS on a subsystem** and see its development certificate. A subsystem
@@ -311,9 +343,9 @@ without a certificate gets a self-signed one for its host names, generated in th
 same write:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"name":"shop","https":{"enabled":true}}' $A/subsystems/1
+curl -s -H "$H" -X PUT -H "$J" -d '{"name":"shop","https":{"enabled":true}}' $A/subsystems/1
 curl -sk --resolve shop.example.com:8443:127.0.0.1 https://shop.example.com:8443/index.html   # hello from shop
-curl -s $A/certificates     # dev-shop, source "self_signed", usedBy [1]; no key is ever shown
+curl -s -H "$H" $A/certificates     # dev-shop, source "self_signed", usedBy [1]; no key is ever shown
 ```
 
 (`-k` because a development certificate is not trusted by anyone.) Browsers warn
@@ -326,7 +358,7 @@ requests that carry a key are accepted only from this machine:
 ```sh
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=shop.example.com" \
   -addext "subjectAltName=DNS:shop.example.com" -keyout /tmp/shop.key -out /tmp/shop.crt 2>/dev/null
-python3 - <<'PY' | curl -s -H "$J" -d @- $A/subsystems/1/certificate
+python3 - <<'PY' | curl -s -H "$H" -H "$J" -d @- $A/subsystems/1/certificate
 import json; print(json.dumps({"name": "shop", "certPem": open("/tmp/shop.crt").read(), "keyPem": open("/tmp/shop.key").read()}))
 PY
 curl -s --cacert /tmp/shop.crt --resolve shop.example.com:8443:127.0.0.1 https://shop.example.com:8443/index.html
@@ -355,7 +387,7 @@ share a certificate are fine).
 **Redirect and HSTS** are per subsystem and live. They act only while TLS is on:
 
 ```sh
-curl -s -X PUT -H "$J" -d '{"name":"shop","https":{"enabled":true,"certificateId":CERT_ID,"redirect":"308","hsts":{"enabled":true,"maxAgeSecs":300}}}' $A/subsystems/1
+curl -s -H "$H" -X PUT -H "$J" -d '{"name":"shop","https":{"enabled":true,"certificateId":CERT_ID,"redirect":"308","hsts":{"enabled":true,"maxAgeSecs":300}}}' $A/subsystems/1
 curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/cart?x=1 | head -3   # 308, location: https://shop.example.com:8443/cart?x=1
 ```
 
@@ -365,8 +397,8 @@ Browsers remember HSTS for `maxAgeSecs`, so start with a short one.
 mark the group TLS (`serverName` is needed when the endpoint is an IP address):
 
 ```sh
-curl -s -H "$J" -d "{\"name\":\"internal\",\"pem\":$(python3 -c 'import json;print(json.dumps(open("/tmp/ca.pem").read()))')}" $A/ca-bundles
-curl -s -X PUT -H "$J" -d '{"name":"backend","tls":{"enabled":true,"serverName":"backend.internal","ca":"internal"}}' $A/subsystems/1/upstreams/UPSTREAM_ID
+curl -s -H "$H" -H "$J" -d "{\"name\":\"internal\",\"pem\":$(python3 -c 'import json;print(json.dumps(open("/tmp/ca.pem").read()))')}" $A/ca-bundles
+curl -s -H "$H" -X PUT -H "$J" -d '{"name":"backend","tls":{"enabled":true,"serverName":"backend.internal","ca":"internal"}}' $A/subsystems/1/upstreams/UPSTREAM_ID
 ```
 
 A certificate the proxy does not trust is refused (a 502, counted as a connect
@@ -381,7 +413,76 @@ is lost the keys are unreadable and certificates must be uploaded again. To run
 several instances on one database give them all the same key
 (`FAST_PROXY_MASTER_KEY`): a change on one reaches the others within a few seconds.
 
+## 17. Maintenance mode
+
+Take `shop` out of service for a deploy, with an explanation, a TTL and a way in
+for you:
+
+```sh
+curl -s -H "$H" -H "$J" -X PUT -d '{"message":"Deploying v2","ttlSecs":600,
+  "bypass":{"cidrs":["127.0.0.0/8"]}}' $A/subsystems/1/maintenance
+curl -si -H 'Host: blog.example.com' http://127.0.0.1:8000/ | head -1   # blog is untouched
+curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/ | head -3   # 200, X-Maintenance-Bypass: subsystem
+curl -s  -H "$H" $A/maintenance                                          # what is on, secondsLeft
+curl -s  -H "$H" -X DELETE $A/subsystems/1/maintenance                   # reopen
+```
+
+From another address (or without the bypass) the same request gets
+`503 Service Unavailable` with `Retry-After` and your message, and never reaches
+the backend. See the README's *Maintenance mode* section for the scopes, the
+secret-header bypass and the metrics.
+
+## 18. Who changed what: the audit log
+
+Every change is recorded with who made it, and so is every refused attempt:
+
+```sh
+curl -s -H "$H" "$A/audit?limit=5"                     # newest first; pass nextBefore as before= for older ones
+curl -s -H "$H" "$A/audit?outcome=denied"              # failed sign-ins, forbidden writes, foreign Host headers
+curl -s -H "$H" "$A/audit?action=maintenance.set&actor=ci"
+curl -s -H "$H" "$A/audit/export?since=0" > audit.ndjson   # everything, one JSON object per line (admin only)
+```
+
+An entry carries the token's *name* (never the token), the client address, the
+request id (also the `X-Request-Id` response header), a stable action such as
+`subsystem.update` or `access.denied`, the target, the outcome and the revision it
+created. Keys, certificates and secrets never appear in it.
+
+## 19. The command line
+
+Everything in sections 17 and 18 has a shell form, so a deploy script does not
+need `curl`:
+
+```sh
+export FAST_PROXY_TOKEN=$TOKEN
+fast-proxy maintenance on --subsystem shop --ttl 10m --message "Deploying v2" \
+    --bypass-cidr 127.0.0.0/8
+fast-proxy maintenance status
+fast-proxy audit --limit 5
+fast-proxy maintenance off --subsystem shop
+fast-proxy reload
+```
+
+It exits 0 on success, 1 when the proxy refuses (with the proxy's reason) and 2 on
+a usage or connection problem, so `set -e` does the right thing.
+
+If every token is lost, create a new admin one straight from the database file
+(it works while the proxy runs and shows the token once):
+
+```sh
+fast-proxy token create --name rescue --role admin
+fast-proxy token list
+```
+
+And before you restart with a changed config file, check it without starting
+anything:
+
+```sh
+fast-proxy config validate                      # the file, with any flags you would start with
+fast-proxy config validate --check-database     # also compile what the database stores, read-only
+```
+
 ## Not available yet
 
-Authentication for the admin plane, ACME certificates, maintenance mode, rate
-limits and request sampling are later milestones (see [ROADMAP.md](ROADMAP.md)).
+ACME certificates, rate limits and request sampling are later milestones (see
+[ROADMAP.md](ROADMAP.md)).

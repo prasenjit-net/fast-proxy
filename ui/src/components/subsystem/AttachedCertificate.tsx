@@ -2,6 +2,7 @@ import { daysLeft, expiryLabel, EXPIRING_DAYS, isSelfSigned } from "../../lib/ce
 import type { AttachedCertificate as Attached } from "../../lib/types";
 import Badge from "../Badge";
 import { SourceBadge } from "../certificates/CertificateBadges";
+import WriteOnly from "../WriteOnly";
 
 interface Props {
   certificate: Attached;
@@ -47,6 +48,7 @@ export default function AttachedCertificate({
           Those hosts will fail certificate checks over HTTPS.
         </p>
       ) : null}
+      <WriteOnly>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" className="btn btn-secondary btn-sm" onClick={onUpload}>
           Upload a certificate
@@ -60,6 +62,7 @@ export default function AttachedCertificate({
           </button>
         )}
       </div>
+      </WriteOnly>
     </div>
   );
 }

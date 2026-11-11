@@ -1,6 +1,7 @@
 //! The shared API error type and its JSON envelope.
 
-use axum::http::StatusCode;
+use axum::http::header::{RETRY_AFTER, WWW_AUTHENTICATE};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use fast_proxy_model::FieldError;
@@ -44,6 +45,18 @@ pub enum AppError {
     #[error("{0}")]
     Forbidden(String),
 
+    /// No valid credential was presented.
+    #[error("{0}")]
+    Unauthorized(String),
+
+    /// Too many failed authentications from one address.
+    #[error("too many failed authentications; try again later")]
+    TooManyRequests { retry_after_secs: u64 },
+
+    /// The `Host` header is not one this admin plane answers to.
+    #[error("{0}")]
+    Misdirected(String),
+
     /// One or more inputs are invalid; each names its field.
     #[error("validation failed")]
     Validation(Vec<FieldError>),
@@ -61,6 +74,9 @@ impl AppError {
             AppError::BadRequest(_) | AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            AppError::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
+            AppError::Misdirected(_) => StatusCode::MISDIRECTED_REQUEST,
             AppError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Io(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -73,6 +89,9 @@ impl AppError {
             AppError::NotFound(_) => "NOT_FOUND",
             AppError::Conflict(_) => "CONFLICT",
             AppError::Forbidden(_) => "FORBIDDEN",
+            AppError::Unauthorized(_) => "UNAUTHORIZED",
+            AppError::TooManyRequests { .. } => "TOO_MANY_REQUESTS",
+            AppError::Misdirected(_) => "MISDIRECTED_REQUEST",
             AppError::TooLarge(_) => "PAYLOAD_TOO_LARGE",
             AppError::Validation(_) => "VALIDATION_FAILED",
             AppError::Io(_) => "IO_ERROR",
@@ -99,6 +118,9 @@ impl IntoResponse for AppError {
             | AppError::NotFound(_)
             | AppError::Conflict(_)
             | AppError::Forbidden(_)
+            | AppError::Unauthorized(_)
+            | AppError::TooManyRequests { .. }
+            | AppError::Misdirected(_)
             | AppError::TooLarge(_)
             | AppError::Validation(_)
             | AppError::Internal(_) => self.to_string(),
@@ -113,7 +135,18 @@ impl IntoResponse for AppError {
             error["fields"] = fields_json(fields);
         }
         let body = json!({ "error": error });
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        let headers = response.headers_mut();
+        match &self {
+            AppError::Unauthorized(_) => {
+                headers.insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            }
+            AppError::TooManyRequests { retry_after_secs } => {
+                headers.insert(RETRY_AFTER, HeaderValue::from(*retry_after_secs));
+            }
+            _ => {}
+        }
+        response
     }
 }
 
@@ -204,6 +237,21 @@ mod tests {
         let message = body["error"]["message"].as_str().unwrap();
         assert_eq!(message, "an internal error occurred");
         assert!(!message.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn authentication_errors_carry_their_status_and_headers() {
+        let unauthorized = AppError::Unauthorized("sign in".into()).into_response();
+        assert_eq!(unauthorized.status(), 401);
+        assert_eq!(unauthorized.headers()["www-authenticate"], "Bearer");
+        let throttled = AppError::TooManyRequests {
+            retry_after_secs: 42,
+        }
+        .into_response();
+        assert_eq!(throttled.status(), 429);
+        assert_eq!(throttled.headers()["retry-after"], "42");
+        let misdirected = AppError::Misdirected("no".into()).into_response();
+        assert_eq!(misdirected.status(), 421);
     }
 
     #[tokio::test]

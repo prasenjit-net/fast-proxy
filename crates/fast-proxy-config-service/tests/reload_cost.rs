@@ -4,6 +4,7 @@
 //!
 //! `cargo test -p fast-proxy-config-service --release --test reload_cost -- --ignored --nocapture`
 
+use fast_proxy_config_service::{Audited, ChangeContext};
 use std::time::{Duration, Instant};
 
 use fast_proxy_balancing::RuntimeRegistry;
@@ -25,53 +26,57 @@ const ENDPOINTS_PER_SUBSYSTEM: usize = 3;
 /// Creates the whole large configuration in one change.
 async fn populate(service: &ConfigService) {
     service
-        .apply(|conn| {
-            for s in 0..SUBSYSTEMS {
-                let id = subsystems::create(
-                    conn,
-                    &SubsystemFields {
-                        name: SubsystemName::parse(&format!("site{s}")).unwrap(),
-                        enabled: true,
-                        description: String::new(),
-                        https: fast_proxy_model::HttpsPolicy::default(),
-                    },
-                )?;
-                hosts::add(
-                    conn,
-                    id,
-                    &HostPattern::parse(&format!("site{s}.example.com")).unwrap(),
-                )?;
-                let endpoints: Vec<_> = (0..ENDPOINTS_PER_SUBSYSTEM)
-                    .map(|e| EndpointFields {
-                        addr: EndpointAddr::parse(&format!(
-                            "10.{}.{}.{}:80",
-                            s / 250,
-                            s % 250,
-                            e + 1
-                        ))
-                        .unwrap(),
-                        weight: 1,
-                        state: EndpointState::Enabled,
-                    })
-                    .collect();
-                let group = upstreams::create(
-                    conn,
-                    id,
-                    &UpstreamFields {
-                        name: "backend".into(),
-                        policy: GroupPolicy::default(),
-                    },
-                    &endpoints,
-                )?;
-                for r in 0..ROUTES_PER_SUBSYSTEM {
-                    routes::create(conn, id, &route(&format!("/r{r}"), group))?;
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            |conn| {
+                for s in 0..SUBSYSTEMS {
+                    let id = subsystems::create(
+                        conn,
+                        &SubsystemFields {
+                            name: SubsystemName::parse(&format!("site{s}")).unwrap(),
+                            enabled: true,
+                            description: String::new(),
+                            https: fast_proxy_model::HttpsPolicy::default(),
+                        },
+                    )?;
+                    hosts::add(
+                        conn,
+                        id,
+                        &HostPattern::parse(&format!("site{s}.example.com")).unwrap(),
+                    )?;
+                    let endpoints: Vec<_> = (0..ENDPOINTS_PER_SUBSYSTEM)
+                        .map(|e| EndpointFields {
+                            addr: EndpointAddr::parse(&format!(
+                                "10.{}.{}.{}:80",
+                                s / 250,
+                                s % 250,
+                                e + 1
+                            ))
+                            .unwrap(),
+                            weight: 1,
+                            state: EndpointState::Enabled,
+                        })
+                        .collect();
+                    let group = upstreams::create(
+                        conn,
+                        id,
+                        &UpstreamFields {
+                            name: "backend".into(),
+                            policy: GroupPolicy::default(),
+                        },
+                        &endpoints,
+                    )?;
+                    for r in 0..ROUTES_PER_SUBSYSTEM {
+                        routes::create(conn, id, &route(&format!("/r{r}"), group))?;
+                    }
                 }
-            }
-            Ok(Mutation {
-                value: (),
-                summary: "populate".into(),
-            })
-        })
+                Ok(Mutation {
+                    value: (),
+                    summary: "populate".into(),
+                })
+            },
+        )
         .await
         .unwrap();
 }
@@ -130,20 +135,24 @@ async fn report_reload_cost_with_a_large_configuration() {
         for round in 0..10 {
             let started = Instant::now();
             service
-                .apply(move |conn| {
-                    let mut fields = SubsystemFields {
-                        name: SubsystemName::parse("site0").unwrap(),
-                        enabled: true,
-                        description: format!("edit {round}"),
-                        https: fast_proxy_model::HttpsPolicy::default(),
-                    };
-                    fields.description.push('!');
-                    subsystems::update(conn, target, &fields)?;
-                    Ok(Mutation {
-                        value: (),
-                        summary: "edit".into(),
-                    })
-                })
+                .apply(
+                    &ChangeContext::system(),
+                    Audited::new("test.change", "test"),
+                    move |conn| {
+                        let mut fields = SubsystemFields {
+                            name: SubsystemName::parse("site0").unwrap(),
+                            enabled: true,
+                            description: format!("edit {round}"),
+                            https: fast_proxy_model::HttpsPolicy::default(),
+                        };
+                        fields.description.push('!');
+                        subsystems::update(conn, target, &fields)?;
+                        Ok(Mutation {
+                            value: (),
+                            summary: "edit".into(),
+                        })
+                    },
+                )
                 .await
                 .unwrap();
             samples.push(started.elapsed());

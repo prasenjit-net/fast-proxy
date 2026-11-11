@@ -6,12 +6,14 @@ description = "The config apply pipeline: validate, persist, compile, and swap t
 publish = false
 
 [dependencies]
+fast-proxy-auth = { path = "../fast-proxy-auth" }
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }
 fast-proxy-tls = { path = "../fast-proxy-tls" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = "0.7"

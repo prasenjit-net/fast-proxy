@@ -5,9 +5,11 @@ import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import HostsSection from "../components/subsystem/HostsSection";
 import HttpsSection from "../components/subsystem/HttpsSection";
+import MaintenanceSection from "../components/subsystem/MaintenanceSection";
 import RoutesSection from "../components/subsystem/RoutesSection";
 import SubsystemSettings from "../components/subsystem/SubsystemSettings";
 import UpstreamsSection from "../components/subsystem/UpstreamsSection";
+import WriteOnly from "../components/WriteOnly";
 import { useToast } from "../context/ToastContext";
 import { IconTrash } from "../icons";
 import { api, ApiError } from "../lib/api";
@@ -75,12 +77,15 @@ export default function SubsystemDetailPage() {
         <Badge tone={subsystem.enabled ? "ok" : "warn"} dot>
           {subsystem.enabled ? "enabled" : "disabled"}
         </Badge>
-        <button className="btn btn-danger btn-sm ml-auto" onClick={() => setConfirmingDelete(true)}>
-          <IconTrash size={14} /> Delete subsystem
-        </button>
+        <WriteOnly>
+          <button className="btn btn-danger btn-sm ml-auto" onClick={() => setConfirmingDelete(true)}>
+            <IconTrash size={14} /> Delete subsystem
+          </button>
+        </WriteOnly>
       </div>
 
       <SubsystemSettings subsystem={subsystem} />
+      <MaintenanceSection subsystem={subsystem} />
       <HostsSection subsystem={subsystem} />
       <HttpsSection subsystem={subsystem} />
       <UpstreamsSection subsystem={subsystem} />

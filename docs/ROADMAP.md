@@ -434,14 +434,20 @@ Detailed task plan and outcome: [M3-PLAN.md](M3-PLAN.md).
 - [ ] Staging/production directory switch; rate-limit safeguards.
 - [ ] Stretch: TLS-ALPN-01, DNS-01 for wildcards.
 
-### M5: Operations control and diagnostics UI
+### M5: Operations control and diagnostics UI (complete)
 
-- [ ] Maintenance mode (global/host/route) with TTL, bypass rules, persistence.
-- [ ] Admin auth (token or basic auth to start) and audit log of changes.
-- [ ] Admin UI pages: routes, upstreams and health, certs, maintenance,
-      config history, live traffic.
-- [ ] CLI subcommands for common operations (`maintenance on/off`, `reload`,
-      `config validate`).
+Plan and outcome: [M5-PLAN.md](M5-PLAN.md).
+
+- [x] Maintenance mode (global/subsystem/route) with TTL, bypass rules, persistence.
+- [x] Admin auth (bearer tokens with two roles, hashed at rest) and an audit log of
+      changes, written in the same transaction as the change.
+- [x] Admin TLS, the `Host` allow-list, security headers and a failure throttle.
+- [x] Admin UI pages: sign-in, tokens, audit log, maintenance (with a banner and a live
+      countdown), routes and upstreams overview, the admin certificate; read-only for a
+      `viewer`.
+- [x] CLI subcommands for common operations (`maintenance on/off/status`, `reload`,
+      `status`, `audit`, `config validate`, and the offline `token` commands).
+- [ ] Import/export of subsystem configuration (moved out of M5; see the risks table).
 
 ### M6: Request sampling
 
@@ -506,12 +512,12 @@ direct throughput. Reload with thousands of routes is not measured yet.
 |---|---|
 | hyper client pool may not give enough control (per-endpoint limits, health-aware reuse) | **Resolved for M1:** the spike passed ([ADR 0002](adr/0002-hyper-for-the-data-plane.md)). **Re-checked in M2:** per-endpoint health and selection sit in front of the pool (health-aware choice, not reuse), and the client's body handling was verified by spike G2 ([ADR 0008](adr/0008-retries-budget-and-body-replay.md)). Per-endpoint connection limits are M7 |
 | ACME rate limits and failure modes can lock out a domain | Staging by default, persisted state, backoff, clear status in UI |
-| Admin plane exposure is a high-impact security risk | Loopback default, auth in M5, audit log, never routable by default |
+| Admin plane exposure is a high-impact security risk | **Closed in M5.** Authentication is required by default, a non-loopback listener needs TLS and authentication to start, every change and refusal is audited, and the plane never carries a secret in output ([security-review-m5.md](security-review-m5.md)). A reverse proxy in front still makes every request look local, which the README says |
 | Sampling can leak secrets or hurt latency | Redaction on by default, bodies opt-in, off the request path, bounded buffers |
 | Windows support in CI vs. Unix-only features (signals for reload) | **Seen in M1:** the SIGINT end-to-end tests could not run on Windows and are Unix-only. Draining is also tested without signals. Reload is via the admin API, which is portable **Seen again in M2:** a refused connection takes about a second to be reported on Windows, which broke two fixed-wait tests; waits on such events must be generous and event-driven. |
 | ACME needs host names that live in the DB, but ACME config lives in the file | Derive domains from DB hosts, constrained by a file allowlist; wildcards wait for DNS-01 |
 | SQLite from async code (blocking I/O) | **Done in M1:** one dedicated store thread; the hot path only reads the in-memory snapshot, never the DB |
-| Admin UI is the only way to configure subsystems; no config-as-code | Add import/export (JSON/TOML) of subsystem config in M5 so setups are reproducible and reviewable |
+| Admin UI is the only way to configure subsystems; no config-as-code | Add import/export (JSON/TOML) of subsystem config so setups are reproducible and reviewable. **Not done in M5** (the M5 plan did not take it on); still open, the revision history and the audit log are the only record meanwhile |
 | Backup and portability of the DB file | Document file location; add export and a consistent online backup command |
 | M3: private keys leaking (database copy, revisions, logs, API) | **Done in M3:** keys are sealed with AES-256-GCM under a master key outside the database, never enter `Config` or a revision, are write-only in the API and accepted only from a loopback peer; verified by tests that read the database file and WAL, and by the security review ([security-review-m3.md](security-review-m3.md)) |
 | M3: instances sharing a database drifting apart or using different master keys | **Done in M3:** the revision version is the cluster generation, polled every few seconds; a different master key is detected and reported; tested with two services and two processes on one database |
@@ -537,3 +543,5 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | 2026-11-10 | M2 outcome: all E1-E16 held, with one refinement and one fix found by the end-to-end tests. Refinement (ADR 0008): idempotent requests are also retried after a connection reset, not only on 502/503/504. Fix: the power-of-two-choices cold start now gives an unsampled endpoint its rival's latency, so a fresh endpoint is neither starved nor flooded (it had been starved by faster measured endpoints). `UpstreamClient` and the pipeline report each request's actual endpoint and attempt count; requests cancelled by their client are counted and logged as 499. |
 | 2026-11-10 | M3 design decisions F1-F29 accepted as recommended ([M3-PLAN.md](M3-PLAN.md) section 3, ADRs [0009](adr/0009-tls-stack-and-enablement.md) to [0014](adr/0014-acme-constraints-for-m4.md)): rustls with `ring`; a process-wide TLS switch plus per-subsystem HTTPS; all certificates in SQLite with keys sealed (AES-256-GCM, master key outside the database); certificates carried in the routing snapshot; revision version as cluster generation with a sync poll; redirect, HSTS and 421 rules; upstream TLS per group. ACME settings stay in the config file. |
 | 2026-11-10 | M3 outcome: all F1-F29 held, with these differences. The `Forwarded` header was never added (the proxy only ever set `X-Forwarded-*`). Upstream HTTP/2 stays out (decision C4: pooled HTTP/1.1 upstream connections cost 1% to 3%, see [benchmarks.md](benchmarks.md) and [ADR 0013](adr/0013-upstream-tls.md)). A metric for upstream groups that do not verify certificates (`fastproxy_upstream_tls{verify="false"}`) was added during the security review because F16 required it and it was missing. Session resumption was not benchmarked separately (the load generator has no switch for it). |
+| 2026-11-10 | M5 design decisions H1-H19 **proposed** ([M5-PLAN.md](M5-PLAN.md) section 3, ADRs [0015](adr/0015-admin-authentication.md) to [0019](adr/0019-cli-and-reload.md)); pending owner confirmation. M4 (ACME) is skipped for now; M5 section 11 pins what it must leave room for. |
+| 2026-11-11 | M5 outcome: H1-H19 held as built (the owner's confirmation in #42 is still pending); see [M5-PLAN.md](M5-PLAN.md) section 12. Differences: the security review found and fixed the bypass secret header being forwarded to the upstream and a missing `nosniff` on the maintenance answer, and added the two admin metrics that exit criterion 9 asks for (`fastproxy_admin_requests_total`, `fastproxy_audit_entries_total`). Maintenance adds nothing measurable to a request it does not close (within 1.3% of M3) and answers 1.7 to 2.0 times faster than it proxies ([benchmarks.md](benchmarks.md)). Open: the browser click-through, the stack merge, the release, the M3 follow-ups, configuration import/export. |

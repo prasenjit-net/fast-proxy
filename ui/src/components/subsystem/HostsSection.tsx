@@ -6,6 +6,7 @@ import { useRefreshConfigData } from "../../lib/refreshConfigData";
 import type { Host, SubsystemDetail } from "../../lib/types";
 import ConfirmDialog from "../ConfirmDialog";
 import HostForm from "../forms/HostForm";
+import WriteOnly from "../WriteOnly";
 
 /** The host names a subsystem answers to: add and remove. */
 export default function HostsSection({ subsystem }: { subsystem: SubsystemDetail }) {
@@ -52,18 +53,22 @@ export default function HostsSection({ subsystem }: { subsystem: SubsystemDetail
               className="inline-flex items-center gap-1 rounded-full bg-surface-2 py-1 pr-1 pl-3 font-mono text-[0.8rem]"
             >
               {host.pattern}
-              <button
-                className="icon-btn danger size-6"
-                onClick={() => setRemoving(host)}
-                aria-label={`Remove ${host.pattern}`}
-              >
-                <IconX size={14} />
-              </button>
+              <WriteOnly>
+                <button
+                  className="icon-btn danger size-6"
+                  onClick={() => setRemoving(host)}
+                  aria-label={`Remove ${host.pattern}`}
+                >
+                  <IconX size={14} />
+                </button>
+              </WriteOnly>
             </li>
           ))}
         </ul>
       )}
-      <HostForm onSubmit={add} />
+      <WriteOnly>
+        <HostForm onSubmit={add} />
+      </WriteOnly>
       {removing ? (
         <ConfirmDialog
           title="Remove host?"

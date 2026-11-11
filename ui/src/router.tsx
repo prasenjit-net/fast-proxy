@@ -4,14 +4,18 @@
 // component, so the sidebar/topbar shell wraps every page via <Outlet/>.
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import Layout from "./components/Layout";
+import AuditLogPage from "./pages/AuditLog";
 import CertificatesPage from "./pages/Certificates";
 import DashboardPage from "./pages/Dashboard";
+import MaintenancePage from "./pages/Maintenance";
 import NotFoundPage from "./pages/NotFound";
 import ResolverPage from "./pages/Resolver";
+import RoutesOverviewPage from "./pages/RoutesOverview";
 import RevisionsPage from "./pages/Revisions";
 import SettingsPage from "./pages/Settings";
 import SubsystemDetailPage from "./pages/SubsystemDetail";
 import SubsystemsPage from "./pages/Subsystems";
+import TokensPage from "./pages/Tokens";
 
 const rootRoute = createRootRoute({
   component: Layout,
@@ -33,6 +37,18 @@ const subsystemDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/subsystems/$id",
   component: SubsystemDetailPage,
+});
+
+const routesOverviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/routes",
+  component: RoutesOverviewPage,
+});
+
+const maintenanceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/maintenance",
+  component: MaintenancePage,
 });
 
 const certificatesRoute = createRoute({
@@ -59,13 +75,29 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const tokensRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tokens",
+  component: TokensPage,
+});
+
+const auditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/audit",
+  component: AuditLogPage,
+});
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   subsystemsRoute,
   subsystemDetailRoute,
+  routesOverviewRoute,
+  maintenanceRoute,
   certificatesRoute,
   revisionsRoute,
   resolverRoute,
+  auditRoute,
+  tokensRoute,
   settingsRoute,
 ]);
 

@@ -97,6 +97,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            maintenance: None,
         }
     }
 

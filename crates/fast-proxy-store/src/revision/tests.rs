@@ -541,3 +541,194 @@ mod tls_revisions {
         let _ = db.version();
     }
 }
+
+mod outside_config {
+    use fast_proxy_model::{
+        BypassRules, MaintenanceSettings, MaintenanceTarget, Role, SecretHash, TokenName,
+    };
+
+    use super::*;
+    use crate::repository::maintenance;
+    use crate::repository::tokens::{self, NewToken};
+
+    /// A change to data outside the configuration: the configuration copy in
+    /// the revision stays as it was.
+    fn write_outside<T>(
+        db: &mut Database,
+        actor: &str,
+        mutate: impl FnOnce(&rusqlite::Connection) -> Result<Mutation<T>, StoreError>,
+    ) -> Result<crate::Written<T>, StoreError> {
+        db.write_as(actor, mutate, |_| Ok(()))
+    }
+
+    fn maintenance_settings() -> MaintenanceSettings {
+        MaintenanceSettings {
+            message: "down".into(),
+            body: None,
+            retry_after_secs: None,
+            bypass: BypassRules::default(),
+            expires_at_ms: None,
+            set_by: "ops".into(),
+            set_at_ms: 1,
+        }
+    }
+
+    fn new_token(name: &str) -> NewToken {
+        NewToken {
+            id: None,
+            name: TokenName::parse(name).unwrap(),
+            role: Role::Admin,
+            secret_hash: SecretHash::new([0xAB; 32]),
+            created_by: "cli".into(),
+            expires_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn a_write_records_the_actor_and_plain_writes_record_system() {
+        let mut db = db();
+        db.write_as(
+            "ann",
+            |c| {
+                subsystems::create(c, &subsystem_fields("shop"))?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "created".into(),
+                })
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        commit(&mut db, "plain", |c| {
+            subsystems::create(c, &subsystem_fields("blog"))
+        })
+        .unwrap();
+        let listed = db.read(|c| list(c, 10, None)).unwrap();
+        assert_eq!(listed[0].actor, "system");
+        assert_eq!(listed[1].actor, "ann");
+        assert_eq!(db.read(|c| get(c, 1)).unwrap().actor, "ann");
+    }
+
+    #[test]
+    fn a_change_outside_config_moves_the_version_without_changing_the_config() {
+        let mut db = db();
+        seed(&mut db, "shop", "s.example.com");
+        let before = db.load_all().unwrap();
+        let written = write_outside(&mut db, "ann", |c| {
+            tokens::create(c, &new_token("ci"), 5)?;
+            Ok(Mutation {
+                value: (),
+                summary: "token created: ci".into(),
+            })
+        })
+        .unwrap();
+        assert_eq!(written.version, 2);
+        assert_eq!(written.config, before);
+        let revision = db.read(|c| get(c, 2)).unwrap();
+        assert_eq!(revision.actor, "ann");
+        assert_eq!(revision.summary, "token created: ci");
+        assert_eq!(revision.config, before);
+    }
+
+    #[test]
+    fn a_failed_change_outside_config_leaves_nothing_behind() {
+        let mut db = db();
+        let result: Result<_, _> = write_outside(&mut db, "ann", |c| {
+            tokens::create(c, &new_token("ci"), 5)?;
+            tokens::create(c, &new_token("ci"), 5)?;
+            Ok(Mutation {
+                value: (),
+                summary: "never".into(),
+            })
+        });
+        assert!(matches!(result.unwrap_err(), StoreError::Conflict(_)));
+        assert!(db.read(tokens::list).unwrap().is_empty());
+        assert_eq!(db.current_version().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_rollback_leaves_tokens_and_maintenance_untouched() {
+        let mut db = db();
+        let fixture = seed(&mut db, "shop", "s.example.com");
+        write_outside(&mut db, "ann", |c| {
+            tokens::create(c, &new_token("ci"), 5)?;
+            maintenance::set(c, MaintenanceTarget::Global, &maintenance_settings())?;
+            maintenance::set(
+                c,
+                MaintenanceTarget::Subsystem(fixture.subsystem),
+                &maintenance_settings(),
+            )?;
+            Ok(Mutation {
+                value: (),
+                summary: "ops".into(),
+            })
+        })
+        .unwrap();
+        let tokens_before = db.read(tokens::list).unwrap();
+        let maintenance_before = db.read(maintenance::list).unwrap();
+
+        restore_as_new_revision(&mut db, 1);
+
+        assert_eq!(db.read(tokens::list).unwrap(), tokens_before);
+        assert_eq!(db.read(maintenance::list).unwrap(), maintenance_before);
+    }
+
+    #[test]
+    fn a_rollback_drops_maintenance_only_for_targets_that_are_gone() {
+        let mut db = db();
+        let early = seed(&mut db, "shop", "s.example.com");
+        let later = seed(&mut db, "blog", "b.example.com");
+        write_outside(&mut db, "ann", |c| {
+            maintenance::set(
+                c,
+                MaintenanceTarget::Subsystem(early.subsystem),
+                &maintenance_settings(),
+            )?;
+            maintenance::set(
+                c,
+                MaintenanceTarget::Subsystem(later.subsystem),
+                &maintenance_settings(),
+            )?;
+            Ok(Mutation {
+                value: (),
+                summary: "ops".into(),
+            })
+        })
+        .unwrap();
+
+        // Version 1 had only "shop": "blog" disappears and takes its scope along.
+        restore_as_new_revision(&mut db, 1);
+
+        let rows = db.read(maintenance::list).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].target,
+            MaintenanceTarget::Subsystem(early.subsystem)
+        );
+    }
+
+    #[test]
+    fn no_revision_contains_a_secret_hash() {
+        let mut db = db();
+        write_outside(&mut db, "ann", |c| {
+            tokens::create(c, &new_token("ci"), 5)?;
+            Ok(Mutation {
+                value: (),
+                summary: "token created: ci".into(),
+            })
+        })
+        .unwrap();
+        let stored: Vec<String> = db
+            .read(|c| {
+                let mut statement = c.prepare("SELECT summary || config || actor FROM revision")?;
+                let rows = statement.query_map([], |row| row.get(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            })
+            .unwrap();
+        let hash_hex = "ab".repeat(32);
+        for row in stored {
+            assert!(!row.to_lowercase().contains(&hash_hex));
+            assert!(!row.contains("171, 171"), "no byte-array form either");
+        }
+    }
+}

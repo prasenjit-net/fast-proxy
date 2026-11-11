@@ -1,6 +1,7 @@
 //! The cluster sync: two config services on one database file, as two
 //! instances (or processes) sharing it would be.
 
+use crate::{Audited, ChangeContext};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,11 +63,11 @@ impl Pair {
 
     async fn add_shop(&self) -> SubsystemId {
         self.a
-            .apply(create_site(
-                "shop",
-                "shop.example.com".into(),
-                "127.0.0.1:3000",
-            ))
+            .apply(
+                &ChangeContext::system(),
+                Audited::new("test.change", "test"),
+                create_site("shop", "shop.example.com".into(), "127.0.0.1:3000"),
+            )
             .await
             .unwrap()
             .value
@@ -103,17 +104,21 @@ async fn a_subsystem_edit_on_one_instance_reaches_the_other() {
     assert_eq!(version(&pair.b), version(&pair.a));
     let mut changes = pair.b.subscribe();
     pair.a
-        .apply(|conn| {
-            hosts::add(
-                conn,
-                SubsystemId(1),
-                &HostPattern::parse("extra.example.com").unwrap(),
-            )?;
-            Ok(Mutation {
-                value: (),
-                summary: "host added".into(),
-            })
-        })
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            |conn| {
+                hosts::add(
+                    conn,
+                    SubsystemId(1),
+                    &HostPattern::parse("extra.example.com").unwrap(),
+                )?;
+                Ok(Mutation {
+                    value: (),
+                    summary: "host added".into(),
+                })
+            },
+        )
         .await
         .unwrap();
     assert_eq!(pair.b.sync_once().await, SyncResult::Reloaded);
@@ -138,13 +143,18 @@ async fn certificate_uploads_renewals_https_toggles_and_deletions_all_propagate(
     let issued = ca.issue(&LeafSpec::new(&["shop.example.com"]));
     let id = pair
         .a
-        .upload_certificate("shop", &issued.chain_pem, &issued.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &issued.chain_pem,
+            &issued.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     pair.a
-        .set_subsystem_https(site, https_on(Some(id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(id)))
         .await
         .unwrap();
     pair.b.sync_once().await;
@@ -153,6 +163,7 @@ async fn certificate_uploads_renewals_https_toggles_and_deletions_all_propagate(
     let renewed = ca.issue(&LeafSpec::new(&["shop.example.com"]));
     pair.a
         .replace_certificate(
+            &ChangeContext::system(),
             id,
             CertificateChange {
                 cert_pem: Some(renewed.chain_pem),
@@ -167,7 +178,7 @@ async fn certificate_uploads_renewals_https_toggles_and_deletions_all_propagate(
     assert_ne!(first.version, second.version, "the renewal arrived");
 
     pair.a
-        .set_subsystem_https(site, HttpsPolicy::default())
+        .set_subsystem_https(&ChangeContext::system(), site, HttpsPolicy::default())
         .await
         .unwrap();
     pair.b.sync_once().await;
@@ -175,7 +186,10 @@ async fn certificate_uploads_renewals_https_toggles_and_deletions_all_propagate(
     assert!(!snapshot.subsystems.values().next().unwrap().https.enabled);
     drop(snapshot);
 
-    pair.a.delete_certificate(id).await.unwrap();
+    pair.a
+        .delete_certificate(&ChangeContext::system(), id)
+        .await
+        .unwrap();
     pair.b.sync_once().await;
     assert!(pair.b.list_certificates().await.unwrap().is_empty());
 }
@@ -188,18 +202,28 @@ async fn the_receiver_reuses_unchanged_certificates_and_endpoint_runtime_state()
     let one = ca.issue(&LeafSpec::new(&["shop.example.com"]));
     let id = pair
         .a
-        .upload_certificate("shop", &one.chain_pem, &one.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "shop",
+            &one.chain_pem,
+            &one.key_pem,
+        )
         .await
         .unwrap()
         .value
         .id;
     let other = ca.issue(&LeafSpec::new(&["blog.example.com"]));
     pair.a
-        .upload_certificate("blog", &other.chain_pem, &other.key_pem)
+        .upload_certificate(
+            &ChangeContext::system(),
+            "blog",
+            &other.chain_pem,
+            &other.key_pem,
+        )
         .await
         .unwrap();
     pair.a
-        .set_subsystem_https(site, https_on(Some(id)))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(Some(id)))
         .await
         .unwrap();
     pair.b.sync_once().await;
@@ -231,6 +255,7 @@ async fn the_receiver_reuses_unchanged_certificates_and_endpoint_runtime_state()
         .unwrap();
     pair.a
         .replace_certificate(
+            &ChangeContext::system(),
             blog.id,
             CertificateChange {
                 cert_pem: Some(renewed.chain_pem),
@@ -291,20 +316,20 @@ async fn a_stale_instance_never_writes_over_a_newer_database_state() {
     pair.add_shop().await;
     pair.b.sync_once().await;
     pair.a
-        .apply(create_site(
-            "blog",
-            "blog.example.com".into(),
-            "127.0.0.1:3001",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("blog", "blog.example.com".into(), "127.0.0.1:3001"),
+        )
         .await
         .unwrap();
     // B has not synced, and writes.
     pair.b
-        .apply(create_site(
-            "docs",
-            "docs.example.com".into(),
-            "127.0.0.1:3002",
-        ))
+        .apply(
+            &ChangeContext::system(),
+            Audited::new("test.change", "test"),
+            create_site("docs", "docs.example.com".into(), "127.0.0.1:3002"),
+        )
         .await
         .unwrap();
     let names = |service: &ConfigService| {
@@ -333,7 +358,7 @@ async fn a_different_master_key_is_reported_and_its_certificates_are_not_served(
     let pair = Pair::with_keys(KEY_ONE, KEY_TWO).await;
     let site = pair.add_shop().await;
     pair.a
-        .set_subsystem_https(site, https_on(None))
+        .set_subsystem_https(&ChangeContext::system(), site, https_on(None))
         .await
         .unwrap();
     assert_eq!(

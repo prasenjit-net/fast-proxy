@@ -218,3 +218,135 @@ fn the_repository_config_file_parses_and_is_valid() {
     assert_eq!(config.data_plane.tls.listen.port(), 8443);
     config.validate().unwrap();
 }
+
+mod admin_protection {
+    use super::*;
+
+    fn validated(toml: &str) -> Result<(), String> {
+        let mut config = parse(toml).unwrap();
+        config.data_plane.state_dir = tempfile::tempdir().unwrap().keep();
+        config.validate().map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn authentication_is_required_by_default() {
+        let config = parse("").unwrap();
+        assert_eq!(config.admin.auth, AdminAuth::Required);
+        assert!(config.admin.allowed_hosts.is_empty());
+        assert!(!config.admin.allow_insecure_remote);
+    }
+
+    #[test]
+    fn the_admin_keys_parse() {
+        let config = parse(
+            "[admin]\nauth = \"off\"\nallowed_hosts = [\"admin.example.com\"]\nallow_insecure_remote = true\n",
+        )
+        .unwrap();
+        assert_eq!(config.admin.auth, AdminAuth::Off);
+        assert_eq!(config.admin.allowed_hosts, ["admin.example.com"]);
+        assert!(config.admin.allow_insecure_remote);
+    }
+
+    #[test]
+    fn an_unknown_auth_mode_is_rejected() {
+        assert!(parse("[admin]\nauth = \"maybe\"\n").is_err());
+        assert!(parse("[admin]\nauth = \"Required\"\n").is_err());
+    }
+
+    #[test]
+    fn loopback_with_or_without_authentication_is_accepted() {
+        assert!(validated("[admin]\nlisten = \"127.0.0.1:9100\"\n").is_ok());
+        assert!(validated("[admin]\nlisten = \"127.0.0.1:9100\"\nauth = \"off\"\n").is_ok());
+        assert!(validated("[admin]\nlisten = \"[::1]:9100\"\nauth = \"off\"\n").is_ok());
+    }
+
+    #[test]
+    fn leaving_loopback_without_tls_needs_the_explicit_override_and_names_it() {
+        let message = validated("[admin]\nlisten = \"0.0.0.0:9100\"\n").unwrap_err();
+        assert!(message.contains("admin.tls.enabled"), "{message}");
+        assert!(message.contains("admin.allow_insecure_remote"), "{message}");
+        assert!(message.contains("0.0.0.0:9100"), "{message}");
+        assert!(
+            validated("[admin]\nlisten = \"0.0.0.0:9100\"\nallow_insecure_remote = true\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn authentication_off_is_refused_off_loopback_even_with_the_override() {
+        let message = validated(
+            "[admin]\nlisten = \"0.0.0.0:9100\"\nauth = \"off\"\nallow_insecure_remote = true\n",
+        )
+        .unwrap_err();
+        assert!(message.contains("admin.auth"), "{message}");
+    }
+
+    #[test]
+    fn allowed_hosts_must_be_host_names() {
+        for bad in ["", "has space", "a/b", "user@host"] {
+            let message =
+                validated(&format!("[admin]\nallowed_hosts = [\"{bad}\"]\n")).unwrap_err();
+            assert!(
+                message.contains("admin.allowed_hosts"),
+                "{bad:?}: {message}"
+            );
+        }
+        assert!(
+            validated("[admin]\nallowed_hosts = [\"admin.example.com\", \"10.0.0.5\"]\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn admin_tls_defaults_to_off_with_the_documented_names() {
+        let config = parse("").unwrap();
+        assert!(!config.admin.tls.enabled);
+        assert_eq!(config.admin.tls.names, ["localhost"]);
+        assert_eq!(config.admin.tls.certificate, "admin");
+    }
+
+    #[test]
+    fn admin_tls_keys_parse_and_unknown_ones_are_rejected() {
+        let config = parse(
+            "[admin.tls]\nenabled = true\nnames = [\"admin.example.com\", \"10.0.0.5\"]\ncertificate = \"ops\"\n",
+        )
+        .unwrap();
+        assert!(config.admin.tls.enabled);
+        assert_eq!(config.admin.tls.names, ["admin.example.com", "10.0.0.5"]);
+        assert_eq!(config.admin.tls.certificate, "ops");
+        assert!(parse("[admin.tls]\ntypo = 1\n").is_err());
+    }
+
+    #[test]
+    fn tls_makes_a_non_loopback_admin_listener_acceptable_without_the_override() {
+        assert!(
+            validated("[admin]\nlisten = \"0.0.0.0:9100\"\n[admin.tls]\nenabled = true\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn authentication_off_stays_refused_off_loopback_even_with_tls() {
+        let message = validated(
+            "[admin]\nlisten = \"0.0.0.0:9100\"\nauth = \"off\"\n[admin.tls]\nenabled = true\n",
+        )
+        .unwrap_err();
+        assert!(message.contains("admin.auth"), "{message}");
+    }
+
+    #[test]
+    fn enabled_admin_tls_needs_a_certificate_name_and_names() {
+        let empty_certificate =
+            validated("[admin.tls]\nenabled = true\ncertificate = \" \"\n").unwrap_err();
+        assert!(
+            empty_certificate.contains("admin.tls.certificate"),
+            "{empty_certificate}"
+        );
+        for names in ["[]", "[\"\"]"] {
+            let message =
+                validated(&format!("[admin.tls]\nenabled = true\nnames = {names}\n")).unwrap_err();
+            assert!(message.contains("admin.tls.names"), "{names}: {message}");
+        }
+        assert!(
+            validated("[admin.tls]\nenabled = false\nnames = []\n").is_ok(),
+            "nothing is checked while it is off"
+        );
+    }
+}

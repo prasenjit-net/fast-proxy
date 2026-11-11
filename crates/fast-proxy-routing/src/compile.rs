@@ -3,14 +3,16 @@ use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_model::{
-    Config, RoutePrefix, SubsystemConfig, UpstreamGroupConfig, UpstreamGroupId,
+    Config, MaintenanceTarget, RouteId, RoutePrefix, SubsystemConfig, SubsystemId,
+    UpstreamGroupConfig, UpstreamGroupId,
 };
 use fast_proxy_tls::UpstreamTrust;
 
 use crate::compiled_upstream::GroupFault;
 use crate::snapshot::{CompiledRoute, CompiledSubsystem};
 use crate::{
-    CompileError, CompiledHttps, CompiledUpstream, HostTable, RouteTable, Snapshot, TlsInputs,
+    CompileError, CompiledHttps, CompiledMaintenance, CompiledUpstream, HostTable,
+    MaintenanceInputs, MaintenanceScope, RouteTable, Snapshot, TlsInputs,
 };
 
 /// Compiles `config` into a snapshot labelled `version`. Pure and
@@ -40,6 +42,21 @@ pub fn compile_with_tls(
     previous: &RuntimeRegistry,
     tls: &TlsInputs,
 ) -> Result<Snapshot, CompileError> {
+    compile_all(version, config, previous, tls, &MaintenanceInputs::none())
+}
+
+/// Like [`compile_with_tls`], also carrying the active maintenance scopes into
+/// the snapshot (global, per subsystem and per route). Fails when a scope
+/// names a subsystem or route that does not exist; a scope already over at
+/// `maintenance.now_ms` is left out.
+pub fn compile_all(
+    version: u64,
+    config: &Config,
+    previous: &RuntimeRegistry,
+    tls: &TlsInputs,
+    maintenance: &MaintenanceInputs,
+) -> Result<Snapshot, CompileError> {
+    let scopes = ScopeTable::build(config, maintenance)?;
     let registry = previous.rebuilt_for(
         config
             .subsystems
@@ -70,7 +87,10 @@ pub fn compile_with_tls(
             }
             host_entries.push((pattern, subsystem.id));
         }
-        subsystems.insert(subsystem.id, compile_subsystem(subsystem, &registry, tls)?);
+        subsystems.insert(
+            subsystem.id,
+            compile_subsystem(subsystem, &registry, tls, &scopes)?,
+        );
     }
 
     Ok(Snapshot {
@@ -78,13 +98,71 @@ pub fn compile_with_tls(
         tls_enabled: tls.enabled,
         hosts: HostTable::build(host_entries),
         subsystems,
+        maintenance: scopes.global,
     })
+}
+
+/// The active maintenance scopes, checked against the configuration and sorted
+/// by what they cover.
+struct ScopeTable {
+    global: Option<Arc<CompiledMaintenance>>,
+    subsystems: HashMap<SubsystemId, Arc<CompiledMaintenance>>,
+    routes: HashMap<RouteId, Arc<CompiledMaintenance>>,
+}
+
+impl ScopeTable {
+    fn build(config: &Config, inputs: &MaintenanceInputs) -> Result<Self, CompileError> {
+        let mut table = Self {
+            global: None,
+            subsystems: HashMap::new(),
+            routes: HashMap::new(),
+        };
+        for (target, settings) in &inputs.scopes {
+            // Existence is checked for every stored scope, active or not, so a
+            // dangling one never survives a rollback.
+            let scope = match target {
+                MaintenanceTarget::Global => MaintenanceScope::Global,
+                MaintenanceTarget::Subsystem(id) => {
+                    if !config.subsystems.iter().any(|s| s.id == *id) {
+                        return Err(CompileError::UnknownMaintenanceSubsystem { id: id.0 });
+                    }
+                    MaintenanceScope::Subsystem
+                }
+                MaintenanceTarget::Route(id) => {
+                    let exists = config
+                        .subsystems
+                        .iter()
+                        .flat_map(|s| &s.routes)
+                        .any(|route| route.id == *id);
+                    if !exists {
+                        return Err(CompileError::UnknownMaintenanceRoute { id: id.0 });
+                    }
+                    MaintenanceScope::Route
+                }
+            };
+            if !settings.is_active(inputs.now_ms) {
+                continue;
+            }
+            let compiled = Arc::new(CompiledMaintenance::new(scope, settings.clone()));
+            match target {
+                MaintenanceTarget::Global => table.global = Some(compiled),
+                MaintenanceTarget::Subsystem(id) => {
+                    table.subsystems.insert(*id, compiled);
+                }
+                MaintenanceTarget::Route(id) => {
+                    table.routes.insert(*id, compiled);
+                }
+            }
+        }
+        Ok(table)
+    }
 }
 
 fn compile_subsystem(
     subsystem: &SubsystemConfig,
     registry: &RuntimeRegistry,
     tls: &TlsInputs,
+    scopes: &ScopeTable,
 ) -> Result<CompiledSubsystem, CompileError> {
     let name = subsystem.name.as_str();
     let https = compile_https(subsystem, tls)?;
@@ -121,6 +199,7 @@ fn compile_subsystem(
                 response_timeout: route.response_timeout,
                 retry: route.retry,
                 upstream: Arc::clone(group),
+                maintenance: scopes.routes.get(&route.id).cloned(),
             },
         ));
     }
@@ -131,6 +210,7 @@ fn compile_subsystem(
         https,
         routes: RouteTable::build(routes),
         upstreams: groups,
+        maintenance: scopes.subsystems.get(&subsystem.id).cloned(),
     })
 }
 

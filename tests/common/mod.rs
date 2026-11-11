@@ -63,6 +63,8 @@ pub fn start_slow_backend(name: &'static str, delay: Duration) -> u16 {
     port
 }
 
+pub mod console;
+
 pub struct Proxy {
     pub child: Child,
     pub data: SocketAddr,
@@ -86,7 +88,7 @@ pub fn write_config(
     std::fs::write(
         &path,
         format!(
-            "[data_plane]\nstate_dir = {state:?}\n{extra}\n[[data_plane.listener]]\nname = \"http\"\nlisten = \"127.0.0.1:{data_port}\"\n\n[admin]\nlisten = \"127.0.0.1:{admin_port}\"\n",
+            "[data_plane]\nstate_dir = {state:?}\n{extra}\n[[data_plane.listener]]\nname = \"http\"\nlisten = \"127.0.0.1:{data_port}\"\n\n[admin]\nlisten = \"127.0.0.1:{admin_port}\"\nauth = \"off\"\n",
             state = dir.join("state")
         ),
     )
@@ -197,14 +199,30 @@ pub fn http(
     host: &str,
     body: Option<&Value>,
 ) -> (u16, String) {
+    http_with_headers(addr, method, path, host, &[], body)
+}
+
+/// Like [`http`], with extra request headers such as `Authorization`.
+pub fn http_with_headers(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    host: &str,
+    headers: &[(&str, &str)],
+    body: Option<&Value>,
+) -> (u16, String) {
     let payload = body.map(Value::to_string).unwrap_or_default();
+    let extra: String = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
     let mut stream = TcpStream::connect(addr).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
         payload.len()
     )
     .unwrap();
@@ -216,7 +234,7 @@ pub fn http(
 }
 
 pub fn admin(proxy: &Proxy, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-    let (status, text) = http(proxy.admin, method, path, "admin", body.as_ref());
+    let (status, text) = http(proxy.admin, method, path, "localhost", body.as_ref());
     (status, serde_json::from_str(&text).unwrap_or(Value::Null))
 }
 
@@ -313,7 +331,7 @@ pub fn request_in_background(proxy: &Proxy) -> thread::JoinHandle<Option<(u16, S
 
 /// The value of the first exposition line that starts with `prefix`.
 pub fn metric(proxy: &Proxy, prefix: &str) -> Option<f64> {
-    let (_, text) = http(proxy.admin, "GET", "/metrics", "admin", None);
+    let (_, text) = http(proxy.admin, "GET", "/metrics", "localhost", None);
     text.lines()
         .find(|line| line.starts_with(prefix))
         .and_then(|line| line.rsplit(' ').next())

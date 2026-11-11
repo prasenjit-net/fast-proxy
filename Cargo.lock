@@ -579,10 +579,13 @@ dependencies = [
  "bytes",
  "clap",
  "fast-proxy-admin",
+ "fast-proxy-auth",
+ "fast-proxy-balancing",
  "fast-proxy-config-service",
  "fast-proxy-dataplane",
  "fast-proxy-health",
  "fast-proxy-model",
+ "fast-proxy-routing",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
@@ -590,6 +593,7 @@ dependencies = [
  "http-body-util",
  "humantime",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
  "rustls",
  "serde",
@@ -609,7 +613,9 @@ name = "fast-proxy-admin"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "bytes",
  "chrono",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-config-service",
  "fast-proxy-model",
@@ -619,14 +625,32 @@ dependencies = [
  "fast-proxy-test-pki",
  "fast-proxy-tls",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "mime_guess",
  "rust-embed",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-util",
  "tower",
  "tracing",
+]
+
+[[package]]
+name = "fast-proxy-auth"
+version = "0.0.0"
+dependencies = [
+ "arc-swap",
+ "base64 0.22.1",
+ "fast-proxy-model",
+ "ring",
+ "subtle",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -641,6 +665,7 @@ name = "fast-proxy-config-service"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
@@ -648,6 +673,7 @@ dependencies = [
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
  "fast-proxy-tls",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -660,6 +686,7 @@ name = "fast-proxy-dataplane"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
@@ -712,6 +739,7 @@ name = "fast-proxy-routing"
 version = "0.0.0"
 dependencies = [
  "arc-swap",
+ "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-test-pki",
@@ -2148,6 +2176,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
 dependencies = [
  "rustls",
+ "tokio",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
  "tokio",
 ]
 

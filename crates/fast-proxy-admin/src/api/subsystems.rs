@@ -7,6 +7,7 @@ use fast_proxy_store::repository::subsystems;
 use fast_proxy_store::{Mutation, SubsystemFields};
 use serde::Deserialize;
 
+use super::change::Change;
 use super::detail::{load_detail, subsystem_name, SubsystemDetail, SubsystemSummary};
 use super::envelope::{Envelope, VersionOnly};
 use super::https_dto::HttpsRequest;
@@ -14,6 +15,7 @@ use super::input::FieldErrors;
 use super::json::ApiJson;
 use crate::state::SharedState;
 use crate::AppResult;
+use fast_proxy_config_service::Audited;
 
 const MAX_DESCRIPTION_LEN: usize = 500;
 
@@ -91,6 +93,7 @@ pub async fn list_subsystems(
 /// `POST /api/subsystems`
 pub async fn create_subsystem(
     State(state): State<SharedState>,
+    Change(context): Change,
     ApiJson(body): ApiJson<SubsystemRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<SubsystemDetail>>)> {
     let edit = body.into_edit()?;
@@ -103,12 +106,16 @@ pub async fn create_subsystem(
     let name = fields.name.as_str().to_string();
     let applied = state
         .config
-        .apply(move |conn| {
-            Ok(Mutation {
-                value: subsystems::create(conn, &fields)?,
-                summary: format!("subsystem created: {name}"),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new("subsystem.create", name.clone()),
+            move |conn| {
+                Ok(Mutation {
+                    value: subsystems::create(conn, &fields)?,
+                    summary: format!("subsystem created: {name}"),
+                })
+            },
+        )
         .await?;
     let mut detail = load_detail(&state.config, applied.value).await?;
     detail.version = applied.version;
@@ -126,11 +133,15 @@ pub async fn get_subsystem(
 /// `PUT /api/subsystems/{id}`
 pub async fn update_subsystem(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<SubsystemRequest>,
 ) -> AppResult<Json<Envelope<SubsystemDetail>>> {
     let id = SubsystemId(id);
-    let applied = state.config.update_subsystem(id, body.into_edit()?).await?;
+    let applied = state
+        .config
+        .update_subsystem(&context, id, body.into_edit()?)
+        .await?;
     let mut detail = load_detail(&state.config, id).await?;
     detail.version = applied.version;
     Ok(Json(detail))
@@ -139,19 +150,24 @@ pub async fn update_subsystem(
 /// `DELETE /api/subsystems/{id}`
 pub async fn delete_subsystem(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
 ) -> AppResult<Json<VersionOnly>> {
     let id = SubsystemId(id);
     let applied = state
         .config
-        .apply(move |conn| {
-            let name = subsystem_name(conn, id)?;
-            subsystems::delete(conn, id)?;
-            Ok(Mutation {
-                value: (),
-                summary: format!("subsystem deleted: {name}"),
-            })
-        })
+        .apply(
+            &context,
+            Audited::new("subsystem.delete", format!("subsystem:{}", id.0)),
+            move |conn| {
+                let name = subsystem_name(conn, id)?;
+                subsystems::delete(conn, id)?;
+                Ok(Mutation {
+                    value: (),
+                    summary: format!("subsystem deleted: {name}"),
+                })
+            },
+        )
         .await?;
     Ok(Json(VersionOnly {
         version: applied.version,

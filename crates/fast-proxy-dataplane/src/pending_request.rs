@@ -99,6 +99,7 @@ impl Drop for PendingRequest {
             status: CLIENT_CLOSED,
             elapsed,
             data_plane: Some(fields),
+            actor: None,
         });
     }
 }

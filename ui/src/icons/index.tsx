@@ -212,3 +212,26 @@ export const IconLock = icon(
     <path d="M8 11V8a4 4 0 0 1 8 0v3" />
   </>,
 );
+
+export const IconKey = icon(
+  <>
+    <circle cx="8" cy="15" r="4" />
+    <path d="m11 12 8.5-8.5M16 6.5l2.5 2.5M14 8.5l2 2" />
+  </>,
+);
+
+export const IconList = icon(
+  <>
+    <path d="M9 6h11M9 12h11M9 18h11" />
+    <circle cx="4.5" cy="6" r="1" />
+    <circle cx="4.5" cy="12" r="1" />
+    <circle cx="4.5" cy="18" r="1" />
+  </>,
+);
+
+export const IconLogOut = icon(
+  <>
+    <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+    <path d="m16 8 4 4-4 4M20 12H9" />
+  </>,
+);

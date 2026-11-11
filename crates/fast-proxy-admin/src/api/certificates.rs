@@ -1,4 +1,4 @@
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use fast_proxy_config_service::CertificateChange;
@@ -6,9 +6,9 @@ use fast_proxy_model::{CertificateId, SubsystemId};
 use serde::Deserialize;
 
 use super::certificate_dto::{now_ms, CertificateDto};
+use super::change::Change;
 use super::envelope::{Envelope, VersionOnly};
 use super::json::ApiJson;
-use super::key_safety::require_loopback_for_keys;
 use crate::state::SharedState;
 use crate::{AppError, AppResult};
 
@@ -67,16 +67,15 @@ pub async fn list_certificates(
     }))
 }
 
-/// `POST /api/certificates` (loopback only: the body carries a private key).
+/// `POST /api/certificates` (the body carries a private key: needs an admin token over a protected channel).
 pub async fn upload_certificate(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    Change(context): Change,
     ApiJson(body): ApiJson<UploadRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
-    require_loopback_for_keys(peer)?;
     let applied = state
         .config
-        .upload_certificate(&body.name, &body.cert_pem, &body.key_pem)
+        .upload_certificate(&context, &body.name, &body.cert_pem, &body.key_pem)
         .await?;
     state.certificate_changed("uploaded", &body.name);
     let data = certificate_dto(&state, applied.value.id, applied.value.warnings).await?;
@@ -89,16 +88,15 @@ pub async fn upload_certificate(
     ))
 }
 
-/// `POST /api/certificates/self-signed` (loopback only, like every key-writing call).
+/// `POST /api/certificates/self-signed` (needs an admin token over a protected channel, like every key-writing call).
 pub async fn generate_self_signed(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    Change(context): Change,
     ApiJson(body): ApiJson<SelfSignedRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
-    require_loopback_for_keys(peer)?;
     let applied = state
         .config
-        .generate_self_signed(&body.name, body.names)
+        .generate_self_signed(&context, &body.name, body.names)
         .await?;
     state.certificate_changed("generated", &body.name);
     let data = certificate_dto(&state, applied.value, Vec::new()).await?;
@@ -112,20 +110,27 @@ pub async fn generate_self_signed(
 }
 
 /// `PUT /api/certificates/{id}`: rename and/or replace the chain and key. A
-/// body that carries a key is loopback only.
+/// body that carries a key needs a protected channel.
 pub async fn replace_certificate(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    Change(context): Change,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<ReplaceRequest>,
 ) -> AppResult<Json<Envelope<CertificateDto>>> {
     if body.key_pem.is_some() {
-        require_loopback_for_keys(peer)?;
+        state.security.require_protected_channel()?;
     }
     let id = CertificateId(id);
+    if let Some(new_name) = &body.name {
+        let current = certificate_name(&state, id).await?;
+        if &current != new_name {
+            refuse_if_served_by_admin(&state, &current)?;
+        }
+    }
     let applied = state
         .config
         .replace_certificate(
+            &context,
             id,
             CertificateChange {
                 name: body.name,
@@ -142,21 +147,42 @@ pub async fn replace_certificate(
     }))
 }
 
-/// `DELETE /api/certificates/{id}`: 409 while a subsystem uses it.
-pub async fn delete_certificate(
-    State(state): State<SharedState>,
-    Path(id): Path<i64>,
-) -> AppResult<Json<VersionOnly>> {
-    let id = CertificateId(id);
-    let name = state
+/// The name of certificate `id`, or a 404.
+async fn certificate_name(state: &SharedState, id: CertificateId) -> AppResult<String> {
+    state
         .config
         .list_certificates()
         .await?
         .into_iter()
         .find(|summary| summary.id == id)
         .map(|summary| summary.name.as_str().to_string())
-        .ok_or_else(|| AppError::NotFound(format!("certificate {} not found", id.0)))?;
-    let applied = state.config.delete_certificate(id).await?;
+        .ok_or_else(|| AppError::NotFound(format!("certificate {} not found", id.0)))
+}
+
+/// Refuses a change that would break the certificate the admin plane serves
+/// (its listener finds the certificate by name): deleting it, or renaming it.
+/// Replacing its certificate and key is how it is renewed.
+fn refuse_if_served_by_admin(state: &SharedState, name: &str) -> AppResult<()> {
+    if state.security.admin_certificate() != Some(name) {
+        return Ok(());
+    }
+    Err(AppError::Conflict(format!(
+        "the admin plane is serving the certificate \"{name}\"; replace its certificate and \
+         key instead of deleting or renaming it"
+    )))
+}
+
+/// `DELETE /api/certificates/{id}`: 409 while a subsystem uses it, or while the
+/// admin plane serves it.
+pub async fn delete_certificate(
+    State(state): State<SharedState>,
+    Change(context): Change,
+    Path(id): Path<i64>,
+) -> AppResult<Json<VersionOnly>> {
+    let id = CertificateId(id);
+    let name = certificate_name(&state, id).await?;
+    refuse_if_served_by_admin(&state, &name)?;
+    let applied = state.config.delete_certificate(&context, id).await?;
     state.certificate_changed("deleted", &name);
     Ok(Json(VersionOnly {
         version: applied.version,
@@ -164,17 +190,17 @@ pub async fn delete_certificate(
 }
 
 /// `POST /api/subsystems/{id}/certificate`: upload and attach in one step
-/// (loopback only).
+/// (needs an admin token over a protected channel).
 pub async fn upload_subsystem_certificate(
     State(state): State<SharedState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    Change(context): Change,
     Path(id): Path<i64>,
     ApiJson(body): ApiJson<UploadRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<CertificateDto>>)> {
-    require_loopback_for_keys(peer)?;
     let applied = state
         .config
         .upload_certificate_for_subsystem(
+            &context,
             SubsystemId(id),
             &body.name,
             &body.cert_pem,
@@ -197,6 +223,7 @@ pub async fn upload_subsystem_certificate(
 /// is enabled a development certificate takes over.
 pub async fn detach_subsystem_certificate(
     State(state): State<SharedState>,
+    Change(context): Change,
     Path(id): Path<i64>,
 ) -> AppResult<Json<VersionOnly>> {
     let id = SubsystemId(id);
@@ -209,7 +236,10 @@ pub async fn detach_subsystem_certificate(
         certificate_id: None,
         ..current.https
     };
-    let applied = state.config.set_subsystem_https(id, https).await?;
+    let applied = state
+        .config
+        .set_subsystem_https(&context, id, https)
+        .await?;
     Ok(Json(VersionOnly {
         version: applied.version,
     }))

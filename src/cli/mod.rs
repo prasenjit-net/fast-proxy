@@ -1,11 +1,18 @@
 //! Command-line flags and how they override the config file.
 
+mod subcommands;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::config::AppConfig;
+use crate::config::{AdminAuth, AppConfig};
+
+pub use subcommands::{
+    AuditArgs, Command, ConfigAction, MaintenanceAction, MaintenanceOff, MaintenanceOn, RemoteArgs,
+    ScopeArgs, TokenAction, TokenCreate,
+};
 
 /// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.
 ///
@@ -14,16 +21,29 @@ use crate::config::AppConfig;
 #[derive(Parser, Debug)]
 #[command(name = "fast-proxy", version, about)]
 pub struct Cli {
+    /// Do something other than serve: operate a running proxy, validate configuration,
+    /// or manage tokens offline
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Path to the TOML configuration file
-    #[arg(short, long, default_value = "config.toml")]
+    #[arg(short, long, default_value = "config.toml", global = true)]
     pub config: PathBuf,
 
     /// Override [admin].listen (for example 127.0.0.1:9000)
     #[arg(long)]
     pub admin_listen: Option<SocketAddr>,
 
-    /// Override [data_plane].database
+    /// Override [admin].auth (`off` is accepted only on a loopback admin address)
+    #[arg(long, value_enum)]
+    pub admin_auth: Option<AdminAuth>,
+
+    /// Serve the admin plane over HTTPS (overrides [admin.tls].enabled)
     #[arg(long)]
+    pub admin_tls: bool,
+
+    /// Override [data_plane].database (also the file `token` works on)
+    #[arg(long, global = true)]
     pub database: Option<PathBuf>,
 
     /// Override [data_plane].state_dir
@@ -61,6 +81,12 @@ impl Cli {
         if let Some(listen) = self.admin_listen {
             config.admin.listen = listen;
         }
+        if self.admin_tls {
+            config.admin.tls.enabled = true;
+        }
+        if let Some(auth) = self.admin_auth {
+            config.admin.auth = auth;
+        }
         if let Some(path) = &self.database {
             config.data_plane.database = Some(path.clone());
         }
@@ -94,6 +120,123 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("fast-proxy").chain(args.iter().copied())).unwrap()
+    }
+
+    fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("fast-proxy").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn the_command_definitions_are_consistent() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn no_subcommand_means_serve() {
+        assert!(parse(&[]).command.is_none());
+        assert!(parse(&["--admin-auth", "off"]).command.is_none());
+    }
+
+    #[test]
+    fn maintenance_on_takes_scope_ttl_and_bypass() {
+        let cli = parse(&[
+            "maintenance",
+            "on",
+            "--subsystem",
+            "shop",
+            "--route",
+            "/api",
+            "--ttl",
+            "30m",
+            "--message",
+            "deploying",
+            "--retry-after",
+            "90",
+            "--bypass-cidr",
+            "10.0.0.0/8",
+            "--bypass-cidr",
+            "192.0.2.0/24",
+            "--bypass-header",
+            "X-Pass",
+        ]);
+        let Some(Command::Maintenance {
+            action: MaintenanceAction::On(on),
+        }) = cli.command
+        else {
+            panic!("maintenance on")
+        };
+        assert_eq!(on.scope.subsystem.as_deref(), Some("shop"));
+        assert_eq!(on.scope.route.as_deref(), Some("/api"));
+        assert_eq!(on.ttl, Some(std::time::Duration::from_secs(1800)));
+        assert_eq!(on.retry_after, Some(90));
+        assert_eq!(on.bypass_cidrs, ["10.0.0.0/8", "192.0.2.0/24"]);
+        assert_eq!(on.bypass_header.as_deref(), Some("X-Pass"));
+    }
+
+    #[test]
+    fn dependent_flags_need_their_partner() {
+        assert!(try_parse(&["maintenance", "on", "--route", "/api"]).is_err());
+        assert!(try_parse(&["maintenance", "on", "--bypass-secret", "x"]).is_err());
+        assert!(try_parse(&["status", "--ca-file", "a.pem", "--insecure"]).is_err());
+        assert!(try_parse(&["maintenance", "on", "--ttl", "soon"]).is_err());
+    }
+
+    #[test]
+    fn the_config_flag_works_after_a_subcommand_too() {
+        let cli = parse(&[
+            "token",
+            "list",
+            "--config",
+            "other.toml",
+            "--database",
+            "x.db",
+        ]);
+        assert_eq!(cli.config, PathBuf::from("other.toml"));
+        assert_eq!(cli.database, Some(PathBuf::from("x.db")));
+    }
+
+    #[test]
+    fn check_database_may_name_a_path_or_not() {
+        let check = |args: &[&str]| {
+            let Some(Command::Config {
+                action: ConfigAction::Validate(validate),
+            }) = parse(args).command
+            else {
+                panic!("config validate")
+            };
+            validate.check_database
+        };
+        assert_eq!(check(&["config", "validate"]), None);
+        assert_eq!(
+            check(&["config", "validate", "--check-database"]),
+            Some(None)
+        );
+        assert_eq!(
+            check(&["config", "validate", "--check-database", "x.db"]),
+            Some(Some(PathBuf::from("x.db")))
+        );
+    }
+
+    #[test]
+    fn admin_auth_overrides_the_config_and_rejects_other_values() {
+        let mut config = AppConfig::default();
+        parse(&["--admin-auth", "off"]).apply(&mut config);
+        assert_eq!(config.admin.auth, AdminAuth::Off);
+        parse(&["--admin-auth", "required"]).apply(&mut config);
+        assert_eq!(config.admin.auth, AdminAuth::Required);
+        assert!(Cli::try_parse_from(["fast-proxy", "--admin-auth", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn admin_tls_flag_turns_admin_tls_on() {
+        let mut config = AppConfig::default();
+        assert!(!config.admin.tls.enabled);
+        parse(&["--admin-tls"]).apply(&mut config);
+        assert!(config.admin.tls.enabled);
+        let mut untouched = AppConfig::default();
+        parse(&[]).apply(&mut untouched);
+        assert!(!untouched.admin.tls.enabled);
     }
 
     #[test]
