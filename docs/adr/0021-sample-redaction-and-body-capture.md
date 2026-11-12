@@ -1,7 +1,7 @@
 # ADR 0021: redaction and body capture in samples
 
-Status: accepted by the owner (2026-11-11); the request-head cost (J15) stays to be confirmed by
-spike G2. Plan reference: M6 J8, J9, J15.
+Status: accepted by the owner (2026-11-11); J15 confirmed by spike G2 (see the result below). Plan
+reference: M6 J8, J9, J15.
 
 ## Context
 
@@ -57,3 +57,28 @@ must be opt-in, and neither may cost the request path.
 - Residual risk, stated in the docs and the UI: a secret in a field nobody listed, in a path
   segment, or in free text is not found.
 - The redactor is pure, so it is covered by property tests and is a fuzz target in M7.
+
+## Spike G2 result (2026-11-12): the cost of the request head and of a body tee
+
+A throwaway release-mode benchmark (a standalone crate, not kept) on one laptop (macOS, APFS, a
+shared machine, so small differences are noise). Request headers were 14 typical headers whose values
+share one buffer, as hyper's do. For scale, 97k requests per second over 64 connections is roughly
+10,000 ns of CPU per request.
+
+| Per request | Cost |
+|---|---|
+| Nothing retained | under 1 ns |
+| Full `HeaderMap` clone | about 100 ns |
+| The 10 allow-listed headers into a `Vec` of pairs | about 100 ns |
+| The 10 allow-listed headers into a fixed stack array | about 77 ns |
+| Capped body tee (reserve budget, allocate 4 KiB, copy up to the cap over 16 frames, release) | about 60 ns, only on routes that opted in |
+
+- **J15 confirmed, with one refinement:** keep the allow-list, held in a **fixed stack array of
+  header values** (no `Vec`), and take it **only for routes whose sampling is on**. That is about
+  0.8% of the per-request CPU at the benchmark's rate, under the 1% fallback threshold. A full
+  clone costs about the same, so the allow-list is chosen for what it keeps (less retained data,
+  no secrets held that nobody needs), not for speed. The fallback (keep the head only when a flag
+  or the baseline draw says so) is not needed. The end-to-end figure is still measured by Q6.
+- **The tee is cheap enough** to be a documented cost of opting in. That a retried request is
+  never captured twice follows from the body owner's `polled` flag (a replayable body was never
+  read) and is covered by task D2's tests; it was not exercised in the spike.

@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11, except that J15 and J17 are re-checked by spike G2.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -332,7 +332,7 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
   *Done when:* the ADRs are merged and no **(confirm)** item is open.
   *Status:* done in PR1 (`m6/pr1-decisions`): the four ADRs are accepted; the owner confirmed every **(confirm)** item on
   2026-11-11, with J15 and J17 still subject to the numbers of spike G2.
-- [ ] **G2 (S) Spike: the cost of the request head and of a body tee.** A throwaway benchmark against the
+- [x] **G2 (S) Spike: the cost of the request head and of a body tee.** A throwaway benchmark against the
   `bench_backend` example: (a) retaining the selected headers (J15) versus a full `HeaderMap` clone versus
   nothing, per request; (b) a capped tee on `BodyOwner` and on the tracked response body, including a retried
   request (no double capture) and a body larger than the cap; (c) a `try_send` of a small struct per request; (d) **database contention**: configuration-write latency
@@ -345,6 +345,11 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
   slowing noticeably: smaller or less frequent batches, a lower default rate, or a separate database file for
   samples (same code, a second path), at the price of the cluster sharing two files.
   *Done when:* the numbers and the chosen approach are in the ADRs and J15 and J17 are confirmed or changed.
+  *Result (2026-11-12):* J15 confirmed with a stack-array refinement (about 77 ns per request, under the 1% fallback
+  threshold); J17 confirmed (no separate file needed: median configuration-write latency unchanged at 100 times the
+  default rate, in-process and across processes); two new requirements for SV1 (a full disk is a counted
+  `store_error`; `journal_size_limit` on the connection) and the list-query tail to re-measure in SV3 and Q3. See
+  ADRs 0021 and 0022.
 - [x] **G3 (S) Defaults table.** Turn J4, J7, J8, J9, J10 and J19 into one documented defaults table (the single
   source for validation and the UI), including the built-in redaction lists and the unusual-header limits.
   *Landed in PR1:* the `Defaults` tables of ADRs 0020 to 0023.
@@ -438,7 +443,8 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 - [ ] **SV1 (M) The writer.** Implements `SampleSink` over the second connection (S5): one transaction per
   batch, a busy timeout, a backoff after a failure (no unbounded retry, no unbounded memory while it backs off),
   the instance id stamped on every row, and metrics hooks for written rows and failures.
-  *Done when:* tests cover a batch landing atomically, a locked database dropping and counting, recovery after the
+  *Done when:* tests cover a batch landing atomically, a locked database and a full disk each dropping and counting
+  (G2: a full disk must never panic the writer), `journal_size_limit` being set, recovery after the
   lock clears, two writers (two threads, and two processes in the integration test) producing one increasing id
   sequence, and shutdown flushing.
 - [ ] **SV2 (M) The retention pruner.** Every instance runs it every 30 seconds, reads the live retention
