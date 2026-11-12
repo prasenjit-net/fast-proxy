@@ -5,7 +5,9 @@ use rusqlite::{params, Connection};
 
 use super::history;
 use crate::inputs::{EndpointFields, SubsystemFields, UpstreamFields};
-use crate::repository::{ca_bundles, certificates, endpoints, maintenance, subsystems, upstreams};
+use crate::repository::{
+    ca_bundles, certificates, endpoints, maintenance, sampling, subsystems, upstreams,
+};
 use crate::StoreError;
 
 fn millis(duration: std::time::Duration) -> i64 {
@@ -15,15 +17,17 @@ fn millis(duration: std::time::Duration) -> i64 {
 /// Replaces the live tables with the configuration stored in `version`,
 /// keeping all ids. The caller records the result as a new revision.
 ///
-/// Certificate material is never touched, and neither is maintenance: scopes
-/// are set aside while the tables are rebuilt and put back for every subsystem
-/// and route that still exists. A revision that references a
+/// Certificate material is never touched, and neither are maintenance and the
+/// sampling overrides: they are set aside while the tables are rebuilt and put
+/// back for every subsystem and route that still exists (the global sampling
+/// settings and the samples are in tables a rollback does not touch). A revision that references a
 /// certificate or CA bundle that no longer exists is refused with a message
 /// naming it, and nothing changes.
 pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
     let config = history::get(conn, version)?.config;
     ensure_references_exist(conn, version, &config)?;
     let active_maintenance = maintenance::list(conn)?;
+    let sampling_overrides = sampling::list_overrides(conn)?;
     conn.execute("DELETE FROM subsystem", [])?;
     for subsystem in &config.subsystems {
         let fields = SubsystemFields {
@@ -80,6 +84,7 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
         }
     }
     maintenance::reinsert_surviving(conn, &active_maintenance)?;
+    sampling::reinsert_surviving(conn, &sampling_overrides)?;
     Ok(config)
 }
 

@@ -12,6 +12,8 @@ pub mod load;
 pub mod maintenance;
 mod policy_columns;
 pub mod routes;
+pub mod samples;
+pub mod sampling;
 pub mod subsystems;
 pub mod tokens;
 pub mod upstreams;
@@ -56,6 +58,12 @@ mod maintenance_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sample_tests;
+
+#[cfg(test)]
+mod sampling_tests;
 
 #[cfg(test)]
 mod token_tests;

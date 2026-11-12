@@ -707,6 +707,102 @@ mod outside_config {
         );
     }
 
+    fn sampling_override(baseline: u32) -> fast_proxy_model::SamplingOverride {
+        fast_proxy_model::SamplingOverride {
+            enabled: Some(true),
+            capture_bodies: Some(true),
+            baseline_per_mille: Some(baseline),
+            slow_threshold_ms: None,
+            slow_p99_factor_x10: None,
+            set_by: "ops".into(),
+            set_at_ms: 1,
+        }
+    }
+
+    #[test]
+    fn a_rollback_leaves_the_sampling_settings_overrides_and_samples_untouched() {
+        use crate::repository::{samples, sampling};
+        use fast_proxy_model::{SamplingSettings, SamplingTarget, Trigger};
+
+        let mut db = db();
+        let fixture = seed(&mut db, "shop", "s.example.com");
+        let settings = SamplingSettings {
+            retention_days: 3,
+            redact_body_fields: vec!["iban".into()],
+            updated_by: "ann".into(),
+            ..SamplingSettings::default()
+        };
+        write_outside(&mut db, "ann", |c| {
+            sampling::set_settings(c, &settings)?;
+            sampling::set_override(
+                c,
+                SamplingTarget::Subsystem(fixture.subsystem),
+                &sampling_override(10),
+            )?;
+            Ok(Mutation {
+                value: (),
+                summary: "sampling".into(),
+            })
+        })
+        .unwrap();
+        db.write_unrecorded(|c| {
+            samples::insert_batch(
+                c,
+                &[samples::NewSample {
+                    at_ms: 5,
+                    instance: "a".into(),
+                    request_id: "r".into(),
+                    triggers: [Trigger::Slow].into_iter().collect(),
+                    subsystem: "shop".into(),
+                    route: "/".into(),
+                    client: "c".into(),
+                    method: "GET".into(),
+                    status: 200,
+                    total_ms: 9,
+                    detail: "{}".into(),
+                }],
+            )
+        })
+        .unwrap();
+        let overrides_before = db.read(sampling::list_overrides).unwrap();
+
+        restore_as_new_revision(&mut db, 1);
+
+        assert_eq!(db.read(sampling::get_settings).unwrap(), settings);
+        assert_eq!(db.read(sampling::list_overrides).unwrap(), overrides_before);
+        assert_eq!(db.read(samples::usage).unwrap().rows, 1);
+    }
+
+    #[test]
+    fn a_rollback_drops_a_sampling_override_only_for_targets_that_are_gone() {
+        use crate::repository::sampling;
+        use fast_proxy_model::SamplingTarget;
+
+        let mut db = db();
+        let early = seed(&mut db, "shop", "s.example.com");
+        let later = seed(&mut db, "blog", "b.example.com");
+        write_outside(&mut db, "ann", |c| {
+            for subsystem in [early.subsystem, later.subsystem] {
+                sampling::set_override(
+                    c,
+                    SamplingTarget::Subsystem(subsystem),
+                    &sampling_override(5),
+                )?;
+            }
+            Ok(Mutation {
+                value: (),
+                summary: "ops".into(),
+            })
+        })
+        .unwrap();
+
+        restore_as_new_revision(&mut db, 1);
+
+        let rows = db.read(sampling::list_overrides).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target, SamplingTarget::Subsystem(early.subsystem));
+    }
+
     #[test]
     fn no_revision_contains_a_secret_hash() {
         let mut db = db();

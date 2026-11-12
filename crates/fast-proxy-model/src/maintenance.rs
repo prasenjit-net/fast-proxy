@@ -150,7 +150,7 @@ impl MaintenanceSettings {
 }
 
 /// An HTTP header name: RFC 9110 token characters, at most 64.
-fn validate_header_name(name: &str) -> Result<(), FieldError> {
+pub(crate) fn validate_header_name(name: &str) -> Result<(), FieldError> {
     const TOKEN_PUNCTUATION: &str = "!#$%&'*+-.^_`|~";
     let valid = !name.is_empty()
         && name.len() <= MAX_HEADER_NAME_LEN

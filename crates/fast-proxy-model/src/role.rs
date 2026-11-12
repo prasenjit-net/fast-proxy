@@ -26,6 +26,9 @@ pub enum Action {
     Tokens,
     /// Exporting the audit log in bulk.
     AuditExport,
+    /// Reading, exporting and clearing sampled requests: they hold request
+    /// data (redacted, but more than a `viewer` was promised).
+    Samples,
 }
 
 impl Role {
@@ -52,20 +55,26 @@ impl Role {
         match (self, action) {
             (Self::Admin, _) => true,
             (Self::Viewer, Action::Read) => true,
-            (Self::Viewer, Action::Write | Action::Keys | Action::Tokens | Action::AuditExport) => {
-                false
-            }
+            (
+                Self::Viewer,
+                Action::Write
+                | Action::Keys
+                | Action::Tokens
+                | Action::AuditExport
+                | Action::Samples,
+            ) => false,
         }
     }
 }
 
 impl Action {
-    pub const ALL: [Action; 5] = [
+    pub const ALL: [Action; 6] = [
         Action::Read,
         Action::Write,
         Action::Keys,
         Action::Tokens,
         Action::AuditExport,
+        Action::Samples,
     ];
 }
 

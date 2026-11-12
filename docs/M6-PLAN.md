@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR2 (model, schema, repositories, second connection) written; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -213,28 +213,28 @@ here: it is shared by every instance, so it lives in the database settings (5.2)
 ```sql
 CREATE TABLE sampling_settings (
   id                    INTEGER PRIMARY KEY CHECK (id = 1),
-  enabled               INTEGER NOT NULL DEFAULT 1,
-  triggers              TEXT NOT NULL,            -- JSON: which triggers are on
-  slow_threshold_ms     INTEGER,                  -- NULL turns the static trigger off
-  slow_p99_factor_x10   INTEGER,                  -- 30 = 3.0 times the rolling p99; NULL = off
-  slow_p99_floor_ms     INTEGER NOT NULL DEFAULT 50,
-  client_errors_per_min INTEGER,                  -- NULL = off
-  oversized_request     INTEGER,                  -- bytes; NULL = off
-  oversized_response    INTEGER,
-  baseline_per_mille    INTEGER NOT NULL DEFAULT 1,   -- 1 = 0.1%, 0 = off
-  rate_per_sec          INTEGER NOT NULL DEFAULT 20,
-  rate_burst            INTEGER NOT NULL DEFAULT 40,
-  storm_burst           INTEGER NOT NULL DEFAULT 3,       -- the storm guard (J19): per key
-  storm_interval_secs   INTEGER NOT NULL DEFAULT 30,
-  retention_days        INTEGER NOT NULL DEFAULT 7,       -- the shared sample table's bounds (J18)
-  max_rows              INTEGER NOT NULL DEFAULT 100000,
-  max_bytes             INTEGER NOT NULL DEFAULT 268435456,
-  body_request_cap      INTEGER NOT NULL DEFAULT 4096,
-  body_response_cap     INTEGER NOT NULL DEFAULT 4096,
-  extra_headers         TEXT NOT NULL DEFAULT '[]',   -- additional selected request/response headers
-  redact_headers        TEXT NOT NULL DEFAULT '[]',   -- additions only; built-ins are not stored
-  redact_query_params   TEXT NOT NULL DEFAULT '[]',
-  redact_body_fields    TEXT NOT NULL DEFAULT '[]',
+  enabled               INTEGER NOT NULL,
+  triggers              INTEGER NOT NULL,         -- bit set over the fixed Trigger enum (the bit says on or off)
+  slow_threshold_ms     INTEGER NOT NULL,
+  slow_p99_factor_x10   INTEGER NOT NULL,         -- 30 = 3.0 times the rolling p99
+  slow_p99_floor_ms     INTEGER NOT NULL,
+  client_errors_per_min INTEGER NOT NULL,
+  oversized_request     INTEGER NOT NULL,         -- bytes
+  oversized_response    INTEGER NOT NULL,
+  baseline_per_mille    INTEGER NOT NULL,         -- 1 = 0.1%, 0 = off
+  rate_per_sec          INTEGER NOT NULL,
+  rate_burst            INTEGER NOT NULL,
+  storm_burst           INTEGER NOT NULL,         -- the storm guard (J19): per key
+  storm_interval_secs   INTEGER NOT NULL,
+  retention_days        INTEGER NOT NULL,         -- the shared sample table's bounds (J18)
+  max_rows              INTEGER NOT NULL,
+  max_bytes             INTEGER NOT NULL,
+  body_request_cap      INTEGER NOT NULL,
+  body_response_cap     INTEGER NOT NULL,
+  extra_headers         TEXT NOT NULL,            -- JSON lists of names; redaction lists are additions only
+  redact_headers        TEXT NOT NULL,
+  redact_query_params   TEXT NOT NULL,
+  redact_body_fields    TEXT NOT NULL,
   updated_by            TEXT NOT NULL,
   updated_at            INTEGER NOT NULL
 );
@@ -271,8 +271,8 @@ CREATE TABLE sample (
   method      TEXT    NOT NULL,
   status      INTEGER NOT NULL,
   total_ms    INTEGER NOT NULL,              -- whole milliseconds, for the minimum-latency filter
-  detail      TEXT    NOT NULL,              -- the redacted sample as JSON (headers, bodies, timings, attempts)
-  size_bytes  INTEGER NOT NULL               -- length of detail plus the short columns, for max_bytes
+  size_bytes  INTEGER NOT NULL,              -- length of detail plus the short columns, for max_bytes
+  detail      TEXT    NOT NULL               -- the redacted sample as JSON; last, so list and aggregate queries never read past it
 );
 CREATE INDEX sample_at        ON sample (at);
 CREATE INDEX sample_subsystem ON sample (subsystem, id);
@@ -280,7 +280,8 @@ CREATE INDEX sample_status    ON sample (status, id);
 CREATE INDEX sample_instance  ON sample (instance, id);
 ```
 
-The settings row is created with its defaults the first time the schema is created. Redaction lists live only in
+The settings row does not exist until it is first written; the reader supplies the defaults (one place that knows
+them, the model's `SamplingSettings::default()`). Redaction lists live only in
 the global row, so no override can weaken them (J8). Lists read the short columns only (never `detail`), and a
 sample's `detail` is parsed only for the detail and export views.
 
@@ -356,22 +357,26 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream MD: Model
 
-- [ ] **MD1 (M) Sampling settings types.** `SamplingSettings`, `SamplingOverride`, `SamplingTarget`,
-  `Trigger` (fixed enum, stable names), `RedactionAdditions`, and validation with field-specific messages
+- [x] **MD1 (M) Sampling settings types.** `SamplingSettings`, `SamplingOverride`, `SamplingTarget`,
+  `Trigger` and `TriggerSet` (a fixed enum and its bit set, stable names), and validation with field-specific messages
   (`baselinePerMille` 0 to 1000, `ratePerSec` 1 to 10000, `stormBurst` 1 to 100, `stormIntervalSecs` 1 to 3600, `bodyRequestCap` up to 65536, `retentionDays` 1 to 365, `maxRows` and `maxBytes` within fixed bounds, list sizes and name
   syntax). Pure `effective(global, subsystem, route)` resolution.
   *Done when:* table-driven tests accept and reject every bound, and resolution order (route over subsystem over
-  global, NULL inherits) and "overrides cannot remove redaction" are covered.
-- [ ] **MD2 (S) The access vocabulary.** `Action::Samples`, the permission table (`Viewer` denied), the test that
+  global, an empty field inherits) is covered. "Overrides cannot remove redaction" holds by construction: `SamplingOverride`
+  has no redaction field and `effective` takes none.
+  *Built differently from the sketch:* a trigger is on or off by its bit in the set, so the thresholds are plain
+  numbers rather than nullable (the plan's earlier "NULL = off" is gone); the redaction lists are plain `Vec<String>`
+  fields of the settings.
+- [x] **MD2 (S) The access vocabulary.** `Action::Samples`, the permission table (`Viewer` denied), the test that
   enumerates every role and action pair.
 
 ### Workstream S: Store
 
-- [ ] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2; bump `SCHEMA_VERSION` to 5.
-- [ ] **S2 (M) Repositories.** `repository/sampling.rs`: read and write the settings row and the overrides as
+- [x] **S1 (S) Schema.** Edit `schema.sql` in place with 5.2; bump `SCHEMA_VERSION` to 5.
+- [x] **S2 (M) Repositories.** `repository/sampling.rs`: read and write the settings row and the overrides as
   opaque rows (the store never interprets them); cascade on subsystem or route delete.
   *Done when:* round-trip, cascade and unique-target tests pass, and the schema test lists the new tables.
-- [ ] **S4 (M) The sample repository.** `repository/samples.rs`: batch insert in one transaction, filtered list
+- [x] **S4 (M) The sample repository.** `repository/samples.rs`: batch insert in one transaction, filtered list
   with a cursor over the short columns (trigger bit mask, status class, subsystem, route, instance, client,
   minimum latency, time), one sample's `detail`, a paged scan for export, the aggregate (rows, bytes, oldest) for
   retention, batched delete (oldest first, by age, by rows, by bytes), and clear. No revision is created and the
@@ -379,12 +384,12 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
   *Done when:* tests cover every filter, the cursor with concurrent inserts, a batch being atomic, each delete
   rule, that an insert does not change the revision version, and the manifest test still shows no crypto
   dependency.
-- [ ] **S5 (S) A second connection for the sample service.** `Database` opens an additional connection (WAL, the
+- [x] **S5 (S) A second connection for the sample service.** `Database` opens an additional connection (WAL, the
   same busy timeout) for the sample writer thread, so sample writes never wait in the store thread's queue; the
   config store thread and its `Database::write` are unchanged.
   *Done when:* a test shows a long sample batch and a configuration write both completing, and a held write lock
   producing a counted error rather than a hang.
-- [ ] **S3 (S) Revision interplay.** Summary-only revisions for sampling changes (like maintenance), never in the
+- [x] **S3 (S) Revision interplay.** Summary-only revisions for sampling changes (like maintenance), never in the
   configuration copy.
   *Done when:* a test shows a rollback leaves the settings and overrides unchanged.
 

@@ -1,4 +1,4 @@
--- Schema v4. The project is not deployed, so changes edit this file directly
+-- Schema v5. The project is not deployed, so changes edit this file directly
 -- (no migrations); SCHEMA_VERSION in database.rs must be bumped with it.
 
 -- Certificate material. Private keys are stored only as AES-256-GCM ciphertext
@@ -178,3 +178,78 @@ CREATE TABLE maintenance (
 );
 CREATE UNIQUE INDEX maintenance_target
   ON maintenance (scope, COALESCE(subsystem_id, 0), COALESCE(route_id, 0));
+
+-- Sampling settings: one global row (absent until first written; the reader
+-- supplies the defaults) and overrides per subsystem or route. Like tokens,
+-- audit and maintenance they are not Config and a rollback never changes them.
+CREATE TABLE sampling_settings (
+  id                    INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled               INTEGER NOT NULL,
+  triggers              INTEGER NOT NULL,     -- bit set over the fixed Trigger enum
+  slow_threshold_ms     INTEGER NOT NULL,
+  slow_p99_factor_x10   INTEGER NOT NULL,
+  slow_p99_floor_ms     INTEGER NOT NULL,
+  client_errors_per_min INTEGER NOT NULL,
+  oversized_request     INTEGER NOT NULL,
+  oversized_response    INTEGER NOT NULL,
+  baseline_per_mille    INTEGER NOT NULL,
+  rate_per_sec          INTEGER NOT NULL,
+  rate_burst            INTEGER NOT NULL,
+  storm_burst           INTEGER NOT NULL,
+  storm_interval_secs   INTEGER NOT NULL,
+  retention_days        INTEGER NOT NULL,
+  max_rows              INTEGER NOT NULL,
+  max_bytes             INTEGER NOT NULL,
+  body_request_cap      INTEGER NOT NULL,
+  body_response_cap     INTEGER NOT NULL,
+  extra_headers         TEXT NOT NULL,        -- JSON lists of names; redaction lists are additions only
+  redact_headers        TEXT NOT NULL,
+  redact_query_params   TEXT NOT NULL,
+  redact_body_fields    TEXT NOT NULL,
+  updated_by            TEXT NOT NULL,
+  updated_at            INTEGER NOT NULL
+);
+
+-- One row per overridden target, removed with its subsystem or route.
+-- NULL inherits. Redaction cannot be overridden.
+CREATE TABLE sampling_override (
+  id                  INTEGER PRIMARY KEY,
+  scope               TEXT NOT NULL,
+  subsystem_id        INTEGER REFERENCES subsystem(id) ON DELETE CASCADE,
+  route_id            INTEGER REFERENCES route(id) ON DELETE CASCADE,
+  enabled             INTEGER,
+  capture_bodies      INTEGER,
+  baseline_per_mille  INTEGER,
+  slow_threshold_ms   INTEGER,
+  slow_p99_factor_x10 INTEGER,
+  set_by              TEXT NOT NULL,
+  set_at              INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX sampling_override_target
+  ON sampling_override (scope, COALESCE(subsystem_id, 0), COALESCE(route_id, 0));
+
+-- One row per kept request, written by every instance sharing the database.
+-- Not Config: no revision, and no foreign keys (a sample outlives its subsystem
+-- and route, and names are what an operator remembers). Samples are already
+-- redacted when they get here. Portable SQL (plain integers and text).
+CREATE TABLE sample (
+  id              INTEGER PRIMARY KEY,   -- assigned by the database, one sequence for every writer
+  at              INTEGER NOT NULL,      -- ms since the epoch, when the response finished
+  instance        TEXT    NOT NULL,
+  request_id      TEXT    NOT NULL,
+  triggers        INTEGER NOT NULL,      -- bit set: filter with (triggers & mask) <> 0
+  primary_trigger TEXT    NOT NULL,
+  subsystem       TEXT    NOT NULL,      -- a name, or _unmatched
+  route           TEXT    NOT NULL,      -- a prefix, or _none
+  client          TEXT    NOT NULL,
+  method          TEXT    NOT NULL,
+  status          INTEGER NOT NULL,
+  total_ms        INTEGER NOT NULL,
+  size_bytes      INTEGER NOT NULL,      -- stored length, for the byte limit
+  detail          TEXT    NOT NULL       -- the redacted sample as JSON, last so that list and
+                                         -- aggregate queries never read past it (large values overflow)
+);
+CREATE INDEX sample_at        ON sample (at);
+CREATE INDEX sample_subsystem ON sample (subsystem, id);
+CREATE INDEX sample_status    ON sample (status, id);
+CREATE INDEX sample_instance  ON sample (instance, id);

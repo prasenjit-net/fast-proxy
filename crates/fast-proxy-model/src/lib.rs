@@ -21,9 +21,11 @@ mod passive_health;
 mod path_prefix;
 mod retry;
 mod role;
+mod sampling;
 mod secret_hash;
 mod subsystem_name;
 mod timeout;
+mod trigger;
 mod upstream_tls;
 
 pub use certificate::{
@@ -55,7 +57,13 @@ pub use passive_health::PassiveHealth;
 pub use path_prefix::{RoutePrefix, UpstreamPrefix};
 pub use retry::{RetryBudget, RetryPolicy};
 pub use role::{Action, Role, TokenId, TokenName};
+pub use sampling::{
+    effective, EffectiveSampling, SamplingOverride, SamplingSettings, SamplingTarget, MAX_BODY_CAP,
+    MAX_BYTES_LIMIT, MAX_LIST_NAMES, MAX_LIST_NAME_LEN, MAX_RATE_PER_SEC, MAX_RETENTION_DAYS,
+    MAX_ROWS_LIMIT, MIN_BYTES_LIMIT, MIN_ROWS_LIMIT,
+};
 pub use secret_hash::SecretHash;
 pub use subsystem_name::SubsystemName;
 pub use timeout::parse_timeout_ms;
+pub use trigger::{Trigger, TriggerSet};
 pub use upstream_tls::UpstreamTls;

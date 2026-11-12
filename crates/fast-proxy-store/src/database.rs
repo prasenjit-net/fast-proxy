@@ -7,8 +7,10 @@ use crate::repository::load;
 use crate::{revision, StoreError};
 
 /// Bump together with `schema.sql`. Stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 /// The actor recorded for changes nobody asked for by name (the sweeper, tests).
+/// The WAL is truncated to this size after a checkpoint.
+const WAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
 const SYSTEM_ACTOR: &str = "system";
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -45,6 +47,20 @@ impl Database {
         Self::prepare(Connection::open(path)?)
     }
 
+    /// Opens another connection to a database this process already opened, for
+    /// the sample service: its writes go on a thread of their own, so a burst of
+    /// sample batches never queues in front of a configuration write. Writers
+    /// still take turns in SQLite; one that cannot get the lock within
+    /// `busy_timeout` fails with an error instead of waiting.
+    pub fn open_secondary(
+        path: &Path,
+        busy_timeout: std::time::Duration,
+    ) -> Result<Self, StoreError> {
+        let database = Self::prepare(Connection::open(path)?)?;
+        database.conn.busy_timeout(busy_timeout)?;
+        Ok(database)
+    }
+
     /// Opens an existing database for reading only: nothing is created, no
     /// pragma that writes is set, and an empty file or one of another schema
     /// version is refused. For tools that inspect the stored configuration
@@ -78,6 +94,8 @@ impl Database {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Keeps the WAL file from staying large after a burst of writes (spike G2).
+        conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
         // Returns the resulting mode as a row; in-memory databases stay "memory".
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
         let database = Self { conn };
@@ -120,6 +138,22 @@ impl Database {
     /// The latest revision number (0 for a fresh database).
     pub fn current_version(&self) -> Result<u64, StoreError> {
         revision::current_version(&self.conn)
+    }
+
+    /// Runs `write` in one write transaction that records **no revision**: for
+    /// high-volume data that is not configuration (samples). Nothing here may
+    /// change `Config`; nothing is audited per call and the cluster generation
+    /// does not move, so other instances do not reload.
+    pub fn write_unrecorded<T>(
+        &mut self,
+        write: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = write(&tx)?;
+        tx.commit()?;
+        Ok(value)
     }
 
     /// [`write_as`](Self::write_as) with the actor `system`.
@@ -264,8 +298,108 @@ mod tests {
     }
 
     #[test]
+    fn a_secondary_connection_shares_the_file_and_sets_the_wal_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        let mut primary = Database::open(&path).unwrap();
+        let mut secondary =
+            Database::open_secondary(&path, std::time::Duration::from_secs(1)).unwrap();
+        seed(&mut primary, "shop", "s.example.com");
+        assert_eq!(
+            secondary.load_all().unwrap().subsystems.len(),
+            1,
+            "it sees the primary's commit"
+        );
+        let (mode, limit): (String, i64) = secondary
+            .read(|c| {
+                Ok((
+                    c.pragma_query_value(None, "journal_mode", |r| r.get(0))?,
+                    c.pragma_query_value(None, "journal_size_limit", |r| r.get(0))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!((mode.as_str(), limit), ("wal", WAL_SIZE_LIMIT_BYTES));
+        secondary
+            .write_unrecorded(|c| {
+                c.execute(
+                    "INSERT INTO vault (id, check_nonce, check_blob) VALUES (1, x'00', x'00')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let vault_rows: i64 = primary
+            .read(|c| Ok(c.query_row("SELECT COUNT(*) FROM vault", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(vault_rows, 1, "the primary sees the secondary's commit");
+    }
+
+    #[test]
+    fn writers_on_two_connections_take_turns_and_both_finish() {
+        use crate::repository::samples::{self, NewSample};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        let mut primary = Database::open(&path).unwrap();
+        let sample_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut secondary =
+                Database::open_secondary(&sample_path, std::time::Duration::from_secs(5)).unwrap();
+            for round in 0..40 {
+                let batch: Vec<NewSample> = (0..50)
+                    .map(|n| NewSample {
+                        at_ms: round * 100 + n,
+                        instance: "b".into(),
+                        request_id: format!("r{round}-{n}"),
+                        triggers: [fast_proxy_model::Trigger::Slow].into_iter().collect(),
+                        subsystem: "shop".into(),
+                        route: "/".into(),
+                        client: "c".into(),
+                        method: "GET".into(),
+                        status: 200,
+                        total_ms: 1,
+                        detail: "x".repeat(1500),
+                    })
+                    .collect();
+                secondary
+                    .write_unrecorded(|c| samples::insert_batch(c, &batch))
+                    .unwrap();
+            }
+        });
+        for n in 0..40 {
+            seed(&mut primary, &format!("s{n}"), &format!("s{n}.example.com"));
+        }
+        writer.join().unwrap();
+        assert_eq!(
+            primary.current_version().unwrap(),
+            40,
+            "only the configuration writes made revisions"
+        );
+        assert_eq!(primary.read(samples::usage).unwrap().rows, 2000);
+    }
+
+    #[test]
+    fn a_secondary_that_cannot_get_the_write_lock_fails_instead_of_hanging() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        drop(Database::open(&path).unwrap());
+        let holder = Connection::open(&path).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut secondary =
+            Database::open_secondary(&path, std::time::Duration::from_millis(100)).unwrap();
+        let started = std::time::Instant::now();
+        let err = secondary.write_unrecorded(|_| Ok(())).unwrap_err();
+        assert!(matches!(err, StoreError::Internal(_)), "{err}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "it gave up at the busy timeout"
+        );
+        holder.execute_batch("ROLLBACK").unwrap();
+        secondary.write_unrecorded(|_| Ok(())).unwrap();
+    }
+
+    #[test]
     fn rejects_a_database_with_a_different_schema_version() {
-        for found in [1, 2, 3, 99] {
+        for found in [1, 2, 3, 4, 99] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("old.db");
             Connection::open(&path)
