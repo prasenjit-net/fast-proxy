@@ -1,0 +1,11 @@
+[package]
+name = "fast-proxy-sampling"
+version = "0.0.0"
+edition = "2021"
+description = "Tail-based request sampling: the decision, rolling latency, the storm guard, redaction and the batched hand-off (no HTTP, no database)"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }

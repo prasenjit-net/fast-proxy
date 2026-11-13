@@ -73,6 +73,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
+- `crates/fast-proxy-sampling/` is request sampling with no HTTP and no database (M6): the decision
+  (`decide`), `LatencyWindow`, `ClientErrors`, `StormGuard`, `RateLimiter`, the `Redactor`, the `Sample`
+  encoding and `SampleQuery`, the `Batcher`, and the `Sampler` handle with its worker thread and the `SampleSink`
+  trait. The data plane will depend on it; it depends on `model` only.
 - `crates/fast-proxy-tls/` is everything about certificates and keys, with no HTTP
   knowledge: PEM parsing and validation, the `Vault` (AES-256-GCM under the master
   key), the self-signed generator, `CertCache` (parsed keys, unchanged entries

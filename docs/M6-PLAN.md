@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR2 (model, schema, repositories, second connection) written; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR3 (the sampling crate) written; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -395,53 +395,60 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream SM: The sampling crate (new)
 
-- [ ] **SM1 (S) Crate and vocabulary.** `fast-proxy-sampling` with `Trigger`, `SamplingPolicy` (the compiled
+- [x] **SM1 (S) Crate and vocabulary.** `fast-proxy-sampling` with `Trigger`, `SamplingPolicy` (the compiled
   effective policy), `RequestHead`, `Outcome`, `RawSample`, `Sample`; depends on `model` only.
-- [ ] **SM2 (M) The decision.** `decide(policy, head, outcome, state, now_ms) -> Triggers` as one pure function
+- [x] **SM2 (M) The decision.** `decide(policy, head, outcome, state, now_ms) -> Triggers` as one pure function
   over atomics: every trigger of J4, the priority order, the baseline draw (injectable random source), the
   maintenance and unmatched-host exemptions of J13, and an upstream-answered 5xx matching nothing.
   *Done when:* a table test covers every trigger alone, in combination, at the exact threshold, disabled, and
   with an override; an upstream 500 and an upstream 502 produce no trigger; every connectivity failure kind
   produces `upstream_failure`; a retry after a connection refused produces `retried` and a retry after an
   upstream 503 does not.
-- [ ] **SM10 (M) `StormGuard`.** The per-key limiter of J19: the 1024-slot table, the key from subsystem, route,
+- [x] **SM10 (M) `StormGuard`.** The per-key limiter of J19: the 1024-slot table, the key from subsystem, route,
   trigger and (for connectivity triggers) endpoint and failure kind, the burst and interval from the policy, the
   suppressed counter and its hand-over to the next kept sample, the clock as a parameter, no allocation.
   *Done when:* tests cover the burst then the interval, one key not affecting another, the suppressed count
   arriving on the next kept sample exactly once, a quiet period restoring the burst, a collision merging two keys
   without panic, concurrent callers never exceeding the budget, and the `baseline` exemption.
-- [ ] **SM3 (M) `LatencyWindow` and the p99 publisher.** The two-epoch log-linear histogram, the quantile
+- [x] **SM3 (M) `LatencyWindow` and the p99 publisher.** The two-epoch log-linear histogram, the quantile
   computation, the published atomic threshold, the minimum-count rule; the 5-second tick as a task that takes
   `now_ms`.
   *Done when:* property tests show the estimate within one bucket of the true p99 on random data, an epoch roll
   forgets old latencies, and recording under concurrency loses nothing.
-- [ ] **SM4 (S) `ClientErrors`.** The 4096-slot windowed table and the "sample the crossing, then one in N" rule
+- [x] **SM4 (S) `ClientErrors`.** The 4096-slot windowed table and the "sample the crossing, then one in N" rule
   (J6).
   *Done when:* tests cover the crossing, the window roll, a collision firing early without panicking, and zero
   allocation after construction.
-- [ ] **SM5 (S) `RateLimiter`.** A lock-free token bucket (the clock is a parameter).
+- [x] **SM5 (S) `RateLimiter`.** A lock-free token bucket (the clock is a parameter).
   *Done when:* tests cover burst, refill, a zero-rate setting and concurrent callers never exceeding the budget.
-- [ ] **SM6 (M) The redactor.** Headers, query strings and the lexical body redactor of J8, including truncated
+- [x] **SM6 (M) The redactor.** Headers, query strings and the lexical body redactor of J8, including truncated
   JSON and form bodies and an unredactable tail being dropped.
   *Done when:* table tests cover each built-in name case-insensitively, nested JSON, escaped quotes, a cut in the
   middle of a string or key, arrays, form encoding with percent escapes, and additions; a property test asserts
   **no input containing a known secret value after a redacted name ever yields output containing it**.
-- [ ] **SM7 (M) The sample encoding and the query model.** `Sample` to its short columns and its `detail` JSON and
+- [x] **SM7 (M) The sample encoding and the query model.** `Sample` to its short columns and its `detail` JSON and
   back, the size accounting (`size_bytes` equals the stored lengths), the `SampleQuery` filter type with its
   validation and the trigger bit set, and an NDJSON writer over rows.
   *Done when:* round-trip tests cover every field, a sample at every cap, unusual bytes, and a filter mask for
   every trigger.
-- [ ] **SM8 (S) The batcher and the sink trait.** `SampleSink` (an async-free trait the sample service implements)
+- [x] **SM8 (S) The batcher and the sink trait.** `SampleSink` (an async-free trait the sample service implements)
   and the pure batching rule (flush at `batch_size` or after `batch_interval`, whichever first), with the clock as
   a parameter.
   *Done when:* tests cover both flush conditions, an empty interval writing nothing, and order being preserved.
-- [ ] **SM9 (M) The sampler task and handle.** `Sampler` (the cheap handle the data plane holds: policy lookup
+- [x] **SM9 (M) The sampler task and handle.** `Sampler` (the cheap handle the data plane holds: policy lookup
   helper, `try_send`, the body budget counter) and the task that redacts, size-caps, batches and passes batches to
   the `SampleSink`, counting what the sink reports. Shutdown flushes the queue and the last batch (like
   `AccessLog::flush`).
   *Done when:* tests (with a fake sink) cover a full queue dropping and counting, a failing sink dropping the batch
   and counting `store_error`, the budget being released on every path (kept, dropped, not triggered), and
   shutdown losing nothing already accepted.
+  *As built (PR3):* the sampler's worker is a plain `std::thread` fed by a bounded `std::sync::mpsc::sync_channel`
+  (`try_send` never blocks), so the crate has no async runtime and `SampleSink::write_batch` may block. `SamplerRuntime::start`
+  returns an `io::Result`. The decision takes the facts as plain arguments (`decide(policy, flags, client, outcome, state, roll, now)`);
+  `Outcome` holds an inline `AttemptLog` (no allocation per request), and endpoint addresses are looked up only when a sample is kept
+  (`RawSample.attempts`). The JSON of a sample spells its time `atMs`. The storm guard and the rate limiter share one lock-free bucket
+  (`bucket.rs`). The redactor matches a name exactly, or by containing `password`, `passwd`, `secret` or `token`; bodies of `text/*`
+  and XML get a loose name-then-value pass, JSON and form bodies a lexical one.
 
 ### Workstream SV: The sample service (new crate `fast-proxy-sample-service`)
 

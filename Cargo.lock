@@ -752,6 +752,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-sampling"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fast-proxy-store"
 version = "0.0.0"
 dependencies = [
