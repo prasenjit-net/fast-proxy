@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError};
+use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError, SamplingConfig};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
@@ -53,7 +53,8 @@ pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
     }
 
     validate_admin(config)?;
-    validate_tls(config)
+    validate_tls(config)?;
+    validate_sampling(&config.sampling)
 }
 
 /// Checks `[admin]`: the admin plane may leave loopback only with authentication
@@ -88,6 +89,25 @@ fn validate_admin(config: &AppConfig) -> Result<(), ConfigError> {
         }
     }
     Ok(())
+}
+
+/// Checks `[sampling]`: every size and count within sane bounds.
+fn validate_sampling(sampling: &SamplingConfig) -> Result<(), ConfigError> {
+    let within = |name: &str, value: u64, min: u64, max: u64| {
+        if (min..=max).contains(&value) {
+            return Ok(());
+        }
+        invalid(format!("sampling.{name} must be between {min} and {max}"))
+    };
+    within("queue_depth", sampling.queue_depth as u64, 1, 1_000_000)?;
+    within("batch_size", sampling.batch_size as u64, 1, 10_000)?;
+    within(
+        "batch_interval",
+        sampling.batch_interval.as_millis() as u64,
+        10,
+        60_000,
+    )?;
+    within("body_budget_bytes", sampling.body_budget_bytes, 0, 4 << 30)
 }
 
 /// Checks `[admin.tls]`: when on, it needs a certificate name and at least one name.
@@ -277,6 +297,50 @@ mod tests {
         let mut config = config_in(dir);
         config.data_plane.tls.enabled = true;
         config
+    }
+
+    #[test]
+    fn the_sampling_defaults_are_valid_and_each_bound_is_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir);
+        assert!(config.sampling.enabled);
+        validate(&config).unwrap();
+        for (name, change) in [
+            (
+                "queue_depth",
+                Box::new(|c: &mut AppConfig| c.sampling.queue_depth = 0)
+                    as Box<dyn Fn(&mut AppConfig)>,
+            ),
+            (
+                "queue_depth",
+                Box::new(|c| c.sampling.queue_depth = 1_000_001),
+            ),
+            ("batch_size", Box::new(|c| c.sampling.batch_size = 0)),
+            ("batch_size", Box::new(|c| c.sampling.batch_size = 10_001)),
+            (
+                "batch_interval",
+                Box::new(|c| c.sampling.batch_interval = Duration::from_millis(9)),
+            ),
+            (
+                "batch_interval",
+                Box::new(|c| c.sampling.batch_interval = Duration::from_secs(61)),
+            ),
+            (
+                "body_budget_bytes",
+                Box::new(|c| c.sampling.body_budget_bytes = (4 << 30) + 1),
+            ),
+        ] {
+            let mut bad = config_in(&dir);
+            change(&mut bad);
+            assert!(
+                message(validate(&bad)).contains(&format!("sampling.{name}")),
+                "{name}"
+            );
+        }
+        let mut edge = config_in(&dir);
+        edge.sampling.body_budget_bytes = 0;
+        edge.sampling.batch_interval = Duration::from_millis(10);
+        validate(&edge).unwrap();
     }
 
     #[test]

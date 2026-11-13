@@ -18,6 +18,8 @@ mod replay_body;
 mod request_id;
 mod responses;
 mod retry_policy;
+mod sampling_head;
+mod sampling_tail;
 mod selection;
 mod server;
 mod tls_plane;
@@ -44,6 +46,8 @@ mod passive_health_tests;
 #[cfg(test)]
 mod retry_tests;
 #[cfg(test)]
+mod sampling_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod test_upstream;
@@ -55,6 +59,7 @@ mod upgrade_tests;
 pub use forward::{Forward, Forwarded, ResponseBody, Target};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
+pub use replay_body::{BodyObservation, BodyStats};
 pub use responses::FixedResponse;
 pub use server::{DataPlane, DrainReport};
 pub use tls_plane::{Http2Limits, TlsPlane, TlsPlaneError, TlsPlaneSettings};

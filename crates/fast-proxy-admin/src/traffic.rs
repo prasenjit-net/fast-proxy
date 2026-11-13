@@ -22,6 +22,15 @@ pub struct Rates {
     pub error_rate: f64,
 }
 
+/// How many requests the sampler kept and lost in one window.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SampleRates {
+    pub captured_total: u64,
+    pub captured_per_sec: f64,
+    pub dropped_per_sec: f64,
+}
+
 /// Traffic for one subsystem.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +49,7 @@ pub struct TrafficSnapshot {
     pub total: Rates,
     pub active_connections: i64,
     pub active_requests: i64,
+    pub samples: SampleRates,
     /// Sorted by name.
     pub subsystems: Vec<SubsystemTraffic>,
 }
@@ -95,7 +105,30 @@ pub fn compute_snapshot(
         total: rates(previous.overall(), current.overall(), window_secs),
         active_connections: current.active_connections,
         active_requests: current.active_requests,
+        samples: SampleRates {
+            captured_total: current.samples_captured,
+            captured_per_sec: per_sec(
+                previous.samples_captured,
+                current.samples_captured,
+                window_secs,
+            ),
+            dropped_per_sec: per_sec(
+                previous.samples_dropped,
+                current.samples_dropped,
+                window_secs,
+            ),
+        },
         subsystems,
+    }
+}
+
+/// A counter's growth over the window, per second (a counter that went
+/// backwards counts as no growth).
+fn per_sec(previous: u64, current: u64, window_secs: f64) -> f64 {
+    if window_secs > 0.0 {
+        current.saturating_sub(previous) as f64 / window_secs
+    } else {
+        0.0
     }
 }
 
@@ -169,6 +202,7 @@ mod tests {
                 .collect(),
             active_connections: 2,
             active_requests: 1,
+            ..TrafficTotals::default()
         }
     }
 
@@ -223,6 +257,30 @@ mod tests {
         let snap = snapshot(&[], &[("shop", 10, 0)]);
         assert_eq!(snap.subsystems[0].rates.requests_per_sec, 5.0);
         assert_eq!(snap.total.requests_per_sec, 5.0);
+    }
+
+    #[test]
+    fn the_sample_counts_are_per_second_over_the_window() {
+        let mut previous = totals(&[("shop", 10, 0)]);
+        previous.samples_captured = 4;
+        previous.samples_dropped = 10;
+        let mut current = totals(&[("shop", 20, 0)]);
+        current.samples_captured = 10;
+        current.samples_dropped = 30;
+        let snap = compute_snapshot(&previous, &current, Duration::from_secs(2), 1);
+        assert_eq!(snap.samples.captured_total, 10);
+        assert_eq!(snap.samples.captured_per_sec, 3.0);
+        assert_eq!(snap.samples.dropped_per_sec, 10.0);
+        let json = serde_json::to_value(&snap).unwrap();
+        assert_eq!(json["samples"]["capturedPerSec"], 3.0);
+    }
+
+    #[test]
+    fn sample_counters_that_went_backwards_do_not_go_negative() {
+        let mut previous = totals(&[]);
+        previous.samples_captured = 9;
+        let snap = compute_snapshot(&previous, &totals(&[]), Duration::from_secs(2), 1);
+        assert_eq!(snap.samples.captured_per_sec, 0.0);
     }
 
     #[test]

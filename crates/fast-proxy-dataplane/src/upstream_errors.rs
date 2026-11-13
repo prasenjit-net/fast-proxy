@@ -6,6 +6,7 @@ use std::io;
 
 use http::StatusCode;
 
+use fast_proxy_sampling::FailureKind;
 use fast_proxy_telemetry::{UpstreamErrorKind, UpstreamOutcome};
 
 /// A 502, 503 or 504 from the upstream says the endpoint is unwell; every
@@ -38,6 +39,44 @@ pub(crate) fn kind_for(is_connect: bool, err: &(dyn Error + 'static)) -> Upstrea
     } else {
         UpstreamErrorKind::Other
     }
+}
+
+/// How a failed attempt showed itself, for the sampler: finer than the
+/// metrics' three kinds. `is_connect` is the client's own judgement.
+pub(crate) fn failure_of(
+    is_connect: bool,
+    kind: UpstreamErrorKind,
+    err: &(dyn Error + 'static),
+) -> FailureKind {
+    match kind {
+        UpstreamErrorKind::Timeout if is_connect => FailureKind::ConnectTimeout,
+        UpstreamErrorKind::Timeout => FailureKind::ResponseTimeout,
+        UpstreamErrorKind::Connect if is_tls_failure(err) => FailureKind::TlsHandshake,
+        UpstreamErrorKind::Connect => FailureKind::ConnectRefused,
+        UpstreamErrorKind::Other => FailureKind::ConnectionReset,
+    }
+}
+
+/// Whether a rustls error is anywhere in the chain (the handshake with the
+/// upstream failed), including as the payload of an `io::Error`, which does
+/// not list its payload among its sources.
+fn is_tls_failure(err: &(dyn Error + 'static)) -> bool {
+    let mut current = Some(err);
+    while let Some(cause) = current {
+        if cause.downcast_ref::<rustls::Error>().is_some() {
+            return true;
+        }
+        if let Some(io_err) = cause.downcast_ref::<io::Error>() {
+            if io_err
+                .get_ref()
+                .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some())
+            {
+                return true;
+            }
+        }
+        current = cause.source();
+    }
+    false
 }
 
 fn has_timeout_cause(err: &(dyn Error + 'static)) -> bool {
@@ -98,6 +137,51 @@ mod tests {
             kind_for(false, &io::Error::other("boom")),
             UpstreamErrorKind::Other
         );
+    }
+
+    #[test]
+    fn every_kind_of_failure_gets_its_own_name_for_the_sampler() {
+        let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        let timed_out = io::Error::new(io::ErrorKind::TimedOut, "deadline");
+        let tls = io::Error::new(
+            io::ErrorKind::InvalidData,
+            rustls::Error::General("bad certificate".into()),
+        );
+        let kinds = |is_connect, err: &(dyn Error + 'static)| {
+            failure_of(is_connect, kind_for(is_connect, err), err)
+        };
+        assert_eq!(
+            kinds(true, &Wrapper(Box::new(refused))),
+            FailureKind::ConnectRefused
+        );
+        assert_eq!(
+            kinds(true, &Wrapper(Box::new(timed_out))),
+            FailureKind::ConnectTimeout
+        );
+        let timed_out = io::Error::new(io::ErrorKind::TimedOut, "deadline");
+        assert_eq!(
+            kinds(false, &Wrapper(Box::new(timed_out))),
+            FailureKind::ResponseTimeout
+        );
+        assert_eq!(
+            kinds(true, &Wrapper(Box::new(tls))),
+            FailureKind::TlsHandshake
+        );
+        assert_eq!(
+            kinds(false, &io::Error::other("boom")),
+            FailureKind::ConnectionReset
+        );
+    }
+
+    #[test]
+    fn a_tls_error_is_found_whether_bare_or_inside_an_io_error() {
+        assert!(is_tls_failure(&rustls::Error::General("x".into())));
+        let inside = io::Error::new(
+            io::ErrorKind::InvalidData,
+            rustls::Error::General("x".into()),
+        );
+        assert!(is_tls_failure(&inside));
+        assert!(!is_tls_failure(&io::Error::other("not tls")));
     }
 
     #[test]

@@ -146,10 +146,7 @@ impl Harness {
         let metrics = Arc::new(Metrics::new());
         let events = EndpointEvents::new();
         let access_log = Arc::new(AccessLog::open(log_path).await);
-        let observability = Observability {
-            metrics: metrics.clone(),
-            access_log: access_log.clone(),
-        };
+        let observability = Observability::new(metrics.clone(), access_log.clone());
         let pipeline = Arc::new(
             RequestPipeline::new(
                 holder.clone(),

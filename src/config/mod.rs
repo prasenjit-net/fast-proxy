@@ -3,8 +3,10 @@
 
 mod admin;
 mod data_plane;
+mod duration;
 mod error;
 mod logging;
+mod sampling;
 mod tls;
 mod validate;
 
@@ -17,6 +19,7 @@ pub use admin::{AdminAuth, AdminConfig, AdminTlsConfig};
 pub use data_plane::DataPlaneConfig;
 pub use error::ConfigError;
 pub use logging::LoggingConfig;
+pub use sampling::SamplingConfig;
 pub use tls::TlsConfig;
 
 /// Everything the config file can set.
@@ -26,6 +29,7 @@ pub struct AppConfig {
     pub data_plane: DataPlaneConfig,
     pub admin: AdminConfig,
     pub logging: LoggingConfig,
+    pub sampling: SamplingConfig,
     pub ui: UiConfig,
 }
 

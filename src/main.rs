@@ -3,6 +3,7 @@
 mod cli;
 mod commands;
 mod config;
+mod sampling;
 mod startup;
 
 use std::process::ExitCode;

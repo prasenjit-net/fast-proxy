@@ -26,6 +26,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
+use crate::sampling::{Sampling, SamplingError};
 
 /// The environment variable that seeds the first admin token (for containers).
 const BOOTSTRAP_TOKEN_VARIABLE: &str = "FAST_PROXY_BOOTSTRAP_TOKEN";
@@ -61,6 +62,8 @@ pub enum StartupError {
     AdminTls(#[from] ServerConfigError),
     #[error("the admin server failed: {0}")]
     AdminServe(std::io::Error),
+    #[error(transparent)]
+    Sampling(#[from] SamplingError),
 }
 
 /// Starts everything and serves until Ctrl-C. Every listener is bound
@@ -193,14 +196,34 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         data_stop.clone(),
     ));
 
+    // Request sampling: its thread, the pruner and the periodic upkeep. Off
+    // costs nothing; on, the data plane only holds the handle.
+    let sampling = if config.sampling.enabled {
+        let started = Sampling::start(
+            &config.sampling,
+            &database,
+            config_service.instance_id(),
+            &config_service.snapshot_holder().load(),
+        )?;
+        started.spawn_upkeep(
+            config_service.snapshot_holder(),
+            config_service.subscribe(),
+            metrics.clone(),
+            data_stop.clone(),
+        );
+        Some(started)
+    } else {
+        None
+    };
+    let mut observability = Observability::new(metrics.clone(), access_log.clone());
+    if let Some(sampling) = &sampling {
+        observability = observability.with_sampler(sampling.sampler());
+    }
     let pipeline = Arc::new(
         RequestPipeline::new(
             config_service.snapshot_holder(),
             UpstreamClient::new(trusted_proxies.clone(), metrics.clone(), endpoint_events),
-            Observability {
-                metrics,
-                access_log: access_log.clone(),
-            },
+            observability,
         )
         .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref()))
         .with_trusted_proxies(trusted_proxies),
@@ -271,6 +294,11 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
                 report.forced_connections
             );
         }
+    }
+    // Every request has finished, so every sample has been handed over: write
+    // what is queued and stop the sampler and the pruner.
+    if let Some(sampling) = sampling {
+        let _ = tokio::task::spawn_blocking(move || sampling.shutdown()).await;
     }
     // Every request finishes before this point; make sure its line is on disk.
     access_log.flush().await;

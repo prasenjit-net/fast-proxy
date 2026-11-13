@@ -6,6 +6,7 @@ use fast_proxy_routing::{
     redirect_target, CompiledMaintenance, CompiledRoute, CompiledSubsystem, Lookup, Snapshot,
     SnapshotHolder,
 };
+use fast_proxy_sampling::Answer;
 use fast_proxy_telemetry::{DataPlaneFields, Metrics, NO_ROUTE, UNMATCHED_SUBSYSTEM};
 use http::{header, Request, Response};
 use http_body_util::BodyExt;
@@ -17,6 +18,7 @@ use crate::pending_request::PendingRequest;
 use crate::redirect::{hsts_value, render_redirect};
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
 use crate::responses::accepts_json;
+use crate::sampling_tail::{SamplingSource, SamplingTail};
 use crate::selection::select_endpoint;
 use crate::tracked_body::TrackedBody;
 use crate::trusted_proxies::TrustedProxies;
@@ -149,6 +151,22 @@ impl<F: Forward> RequestPipeline<F> {
             &request,
             (tls.as_deref(), self.https_port, client),
         );
+        // What the sampling decision will need, gathered now because the request
+        // is consumed by forwarding; nothing is decided until the response is done.
+        let started_sampling = self.observability.sampler.as_deref().and_then(|sampler| {
+            SamplingTail::begin(
+                (sampler, &self.observability.metrics),
+                &snapshot,
+                sampling_source(&snapshot, &resolved),
+                (request.headers(), request.method(), request.uri()),
+                client,
+            )
+        });
+        // The state lives in the pending request from the start, so a client that
+        // leaves while the upstream is still working is still decided.
+        if let Some(tail) = started_sampling {
+            pending.set_sampling(tail);
+        }
         let mut response = match resolved {
             Resolved::Respond { fixed, subsystem } => {
                 if let Some(subsystem) = subsystem {
@@ -172,6 +190,9 @@ impl<F: Forward> RequestPipeline<F> {
                 route,
             } => {
                 hsts_from = Some(subsystem);
+                if let Some(tail) = pending.sampling_mut() {
+                    tail.answer = Answer::Maintenance;
+                }
                 let known = pending.fields_mut();
                 known.subsystem = subsystem.name.as_str().to_string();
                 if let Some(route) = route {
@@ -211,6 +232,9 @@ impl<F: Forward> RequestPipeline<F> {
                         let known = pending.fields_mut();
                         known.upstream = Some(endpoint.addr.to_string());
                         known.attempts = 1;
+                        let request_body = pending
+                            .sampling_mut()
+                            .and_then(|tail| tail.request_observation);
                         let target = Target {
                             subsystem,
                             route,
@@ -221,6 +245,7 @@ impl<F: Forward> RequestPipeline<F> {
                             request_id: &request_id,
                             client_addr,
                             wants_json,
+                            request_body,
                         };
                         let forwarding = Instant::now();
                         let forwarded = self.forwarder.forward(request, target).await;
@@ -233,6 +258,15 @@ impl<F: Forward> RequestPipeline<F> {
                         );
                         known.attempts = forwarded.attempts;
                         in_flight = forwarded.in_flight;
+                        if let Some(tail) = pending.sampling_mut() {
+                            tail.answer = if forwarded.proxy_failed {
+                                Answer::ProxyFailure
+                            } else {
+                                Answer::Upstream
+                            };
+                            tail.attempts = forwarded.attempt_log;
+                            tail.request_body = forwarded.request_body;
+                        }
                         let mut response = forwarded.response;
                         response
                             .headers_mut()
@@ -263,6 +297,9 @@ impl<F: Forward> RequestPipeline<F> {
             }
         }
 
+        if let Some(tail) = pending.sampling_mut() {
+            tail.note_response(response.headers());
+        }
         let (summary, active) = pending.complete(response.status().as_u16());
         let (parts, body) = response.into_parts();
         let tracked = TrackedBody::new(
@@ -272,6 +309,34 @@ impl<F: Forward> RequestPipeline<F> {
             (active, in_flight),
         );
         Response::from_parts(parts, tracked.boxed())
+    }
+}
+
+/// How a request is sampled: by its route when one took it, else by its
+/// subsystem, else by the global settings.
+fn sampling_source(snapshot: &Snapshot, resolved: &Resolved<'_>) -> SamplingSource {
+    let policy_only = |policy: &Arc<fast_proxy_sampling::SamplingPolicy>| SamplingSource {
+        policy: policy.clone(),
+        latency: None,
+        upstream: None,
+    };
+    match resolved {
+        Resolved::Respond {
+            subsystem: Some(subsystem),
+            ..
+        }
+        | Resolved::Redirect { subsystem, .. } => policy_only(&subsystem.sampling),
+        Resolved::Respond {
+            subsystem: None, ..
+        } => policy_only(&snapshot.unmatched_sampling),
+        Resolved::Maintenance {
+            subsystem, route, ..
+        } => policy_only(route.map_or(&subsystem.sampling, |route| &route.sampling.policy)),
+        Resolved::Forward { route, .. } => SamplingSource {
+            policy: route.sampling.policy.clone(),
+            latency: Some(route.sampling.latency.clone()),
+            upstream: Some(route.upstream.clone()),
+        },
     }
 }
 

@@ -324,6 +324,12 @@ impl ConfigService {
         self.tls.status()
     }
 
+    /// The name of this process in audit entries and samples (its pid and
+    /// start time), so shared records say which instance wrote them.
+    pub fn instance_id(&self) -> &str {
+        &self.instance
+    }
+
     /// The live snapshot holder, shared with the data plane.
     pub fn snapshot_holder(&self) -> Arc<SnapshotHolder> {
         self.holder.clone()

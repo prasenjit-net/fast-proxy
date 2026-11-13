@@ -278,10 +278,10 @@ async fn several_listeners_all_serve_the_same_pipeline() {
         addr: ([127, 0, 0, 1], 0).into(),
     });
     let bound = bind(&specs).await.unwrap();
-    let observability = Observability {
-        metrics: Arc::new(Metrics::new()),
-        access_log: Arc::new(AccessLog::open(None).await),
-    };
+    let observability = Observability::new(
+        Arc::new(Metrics::new()),
+        Arc::new(AccessLog::open(None).await),
+    );
     let pipeline = Arc::new(RequestPipeline::new(holder, EchoForward, observability));
     let plane = DataPlane::start(bound, pipeline, CancellationToken::new());
     assert_eq!(plane.local_addrs().len(), 2);

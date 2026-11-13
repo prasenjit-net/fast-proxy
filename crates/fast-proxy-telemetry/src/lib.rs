@@ -5,6 +5,7 @@ mod admin_metrics;
 mod endpoint_events;
 mod maintenance_metrics;
 mod metrics;
+mod sampling_metrics;
 mod tls_metrics;
 mod upstream_metrics;
 
@@ -16,5 +17,6 @@ pub use metrics::{
     ActiveRequest, Counts, Metrics, ReloadOutcome, TrafficTotals, UpstreamErrorKind, NO_ROUTE,
     UNMATCHED_SUBSYSTEM,
 };
+pub use sampling_metrics::{SampleDropReason, SamplerReading};
 pub use tls_metrics::{CacheResult, CertificateReading, HandshakeResult, SyncResult};
 pub use upstream_metrics::{EndpointLabels, RetryReason, UpstreamOutcome};

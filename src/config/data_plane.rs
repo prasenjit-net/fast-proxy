@@ -2,8 +2,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
+use super::duration::deserialize_duration;
 use super::TlsConfig;
 
 /// The `[data_plane]` section: listeners and process-level proxy settings.
@@ -80,9 +81,4 @@ fn default_listeners() -> Vec<ListenerConfig> {
         name: "http".into(),
         listen: SocketAddr::from(([0, 0, 0, 0], 8000)),
     }]
-}
-
-fn deserialize_duration<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
-    let raw = String::deserialize(deserializer)?;
-    humantime::parse_duration(&raw).map_err(serde::de::Error::custom)
 }

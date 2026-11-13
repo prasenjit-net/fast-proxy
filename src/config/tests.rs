@@ -20,6 +20,42 @@ fn missing_file_falls_back_to_defaults() {
 }
 
 #[test]
+fn the_sampling_section_defaults_and_parses() {
+    let defaults = AppConfig::default().sampling;
+    assert!(defaults.enabled);
+    assert_eq!(
+        (
+            defaults.queue_depth,
+            defaults.batch_size,
+            defaults.body_budget_bytes
+        ),
+        (1024, 50, 16 * 1024 * 1024)
+    );
+    assert_eq!(defaults.batch_interval, Duration::from_millis(250));
+    let config = parse(
+        r#"
+        [sampling]
+        enabled = false
+        queue_depth = 64
+        batch_size = 10
+        batch_interval = "1s"
+        body_budget_bytes = 1048576
+        "#,
+    )
+    .unwrap();
+    assert!(!config.sampling.enabled);
+    assert_eq!(config.sampling.queue_depth, 64);
+    assert_eq!(config.sampling.batch_interval, Duration::from_secs(1));
+    assert_eq!(config.sampling.body_budget_bytes, 1_048_576);
+}
+
+#[test]
+fn an_unknown_sampling_key_is_refused() {
+    assert!(parse("[sampling]\nbuffer_samples = 1000\n").is_err());
+    assert!(parse("[sampling]\nbatch_interval = \"soon\"\n").is_err());
+}
+
+#[test]
 fn parses_a_full_config_file() {
     let config = parse(
         r#"

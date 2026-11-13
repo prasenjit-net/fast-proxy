@@ -30,6 +30,8 @@ fast-proxy-dataplane = { path = "crates/fast-proxy-dataplane" }
 fast-proxy-health = { path = "crates/fast-proxy-health" }
 fast-proxy-model = { path = "crates/fast-proxy-model" }
 fast-proxy-routing = { path = "crates/fast-proxy-routing" }
+fast-proxy-sample-service = { path = "crates/fast-proxy-sample-service" }
+fast-proxy-sampling = { path = "crates/fast-proxy-sampling" }
 fast-proxy-store = { path = "crates/fast-proxy-store" }
 fast-proxy-tls = { path = "crates/fast-proxy-tls" }
 fast-proxy-telemetry = { path = "crates/fast-proxy-telemetry" }

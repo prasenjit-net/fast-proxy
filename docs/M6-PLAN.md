@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR4 (settings writes, compile, the sample service) written; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR5 (data-plane capture, metrics, wiring) written; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -198,7 +198,7 @@ the rest (portable types, a bitset instead of a JSON filter, database-assigned i
 ```toml
 [sampling]
 enabled = true              # the master switch; false removes every capture cost (restart)
-body_budget_bytes = "16MiB" # most memory teed bodies may hold at once, per process
+body_budget_bytes = 16777216 # most memory teed bodies may hold at once, per process (bytes)
 queue_depth = 1024          # the bounded hand-off channel between the request path and the sampler task
 batch_size = 50             # samples per database transaction, at most
 batch_interval = "250ms"    # the longest a kept sample waits for its batch
@@ -504,31 +504,43 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (M) `RequestHead` capture.** In the pipeline after the route matched: the unusual-header flags (J7),
+- [x] **D1 (M) `RequestHead` capture.** In the pipeline after the route matched: the unusual-header flags (J7),
   the selected headers, method and the path and query, stored in the `PendingRequest`; nothing at all when the
   policy for the route is off. The maintenance bypass header is never in the selected set.
   *Done when:* tests cover each flag, the allow-list, and that a disabled route allocates nothing (a counting
   allocator test or the benchmark).
-- [ ] **D2 (M) The request body tee.** On `BodyOwner`: capped capture for opted-in routes, the budget
+- [x] **D2 (M) The request body tee.** On `BodyOwner`: capped capture for opted-in routes, the budget
   reservation, content-type and encoding rules, never for upgrades, never twice across attempts.
   *Done when:* tests cover the cap, a body that is exactly the cap and one byte over, a binary content type, a
   gzip body, a budget at zero, a retried request, and the bytes-in count (also used by `oversized_request`).
-- [ ] **D3 (M) The response side and the decision.** The response header selection and an optional capped tee in
+- [x] **D3 (M) The response side and the decision.** The response header selection and an optional capped tee in
   `TrackedBody`; the decision at drop and in `PendingRequest::complete`; `LatencyWindow.record`; the storm guard, the token
   bucket and the hand-off; each attempt's endpoint and failure kind taken from the upstream client's result. A cancelled request (499) follows J13.
   *Done when:* end-to-end tests cover each trigger against a real backend (a backend that is killed, refuses, hangs past the timeout, resets
   the connection, slows, returns its own 500 and 502 (no sample), recovers on retry, sends a large response), a client that leaves early, a maintenance 503 not being sampled, and the access log
   line being unchanged.
-- [ ] **D4 (S) Metrics.** `fastproxy_samples_captured_total{trigger}` (kept by the decision),
+- [x] **D4 (S) Metrics.** `fastproxy_samples_captured_total{trigger}` (kept by the decision),
   `fastproxy_samples_dropped_total{reason}` (`storm_guard`, `rate_limit`, `queue_full`, `budget`, `store_error`),
   `fastproxy_samples_written_total`, `fastproxy_sample_queue_depth`, `fastproxy_sample_write_seconds`
   (histogram), `fastproxy_sample_prune_deleted_total`, `fastproxy_sample_table_rows` and
   `fastproxy_sample_table_bytes` (set by the pruner from its aggregate, per instance reading of the shared table),
   `fastproxy_sample_body_budget_bytes`. Labels are fixed enums only.
   *Done when:* a test shows no label can come from a request value, and the series render.
-- [ ] **D5 (S) Startup wiring.** `startup.rs` builds the `SamplingRuntime`, the sampler task and its shutdown, and
+- [x] **D5 (S) Startup wiring.** `startup.rs` builds the `SamplingRuntime`, the sampler task and its shutdown, and
   passes the handle to the pipeline through `Observability`, starts the sample service (writer and pruner) on the
   second connection and stops it after the data plane drains; `[sampling] enabled = false` builds nothing.
+  *As built (PR5), what the tests changed or added:* the sampling state lives in the pending request from the very start
+  (it was first handed over after forwarding, so a client that left while the upstream was slow lost it: a test caught
+  that). The upstream client now returns an inline attempt log, whether the answer was its own 502/504, and a handle
+  on the request body's stats (`BodyObservation` / `BodyStats`: a count and the capped start of the body, read once by
+  whichever attempt sent it, so a retried request is never captured twice). Failures are classified finer than the
+  metrics' three kinds (`failure_of`: connect refused or unreachable, connect timeout, TLS handshake, reset or closed
+  before a response head, response timeout). The request-head capture is a fixed stack array plus one scan for the
+  unusual-header flags. `[sampling]` sizes are plain integers (`body_budget_bytes = 16777216`), validated, and
+  `--sampling` / `--no-sampling` override `enabled`. The `fastproxy_sample_write_seconds` histogram of the plan is not
+  built (the sink is not timed); the other metrics are, with the sampler's and the pruner's counts published each
+  second as increments. A3's traffic part is done (`samples` in the live traffic snapshot); its `SamplingChanged` event
+  and the table status come with the settings API (A1).
 
 ### Workstream A: Admin API
 
@@ -696,6 +708,11 @@ PR3 is independent of PR2 after the model types and can be taken in either order
   (one endpoint, 64 connections). The per-request cost is: one snapshot field read, the selected-header clones
   (J15, spike G2), one atomic increment for the latency window, a few integer comparisons, and no allocation for
   a request that is not sampled.
+- **Measured in PR5** (`scripts/bench-m6.sh`, three rounds, `oha -c 64`, one macOS machine with the load generator and
+  the backend on it, so read it as a ratio): with a fast backend, 96.7k requests per second with sampling off and
+  96.5k with it on at its defaults (-0.2%, inside the noise of the rounds, which spread 93k to 100k); with the only
+  backend down (every request a connectivity failure, the storm guard at work), 68.0k off and 69.3k on. Both are well
+  inside the budgets below. The formal run with the numbers in `benchmarks.md` is task Q6.
 - **Every request is a connectivity failure** (the only backend of a route is down, sampling at defaults):
   throughput within about 5% of the same load with sampling off, and the table gains only the storm guard's
   allowance (about the burst plus one sample per interval per failing endpoint). The storm guard and the token

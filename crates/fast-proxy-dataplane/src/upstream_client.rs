@@ -6,6 +6,7 @@ use fast_proxy_balancing::{
     monotonic_ms, record_outcome, Candidate, EndpointRuntime, InFlightGuard, Outcome, Transition,
 };
 use fast_proxy_routing::{build_upstream_uri, CompiledEndpoint};
+use fast_proxy_sampling::{Attempt, AttemptLog, FailureKind};
 use fast_proxy_telemetry::{
     EndpointChange, EndpointEvent, EndpointEvents, EndpointLabels, Metrics, RetryReason,
     UpstreamErrorKind, UpstreamOutcome,
@@ -20,11 +21,11 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 use crate::connections::ConnectionContext;
 use crate::headers::{self, ClientInfo};
 use crate::protocol_switch::{into_client_response, switch_protocols};
-use crate::replay_body::{BodyOwner, ReplayBody};
+use crate::replay_body::{BodyOwner, BodyStats, ReplayBody};
 use crate::retry_policy::{retry_reason, AttemptFailure};
 use crate::selection::select_endpoint;
 use crate::trusted_proxies::TrustedProxies;
-use crate::upstream_errors::{kind_for, outcome_of_error, outcome_of_status};
+use crate::upstream_errors::{failure_of, kind_for, outcome_of_error, outcome_of_status};
 use crate::{FixedResponse, Forward, Forwarded, ResponseBody, Target};
 
 type HttpClient = Client<HttpsConnector<HttpConnector>, ReplayBody>;
@@ -158,7 +159,10 @@ struct Chosen<'a> {
 /// How one attempt ended.
 enum AttemptEnd {
     Response(Response<Incoming>),
-    Failed(UpstreamErrorKind),
+    Failed {
+        kind: UpstreamErrorKind,
+        failure: FailureKind,
+    },
 }
 
 impl UpstreamClient {
@@ -225,13 +229,19 @@ impl UpstreamClient {
             Err(_elapsed) => {
                 tracing::warn!(upstream = %chosen.endpoint.addr, "upstream response timed out");
                 self.report(target, chosen, UpstreamOutcome::Timeout);
-                AttemptEnd::Failed(UpstreamErrorKind::Timeout)
+                AttemptEnd::Failed {
+                    kind: UpstreamErrorKind::Timeout,
+                    failure: FailureKind::ResponseTimeout,
+                }
             }
             Ok(Err(err)) => {
                 tracing::warn!(upstream = %chosen.endpoint.addr, "upstream request failed: {err}");
                 let kind = kind_for(err.is_connect(), &err);
                 self.report(target, chosen, outcome_of_error(kind));
-                AttemptEnd::Failed(kind)
+                AttemptEnd::Failed {
+                    kind,
+                    failure: failure_of(err.is_connect(), kind, &err),
+                }
             }
             Ok(Ok(response)) => {
                 let micros = u64::try_from(sent.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -401,7 +411,7 @@ impl Forward for UpstreamClient {
         );
         headers::apply_request_id(&mut head.headers, target.request_id);
 
-        let owner = BodyOwner::new(body);
+        let owner = BodyOwner::new(body, target.request_body);
         let client = self.client_for(
             route.connect_timeout,
             upstream.client_tls.as_ref(),
@@ -424,16 +434,28 @@ impl Forward for UpstreamClient {
             candidate: target.candidate,
         };
         let mut attempts = 0;
+        let mut log = AttemptLog::default();
+        let endpoint_of = |chosen: Chosen<'_>| u16::try_from(chosen.index).unwrap_or(u16::MAX);
         loop {
             attempts += 1;
             let in_flight = chosen.candidate.runtime.track();
             let Some(attempt) = build_attempt(&head, &target, chosen, owner.attempt()) else {
                 tracing::warn!(route = route.id.0, "cannot build an upstream URI");
                 let response = self.failed(&target, UpstreamErrorKind::Other);
-                return finished(response, chosen.index, attempts - 1, None);
+                return finished(
+                    response,
+                    (chosen.index, attempts - 1),
+                    None,
+                    Seen::new(log, true, &owner),
+                );
             };
             let failure = match self.attempt(&client, attempt, &target, chosen).await {
                 AttemptEnd::Response(response) if !is_bad_status(response.status()) => {
+                    log.push(Attempt {
+                        endpoint_index: endpoint_of(chosen),
+                        failure: None,
+                        upstream_status: Some(response.status().as_u16()),
+                    });
                     let response = match client_upgrade {
                         Some(client_upgrade)
                             if response.status() == StatusCode::SWITCHING_PROTOCOLS =>
@@ -443,9 +465,19 @@ impl Forward for UpstreamClient {
                         }
                         _ => into_client_response(response),
                     };
-                    return finished(response, chosen.index, attempts, Some(in_flight));
+                    return finished(
+                        response,
+                        (chosen.index, attempts),
+                        Some(in_flight),
+                        Seen::new(log, false, &owner),
+                    );
                 }
                 AttemptEnd::Response(response) => {
+                    log.push(Attempt {
+                        endpoint_index: endpoint_of(chosen),
+                        failure: None,
+                        upstream_status: Some(response.status().as_u16()),
+                    });
                     let failed = FailedAttempt {
                         index: chosen.index,
                         failure: AttemptFailure::BadStatus,
@@ -460,11 +492,23 @@ impl Forward for UpstreamClient {
                         }
                         None => {
                             let response = into_client_response(response);
-                            return finished(response, chosen.index, attempts, Some(in_flight));
+                            return finished(
+                                response,
+                                (chosen.index, attempts),
+                                Some(in_flight),
+                                Seen::new(log, false, &owner),
+                            );
                         }
                     }
                 }
-                AttemptEnd::Failed(kind) => kind,
+                AttemptEnd::Failed { kind, failure } => {
+                    log.push(Attempt {
+                        endpoint_index: endpoint_of(chosen),
+                        failure: Some(failure),
+                        upstream_status: None,
+                    });
+                    kind
+                }
             };
             let attempt_failure = match failure {
                 UpstreamErrorKind::Connect => AttemptFailure::Connect,
@@ -482,7 +526,12 @@ impl Forward for UpstreamClient {
                 Some(next) => chosen = next,
                 None => {
                     let response = self.failed(&target, failure);
-                    return finished(response, chosen.index, attempts, None);
+                    return finished(
+                        response,
+                        (chosen.index, attempts),
+                        None,
+                        Seen::new(log, true, &owner),
+                    );
                 }
             }
         }
@@ -493,17 +542,37 @@ fn is_bad_status(status: StatusCode) -> bool {
     outcome_of_status(status) == UpstreamOutcome::BadStatus
 }
 
+/// What the sampler is told about a finished forward.
+struct Seen {
+    log: AttemptLog,
+    proxy_failed: bool,
+    request_body: Option<Arc<BodyStats>>,
+}
+
+impl Seen {
+    fn new(log: AttemptLog, proxy_failed: bool, owner: &BodyOwner) -> Self {
+        Self {
+            log,
+            proxy_failed,
+            request_body: owner.stats(),
+        }
+    }
+}
+
 fn finished(
     response: Response<ResponseBody>,
-    endpoint_index: usize,
-    attempts: u32,
+    (endpoint_index, attempts): (usize, u32),
     in_flight: Option<InFlightGuard>,
+    seen: Seen,
 ) -> Forwarded {
     Forwarded {
         response,
         endpoint_index,
         attempts,
         in_flight,
+        attempt_log: seen.log,
+        proxy_failed: seen.proxy_failed,
+        request_body: seen.request_body,
     }
 }
 
