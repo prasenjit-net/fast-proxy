@@ -24,7 +24,7 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `refusal_audit.rs` (the access log and the audit of refusals), `host_allow_list.rs`,
   `security_headers.rs`, `tls_server.rs` (the admin listener over TLS), `api/` (one
   file per resource: subsystems, hosts, upstreams, routes, certificates, tokens, maintenance,
-  audit, session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  audit, sampling (settings and overrides, readable by a viewer), samples (the sampled requests, admin only), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-auth/` is token and secret handling with no HTTP and no database:
   generation, SHA-256 hashing, constant-time comparison (`subtle`), roles, the failure
@@ -89,7 +89,7 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
   clients); never use it outside `dev-dependencies` and tests.
 - `src/cli/` and `src/commands/` are the subcommands (`maintenance`, `reload`, `status`,
-  `audit`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
+  `audit`, `samples list|export`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
   proxy refused or a check failed, 2 usage or connection errors.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).

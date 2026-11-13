@@ -2,6 +2,8 @@ use fast_proxy_model::FieldError;
 
 use crate::AppError;
 
+use std::collections::HashMap;
+
 /// Collects every invalid field of a request so the client sees them all
 /// at once instead of one per round trip.
 #[derive(Default)]
@@ -34,9 +36,46 @@ impl FieldErrors {
     }
 }
 
+/// A non-negative integer query parameter, or a field error; `None` when the
+/// parameter is absent.
+pub fn query_number(
+    params: &HashMap<String, String>,
+    name: &str,
+    errors: &mut FieldErrors,
+) -> Option<u64> {
+    let raw = params.get(name)?;
+    match raw.parse::<u64>() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            errors.add(name, "must be a non-negative whole number");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_query_number_is_parsed_or_reported_by_name() {
+        let mut errors = FieldErrors::default();
+        let params: HashMap<String, String> = [("limit", "12"), ("before", "-1"), ("since", "x")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(query_number(&params, "limit", &mut errors), Some(12));
+        assert_eq!(query_number(&params, "absent", &mut errors), None);
+        assert_eq!(query_number(&params, "before", &mut errors), None);
+        assert_eq!(query_number(&params, "since", &mut errors), None);
+        let Err(AppError::Validation(fields)) = errors.finish() else {
+            panic!("expected validation errors");
+        };
+        assert_eq!(
+            fields.iter().map(|f| f.field.as_str()).collect::<Vec<_>>(),
+            ["before", "since"]
+        );
+    }
 
     #[test]
     fn collects_every_failure() {

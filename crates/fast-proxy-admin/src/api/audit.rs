@@ -17,7 +17,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::input::FieldErrors;
+use super::input::{query_number as number, FieldErrors};
 use crate::state::SharedState;
 use crate::AppResult;
 
@@ -114,18 +114,6 @@ pub async fn list_audit(
         next_before,
         version: state.config.snapshot_holder().load().version,
     }))
-}
-
-/// A non-negative integer query parameter, or a field error.
-fn number(params: &HashMap<String, String>, name: &str, errors: &mut FieldErrors) -> Option<u64> {
-    let raw = params.get(name)?;
-    match raw.parse::<u64>() {
-        Ok(value) => Some(value),
-        Err(_) => {
-            errors.add(name, "must be a non-negative whole number");
-            None
-        }
-    }
 }
 
 /// `GET /api/audit/export?since=`: every entry since a time (all of them by

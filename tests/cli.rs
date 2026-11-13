@@ -247,6 +247,154 @@ fn the_audit_tail_shows_the_change_with_its_actor_oldest_first() {
     assert_eq!(none.out, "no audit entries");
 }
 
+// ---- sampled requests ----
+
+/// A proxy whose only backend is down, one failed request made, and the sample
+/// of it waited for in the database.
+fn proxy_with_a_stored_sample(dir: &Path) -> Proxy {
+    let proxy = start_proxy(dir);
+    create_site(&proxy, "shop", "shop.example.com", free_port());
+    assert_eq!(
+        http_with_headers(
+            proxy.data,
+            "GET",
+            "/orders?token=ZQSECRET&page=2",
+            "shop.example.com",
+            &[("Authorization", "Bearer ZQBEARER")],
+            None
+        )
+        .0,
+        502
+    );
+    let stored = || {
+        fast_proxy_store::Database::open_read_only(&database(dir))
+            .and_then(|db| db.read(fast_proxy_store::repository::samples::usage))
+            .map(|usage| usage.rows)
+            .unwrap_or(0)
+    };
+    assert!(wait_until(|| stored() >= 1), "the sample is written");
+    proxy
+}
+
+#[test]
+fn samples_list_shows_the_failure_and_the_filters_narrow_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let _proxy = proxy_with_a_stored_sample(dir.path());
+
+    let listed = cli(dir.path(), &["samples", "list"], None);
+    assert_eq!(listed.code, 0, "{}", listed.err);
+    assert_eq!(listed.out.lines().count(), 1, "{}", listed.out);
+    for expected in [
+        "502",
+        "upstream_failure",
+        "shop",
+        " / ",
+        "GET",
+        "instance=",
+        "id=",
+    ] {
+        assert!(
+            listed.out.contains(expected),
+            "{expected} in {}",
+            listed.out
+        );
+    }
+
+    let matching = |args: &[&str]| {
+        let mut all = vec!["samples", "list"];
+        all.extend_from_slice(args);
+        cli(dir.path(), &all, None).out
+    };
+    assert!(matching(&["--trigger", "upstream_failure"]).contains("upstream_failure"));
+    assert!(matching(&["--status-class", "5", "--subsystem", "shop"]).contains("502"));
+    assert_eq!(matching(&["--trigger", "slow"]), "no samples");
+    assert_eq!(matching(&["--status-class", "4"]), "no samples");
+    assert_eq!(matching(&["--subsystem", "blog"]), "no samples");
+    assert_eq!(matching(&["--min-ms", "3600000"]), "no samples");
+    assert!(
+        matching(&["--since", "1h"]).contains("502"),
+        "within the last hour"
+    );
+    assert_eq!(matching(&["--instance", "elsewhere"]), "no samples");
+
+    let json = cli(dir.path(), &["samples", "list", "--json"], None);
+    let parsed: serde_json::Value = serde_json::from_str(&json.out).unwrap();
+    assert_eq!(parsed["data"][0]["primary"], "upstream_failure");
+}
+
+#[test]
+fn samples_export_prints_whole_samples_as_json_lines_with_no_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let _proxy = proxy_with_a_stored_sample(dir.path());
+    let exported = cli(dir.path(), &["samples", "export"], None);
+    assert_eq!(exported.code, 0, "{}", exported.err);
+    let lines: Vec<serde_json::Value> = exported
+        .out
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["request"]["path"], "/orders");
+    assert_eq!(lines[0]["request"]["query"], "token=[redacted]&page=2");
+    assert_eq!(
+        lines[0]["upstream"]["attempts"][0]["failure"],
+        "connect_refused"
+    );
+    assert!(!exported.out.contains("ZQ"), "{}", exported.out);
+
+    let none = cli(
+        dir.path(),
+        &["samples", "export", "--trigger", "slow"],
+        None,
+    );
+    assert_eq!(none.code, 0);
+    assert_eq!(none.out, "", "nothing matches, nothing is printed");
+}
+
+#[test]
+fn a_viewer_token_is_refused_the_samples_and_an_admin_token_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    // A short sync interval, so the proxy sees the token created offline soon.
+    let proxy = start_ok_with_config(dir.path(), "config_poll_interval = \"200ms\"", &[], &[]);
+    let bootstrap = token_in(&printed(&proxy)).unwrap();
+    let url = format!("http://{}", proxy.admin);
+    let created = cli(
+        dir.path(),
+        &["token", "create", "--name", "eyes", "--role", "viewer"],
+        None,
+    );
+    let viewer = created.out.lines().last().unwrap().to_string();
+    assert!(wait_until(|| cli(
+        dir.path(),
+        &["status", "--url", &url],
+        Some(&viewer)
+    )
+    .code
+        == 0));
+
+    for action in ["list", "export"] {
+        let refused = cli(
+            dir.path(),
+            &["samples", action, "--url", &url],
+            Some(&viewer),
+        );
+        assert_eq!(refused.code, 1, "{action}");
+        assert!(refused.err.contains("(403)"), "{}", refused.err);
+        let allowed = cli(
+            dir.path(),
+            &["samples", action, "--url", &url],
+            Some(&bootstrap),
+        );
+        assert_eq!(allowed.code, 0, "{}", allowed.err);
+    }
+    let empty = cli(
+        dir.path(),
+        &["samples", "list", "--url", &url],
+        Some(&bootstrap),
+    );
+    assert_eq!(empty.out, "no samples");
+}
+
 // ---- exit codes and tokens ----
 
 fn running_with_token(dir: &Path) -> (Running, String) {

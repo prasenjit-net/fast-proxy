@@ -11,7 +11,8 @@ use crate::config::{AdminAuth, AppConfig};
 
 pub use subcommands::{
     AuditArgs, Command, ConfigAction, MaintenanceAction, MaintenanceOff, MaintenanceOn, RemoteArgs,
-    ScopeArgs, TokenAction, TokenCreate,
+    SampleFilters, SamplesAction, SamplesExportArgs, SamplesListArgs, ScopeArgs, TokenAction,
+    TokenCreate,
 };
 
 /// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.

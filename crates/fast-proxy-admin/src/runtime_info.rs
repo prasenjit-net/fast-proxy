@@ -29,4 +29,7 @@ pub struct RuntimeInfo {
     pub listeners: Vec<ListenerInfo>,
     pub database_path: String,
     pub tls: TlsInfo,
+    /// Request sampling runs in this process (`[sampling].enabled`); the
+    /// samples of other instances can be read either way.
+    pub sampling_enabled: bool,
 }

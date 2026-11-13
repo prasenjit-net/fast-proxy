@@ -109,6 +109,21 @@ impl AdminClient {
         self.call(Method::DELETE, path, None).await
     }
 
+    /// A `GET` whose answer is text rather than JSON (an NDJSON export). A
+    /// refusal is reported as for [`AdminClient::call`].
+    pub async fn get_text(&self, path: &str) -> Result<String, Failure> {
+        let (status, bytes) = self.send(Method::GET, path, None).await?;
+        if status.as_u16() >= 400 {
+            let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            return Err(self.refusal(status, &json));
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn refusal(&self, status: StatusCode, json: &Value) -> Failure {
+        Failure::Refused(refusal_message(status, json, self.token.is_some()))
+    }
+
     /// One request. The proxy's answer comes back as JSON (`Null` when empty);
     /// a status of 400 or more becomes [`Failure::Refused`] carrying the proxy's
     /// own message, and a connection that cannot be made, [`Failure::Unreachable`].
@@ -118,6 +133,21 @@ impl AdminClient {
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, Failure> {
+        let (status, bytes) = self.send(method, path, body).await?;
+        let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        if status.as_u16() >= 400 {
+            return Err(self.refusal(status, &json));
+        }
+        Ok(json)
+    }
+
+    /// Sends one request and returns the status and the whole answer.
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<(StatusCode, Bytes), Failure> {
         let url = format!("{}{path}", self.base);
         let mut builder = Request::builder().method(method).uri(&url);
         if let Some(token) = &self.token {
@@ -151,16 +181,7 @@ impl AdminClient {
         .await
         .map_err(|_| unreachable("it did not answer in time".into()))?
         .map_err(unreachable)?;
-        let (status, bytes) = response;
-        let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        if status.as_u16() >= 400 {
-            return Err(Failure::Refused(refusal_message(
-                status,
-                &json,
-                self.token.is_some(),
-            )));
-        }
-        Ok(json)
+        Ok(response)
     }
 }
 

@@ -19,6 +19,8 @@ mod reload;
 mod resolve;
 mod revisions;
 mod routes;
+mod samples;
+mod sampling;
 mod session;
 mod status;
 mod subsystems;
@@ -46,6 +48,8 @@ pub use reload::reload;
 pub use resolve::resolve;
 pub use revisions::{get_revision, list_revisions, rollback_revision};
 pub use routes::{create_route, delete_route, list_routes, update_route};
+pub use samples::{clear_samples, export_samples, get_sample, list_samples};
+pub use sampling::{delete_override, get_sampling, put_override, put_sampling};
 pub use session::{whoami, ws_ticket};
 pub use status::status;
 pub use subsystems::{

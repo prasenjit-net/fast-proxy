@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR5 (data-plane capture, metrics, wiring) written; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR6 (the settings and samples API, the `samples` CLI) written; PR5 (data-plane capture, metrics, wiring) in review; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -544,20 +544,29 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream A: Admin API
 
-- [ ] **A1 (M) Settings endpoints.** `api/sampling.rs`: get, put, override set and clear, with the shared error
+- [x] **A1 (M) Settings endpoints.** `api/sampling.rs`: get, put, override set and clear, with the shared error
   envelope and field errors; registered in `RouteTable` with their `Access`.
   *Done when:* tests cover validation errors per field, a viewer's 403 on writes and 200 on read, and the audit
   entries.
-- [ ] **A2 (M) Sample endpoints.** `api/samples.rs`: list with filters and a cursor, detail, the streamed NDJSON
+- [x] **A2 (M) Sample endpoints.** `api/samples.rs`: list with filters and a cursor, detail, the streamed NDJSON
   export (read from the table in pages, never loaded whole), clear (every instance's samples); `Access::Needs(Action::Samples)`; the export and clear audited.
   *Done when:* tests cover every filter (including `instance`), a viewer's 403 on all of them, the export being valid
   NDJSON that equals the list, a list from instance B showing samples written by instance A, and the audit rows.
-- [ ] **A3 (S) Events and status.** The capture and drop counts in the traffic snapshot, the `SamplingChanged`
+- [x] **A3 (S) Events and status.** The capture and drop counts in the traffic snapshot, the `SamplingChanged`
   event, the table status in `GET /api/sampling`, and the WebSocket documentation in `events.rs`.
+  *As built (PR6):* `PUT /api/sampling` takes every setting (a field left out is a 400, so a redaction list is never reset
+  by omission) and the overrides are `PUT /api/sampling/overrides` (the target as `subsystemId` or `routeId` in the body)
+  and `DELETE /api/sampling/overrides?subsystemId=` or `?routeId=`. `GET /api/sampling` carries the settings with the
+  built-in redaction lists (read-only), the overrides with the names of what they cover, and the status (this process's
+  captured and dropped totals, whether this process samples, and the shared table's rows, bytes and oldest sample). The
+  admin plane always reads the samples (the reader opens its own connection to the database), whether or not this
+  process samples. `GET /api/samples` pages with `before` like the audit log; the export streams the whole match
+  in pages of 200 and is audited with its filters; clearing deletes every instance's samples in short statements and is
+  audited with how many. `Event::SamplingChanged` (`settings`, `override`, `cleared`) carries no setting and no sample.
 
 ### Workstream CL: CLI (small)
 
-- [ ] **CL1 (S) `samples` subcommand.** `fast-proxy samples list|export` through the admin API (same token,
+- [x] **CL1 (S) `samples` subcommand.** `fast-proxy samples list|export` through the admin API (same token,
   URL and CA options as the other subcommands), NDJSON to stdout; exit codes as in M5.
   *Done when:* a CLI test lists and exports from a running proxy and refuses with exit code 1 for a viewer token.
 

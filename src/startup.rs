@@ -18,6 +18,7 @@ use fast_proxy_dataplane::{
     UpstreamClient,
 };
 use fast_proxy_health::{run_status_gauges, HealthEngine};
+use fast_proxy_sample_service::SampleReader;
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use fast_proxy_tls::{build_server_config, MinTlsVersion, ServerConfigError, ServerTlsPolicy};
@@ -116,6 +117,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             })
             .collect(),
         database_path: database.display().to_string(),
+        sampling_enabled: config.sampling.enabled,
         tls: TlsInfo {
             enabled: config.data_plane.tls.enabled,
             listen: https.as_ref().map(|plane| plane.listener().local_addr()),
@@ -159,6 +161,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         metrics.clone(),
         endpoint_events.clone(),
         security,
+        // Reads the samples of every instance sharing the database, whether or
+        // not this process samples.
+        Arc::new(SampleReader::open(&database, Duration::from_secs(5))?),
     ));
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
