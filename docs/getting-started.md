@@ -482,7 +482,35 @@ fast-proxy config validate                      # the file, with any flags you w
 fast-proxy config validate --check-database     # also compile what the database stores, read-only
 ```
 
+## 20. Request sampling
+
+Make a failure to look at: a route whose only backend is down.
+
+```sh
+curl -s -H "$H" -H "$J" -d '{"name":"broken"}' $A/subsystems          # the answer holds its id: ID=...
+curl -s -H "$H" -H "$J" -d '{"pattern":"broken.example.com"}' $A/subsystems/$ID/hosts
+curl -s -H "$H" -H "$J" -d '{"name":"b","endpoints":[{"addr":"127.0.0.1:9"}]}' $A/subsystems/$ID/upstreams   # UP=its id
+curl -s -H "$H" -H "$J" -d '{"prefix":"/","upstreamGroupId":'$UP'}' $A/subsystems/$ID/routes
+curl -si -H 'Host: broken.example.com' "http://127.0.0.1:8000/orders?token=secret123" | head -1   # 502
+sleep 1                                                    # samples are written in batches
+curl -s -H "$H" "$A/samples?trigger=upstream_failure"      # newest first
+curl -s -H "$H" $A/samples/1                               # the query shows token=[redacted]
+```
+
+Send a thousand more and the table gains only a handful: the storm guard keeps a burst and
+then one per 30 s, and the next kept sample carries `suppressed` with how many it stands for.
+To keep bodies for one route (they hold whatever clients send; known secret names are
+redacted, others are not), and to see the settings:
+
+```sh
+curl -s -H "$H" -H "$J" -X PUT -d '{"subsystemId":'$ID',"captureBodies":true}' $A/sampling/overrides
+curl -s -H "$H" -X DELETE "$A/sampling/overrides?subsystemId=$ID"      # back to no bodies
+curl -s -H "$H" $A/sampling | head -c 600
+fast-proxy samples list --since 10m                                     # the shell form
+curl -s -H "$H" -X DELETE $A/samples                                    # delete them all (audited)
+```
+
 ## Not available yet
 
-ACME certificates, rate limits and request sampling are later milestones (see
+ACME certificates and rate limits are later milestones (see
 [ROADMAP.md](ROADMAP.md)).

@@ -64,7 +64,13 @@ impl Sampling {
             redactor_for(snapshot),
             writer,
         )?;
-        let pruner = Pruner::start(database, PrunerConfig::default())?;
+        let pruner = Pruner::start(
+            database,
+            PrunerConfig {
+                interval: config.prune_interval,
+                ..PrunerConfig::default()
+            },
+        )?;
         Ok(Self { runtime, pruner })
     }
 

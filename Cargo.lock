@@ -766,6 +766,7 @@ dependencies = [
  "fast-proxy-model",
  "fast-proxy-sampling",
  "fast-proxy-store",
+ "proptest",
  "rusqlite",
  "tempfile",
 ]
@@ -775,6 +776,7 @@ name = "fast-proxy-sampling"
 version = "0.0.0"
 dependencies = [
  "fast-proxy-model",
+ "proptest",
  "serde",
  "serde_json",
 ]

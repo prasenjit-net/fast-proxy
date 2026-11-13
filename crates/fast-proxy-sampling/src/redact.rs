@@ -121,12 +121,21 @@ impl Redactor {
     }
 
     /// The value to store for a header: the value itself, or [`REDACTED`].
+    ///
+    /// `Referer` and `Location` hold a URL, whose query string may carry a secret
+    /// (a reset link, a redirect with a token): their query is redacted like the
+    /// request's own.
     pub fn header_value(&self, name: &str, value: &str) -> String {
         if self.is_sensitive_header(name) {
-            REDACTED.to_string()
-        } else {
-            value.to_string()
+            return REDACTED.to_string();
         }
+        if name.eq_ignore_ascii_case("referer") || name.eq_ignore_ascii_case("location") {
+            return match value.split_once('?') {
+                Some((url, query)) => format!("{url}?{}", self.query(query)),
+                None => value.to_string(),
+            };
+        }
+        value.to_string()
     }
 
     /// The query string with the values of sensitive parameters blanked.

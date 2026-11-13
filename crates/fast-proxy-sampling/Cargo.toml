@@ -9,3 +9,6 @@ publish = false
 fast-proxy-model = { path = "../fast-proxy-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"

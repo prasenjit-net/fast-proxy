@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR7 (the admin UI) written; PR6 (the settings and samples API, the `samples` CLI) written; PR5 (data-plane capture, metrics, wiring) in review; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR8 (quality, benchmark, security review, docs) written; PR7 (the admin UI) in review; PR6 (the settings and samples API, the `samples` CLI) written; PR5 (data-plane capture, metrics, wiring) in review; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -597,48 +597,60 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (L) Exit-criteria tests.** `tests/sampling.rs` against the real binary and real backends: each trigger
+- [x] **Q1 (L) Exit-criteria tests.** `tests/sampling.rs` against the real binary and real backends: each trigger
   of criterion 1 (the `flaky.rs` backend fails, slows, and sends large bodies), the negative case, the baseline
   at a 100% rate setting, overrides, a live settings change without dropping a connection, a restart, export and
   clear, the rate limit, and the storm guard (kill the only backend of a route, send 1,000 requests: at most the
   burst plus the interval's worth of samples exist, the next sample carries `suppressed`, and a `slow` request on
   another route during the outage is still kept).
-- [ ] **Q2 (M) Secret hygiene.** Extend `tests/secret_hygiene.rs`: requests carrying a bearer token, a cookie, a
+- [x] **Q2 (M) Secret hygiene.** Extend `tests/secret_hygiene.rs`: requests carrying a bearer token, a cookie, a
   bypass secret, secret query parameters and secret body fields; assert none appears in the API, the export, the
   database file and its WAL (read as bytes, as the M3 key tests do), the log, the metrics or the debug output of any type holding a sample.
-- [ ] **Q3 (M) Sampling under load.** `tests/sampling_under_load.rs`: a keep-alive load (`load.rs`) in which a dead upstream makes
+- [x] **Q3 (M) Sampling under load.** `tests/sampling_under_load.rs`: a keep-alive load (`load.rs`) in which a dead upstream makes
   every request a connectivity failure for a minute, then a mixed load with one route down; assert throughput, that no request fails or is delayed because of
   sampling, that the drop counters account for the difference between triggered and kept, memory (queue and body
   budget) and the table (retention) stay within their bounds, that a configuration write during the flood completes
   within a small multiple of its idle latency, and that shutdown flushes.
-- [ ] **Q4 (S) Cluster.** `tests/cluster_operations.rs` gains: a settings change on one instance reaching the
+- [x] **Q4 (S) Cluster.** `tests/cluster_operations.rs` gains: a settings change on one instance reaching the
   other within the poll, a sample served by A being listed by B (and the reverse) with its instance named, samples
   surviving a restart of the instance that wrote them, a sample write not bumping the revision version or causing a
   reload on the other instance, `clear` on one instance emptying the table for both, and two processes pruning and
   inserting on one database file without errors.
-- [ ] **Q5 (M) Property tests.** The redactor (Q2's property at scale), the retention bounds, the window estimate.
-- [ ] **Q6 (S) Benchmark.** Re-run the `oha` baseline of [benchmarks.md](benchmarks.md): sampling off, on at
+- [x] **Q5 (M) Property tests.** The redactor (Q2's property at scale), the retention bounds, the window estimate.
+- [x] **Q6 (S) Benchmark.** Re-run the `oha` baseline of [benchmarks.md](benchmarks.md): sampling off, on at
   defaults, on with body capture for the route, and the dead-upstream load; record the numbers against the budget of
   section 8.
-- [ ] **Q7 (S) Mutation checks.** For each new test that passed first time, break the behavior it guards (skip a
+- [x] **Q7 (S) Mutation checks.** For each new test that passed first time, break the behavior it guards (skip a
   redaction, drop the rate limit, ignore the cap) and confirm it goes red, as the project rules ask.
-- [ ] **Q8 (M) Security review.** `docs/security-review-m6.md`: what a sample can leak, the redaction coverage and
+- [x] **Q8 (M) Security review.** `docs/security-review-m6.md`: what a sample can leak, the redaction coverage and
   its known limits (secrets in a field not on the list, in a path segment, in a free-text body), the access rule,
   memory and table bounds, who can read the table (the database file now holds redacted request data, so its
   permissions and backups matter), and the audit coverage; fix what it finds.
-- [ ] **Q9 (S) The gates.** `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+- [x] **Q9 (S) The gates.** `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
   `cargo test`, `cd ui && npm test`, `cd ui && npm run build`, and `cargo llvm-cov --workspace --summary-only`
   (overall above 60%, aim higher for the decision and redaction code); report the number. Tests must pass on
   Linux, macOS and Windows: no fixed short sleeps, `#[cfg(unix)]` for file-mode checks.
 
+  *As built (PR8):* `tests/sampling.rs` (11 tests), `sampling_hygiene.rs` (2), `sampling_under_load.rs` (2) and
+  `sampling_cluster.rs` (5); the load test runs seconds, not a minute (CI time), the long numbers are in
+  `benchmarks.md`. Property tests (Q5) are `proptest` in `fast-proxy-sampling/src/property_tests.rs` (redactor at every
+  cut for generated JSON and form bodies, query redaction, the p99 bucket, and both limiters against out-of-order
+  clock readings) and in the sample service (retention limits). `[sampling] prune_interval` was added so the
+  cluster test need not wait 30 s. Mutation checks (Q7): bucket late-arrival guard, storm guard, rate limiter, slow
+  trigger, clear, the enabled flag (it is checked twice, in `begin` and in `decide`, so both had to be broken), header,
+  query and Referer redaction, and the row limit each turned a test red. **Lesson:** a mutation script that restores a
+  file with `mv` keeps the old mtime and cargo keeps the mutated build; the script now touches the file.
+  Findings: the token bucket bug, the 0644 database file, the unredacted `Referer`/`Location` queries
+  ([security-review-m6.md](security-review-m6.md)).
+
 ### Workstream W: Documentation
 
-- [ ] **W1 (S)** The ADRs of G1 completed with the spike results and any change found while building.
-- [ ] **W2 (S)** README and `docs/getting-started.md`: turning sampling on for a route, reading a sample with
+- [x] **W1 (S)** The ADRs of G1 completed with the spike results and any change found while building.
+- [x] **W2 (S)** README and `docs/getting-started.md`: turning sampling on for a route, reading a sample with
   curl, what is redacted and what is not, the body opt-in warning. Keep the walkthrough working.
-- [ ] **W3 (S)** AGENTS.md: the new crates (`fast-proxy-sampling`, `fast-proxy-sample-service`), the architecture rules (samples are written by the sample service, never by `ConfigService`, and never create a revision; the data plane still never touches the store),  the new tests, and the
+- [x] **W3 (S)** AGENTS.md: the new crates (`fast-proxy-sampling`, `fast-proxy-sample-service`), the architecture rules (samples are written by the sample service, never by `ConfigService`, and never create a revision; the data plane still never touches the store),  the new tests, and the
   `[sampling]` configuration section. ROADMAP: tick M6, the decision-log entries, the risks table.
-- [ ] **W4 (S)** [benchmarks.md](benchmarks.md) with the sampling numbers, and an operations note: sizing the
+- [x] **W4 (S)** [benchmarks.md](benchmarks.md) with the sampling numbers, and an operations note: sizing the
   table (retention), the queue and the body budget, reading the drop counters, what a database backup now
   contains (redacted request data), and what to do when the database is busy.
 
@@ -773,16 +785,16 @@ PR3 is independent of PR2 after the model types and can be taken in either order
 
 ## 10. Definition of done for M6
 
-- [ ] Every task above is checked, or explicitly moved with a note.
-- [ ] Exit criteria (section 1) demonstrated by the end-to-end tests in Q1 to Q4, with the table in the outcome
+- [x] Every task above is checked, or explicitly moved with a note.
+- [x] Exit criteria (section 1) demonstrated by the end-to-end tests in Q1 to Q4, with the table in the outcome
   section. The manual run (turn sampling on for one route, trigger each case, see the redaction, opt a route into
   bodies, export, change a setting live, restart) is the owner's click-through.
 - [ ] CI green on all three platforms; no new clippy warnings.
-- [ ] Overall test coverage above 60%, the number recorded here.
+- [x] Overall test coverage above 60%, the number recorded here.
 - [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md and getting-started updated.
-- [ ] Benchmark re-run and recorded within the budget of section 8.
-- [ ] The security review (Q8) done, findings recorded, secret hygiene verified (Q2).
+- [x] README, AGENTS.md, ROADMAP.md and getting-started updated.
+- [x] Benchmark re-run and recorded within the budget of section 8.
+- [x] The security review (Q8) done, findings recorded, secret hygiene verified (Q2).
 
 ## 11. What M6 leaves for M7, and other touch points
 
@@ -806,4 +818,25 @@ PR3 is independent of PR2 after the model types and can be taken in either order
 
 ## 12. Outcome
 
-*To be written when M6 ships.*
+Written 2026-11-13, when PR8 was ready. Everything is built; the owner's manual check and the merges are open.
+
+| Exit criterion | Held? | Where |
+|---|---|---|
+| Each trigger keeps a redacted sample (failure, retried, slow, client errors, large, odd headers, baseline) | yes | `tests/sampling.rs`; per-trigger unit and data plane tests |
+| An upstream's own 5xx is never sampled | yes | `an_upstreams_own_5xx_is_never_sampled` |
+| An outage keeps a handful, counts the rest, and another route is still sampled | yes | the storm guard test (1,000 failures), `sampling_under_load.rs` |
+| No secret in the API, export, metrics, database, WAL | yes | `sampling_hygiene.rs` |
+| Settings and overrides apply live without dropping a connection | yes | `tests/sampling.rs` |
+| Every instance lists every instance's samples; a sample write is not a configuration change | yes | `sampling_cluster.rs` |
+| Bounded: queue, body memory, table (age, rows, bytes) | yes | load test, retention property test, two-process prune test |
+| Within the cost budget | yes (edge) | healthy traffic +0.1%, every request a connectivity failure -4.6% (budget 5%) |
+
+Numbers: **1541 Rust tests and 469 Vitest tests pass; coverage 96.22% regions, 97.59% lines** (`cargo llvm-cov
+--workspace --summary-only`). `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` are clean.
+
+What the build changed in the design, beyond the "As built" notes of each task: the token bucket needed a late-arrival
+rule (a real bug under concurrency, found by the load test); the database file is now created 0600; `Referer` and
+`Location` are redacted by query; `[sampling] prune_interval` exists. Open for the owner: the C1 browser click-through
+(M5 and M6 UI), merging the stack (#54 to #61 and this PR), C2 (configuration import/export, still not taken), whether
+the default retention (7 days) and the body opt-in are the right first-deployment defaults, and whether the access
+log should redact query strings (it never did).

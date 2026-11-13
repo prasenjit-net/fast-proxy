@@ -77,3 +77,12 @@ attempts are known, and must never slow or block a request.
   the rest, instead of filling the table.
 - Latency windows, the client table and the storm guard are per instance and are not in
   the database (ADR 0022).
+
+## Found while building (M6 PR8)
+
+The token bucket shared by the storm guard and the rate limiter stored the low 32 bits of a
+millisecond clock. A caller reads the clock before it reaches the bucket, so under concurrency
+a reading a few milliseconds older than the stored one looked like a gap of 49 days and
+refilled the bucket. The bucket now treats a reading less than a minute behind as a late
+arrival: no credit, stored time unchanged. The design (burst, then one per interval, suppressed
+count carried forward) is unchanged; property tests feed both limiters out-of-order readings.

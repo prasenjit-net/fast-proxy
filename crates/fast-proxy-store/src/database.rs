@@ -31,6 +31,31 @@ pub struct Mutation<T> {
     pub summary: String,
 }
 
+/// Creates the database file readable by its owner only, when there is none yet.
+/// The file holds certificate ciphertext, token hashes and, since request
+/// sampling, redacted request data (client addresses, paths, optionally bodies);
+/// SQLite gives the `-wal` and `-shm` files the mode of the main file. An
+/// existing file keeps whatever mode its owner chose.
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+    {
+        Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => Err(err),
+        _ => Ok(()),
+    }
+}
+
+/// Windows has no mode bits; the state directory's access rules apply.
+#[cfg(not(unix))]
+fn create_private_file(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// A synchronous handle on the SQLite file. It is not `Sync`; the async
 /// [`Store`](crate::Store) keeps one on a dedicated thread.
 pub struct Database {
@@ -44,6 +69,7 @@ impl Database {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
+        create_private_file(path)?;
         Self::prepare(Connection::open(path)?)
     }
 
@@ -201,6 +227,38 @@ mod tests {
     use super::*;
     use crate::repository::subsystems;
     use crate::test_support::{seed, subsystem_fields};
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_database_and_its_wal_files_are_readable_by_the_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fast-proxy.db");
+        let mut db = Database::open(&path).unwrap();
+        seed(&mut db, "shop", "s.example.com");
+        assert_eq!(mode_of(&path), 0o600);
+        for suffix in ["-wal", "-shm"] {
+            let side = dir.path().join(format!("fast-proxy.db{suffix}"));
+            assert_eq!(mode_of(&side), 0o600, "{suffix}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_database_keeps_the_mode_its_owner_gave_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fast-proxy.db");
+        drop(Database::open(&path).unwrap());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        drop(Database::open(&path).unwrap());
+        assert_eq!(mode_of(&path), 0o640);
+    }
 
     #[test]
     fn creates_the_schema_in_an_empty_file_and_reopens_idempotently() {

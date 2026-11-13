@@ -23,6 +23,8 @@ mod sink;
 mod storm_guard;
 
 #[cfg(test)]
+mod property_tests;
+#[cfg(test)]
 mod redact_tests;
 #[cfg(test)]
 mod sample_tests;

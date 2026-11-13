@@ -82,3 +82,10 @@ share one buffer, as hyper's do. For scale, 97k requests per second over 64 conn
 - **The tee is cheap enough** to be a documented cost of opting in. That a retried request is
   never captured twice follows from the body owner's `polled` flag (a replayable body was never
   read) and is covered by task D2's tests; it was not exercised in the spike.
+
+## Found while building (M6 PR8)
+
+`Referer` and `Location` are in the fixed set of kept headers and hold URLs, so the query inside
+them is redacted with the same parameter rules as the request's own. The known limits (a secret
+in an unlisted field, in the path, or in free text; the access log) are listed in
+[../security-review-m6.md](../security-review-m6.md).

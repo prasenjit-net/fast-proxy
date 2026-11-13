@@ -61,6 +61,24 @@ fn headers_that_carry_credentials_are_redacted_whatever_their_case() {
 }
 
 #[test]
+fn the_query_of_a_url_in_referer_and_location_is_redacted() {
+    let redactor = redactor();
+    assert_eq!(
+        redactor.header_value("Referer", "https://a.example/reset?token=ZQ1&page=2"),
+        "https://a.example/reset?token=[redacted]&page=2"
+    );
+    assert_eq!(
+        redactor.header_value("location", "/login?next=/home&access_token=ZQ2"),
+        "/login?next=/home&access_token=[redacted]"
+    );
+    assert_eq!(
+        redactor.header_value("Referer", "https://a.example/plain"),
+        "https://a.example/plain"
+    );
+    assert_eq!(redactor.header_value("Accept", "a?token=b"), "a?token=b");
+}
+
+#[test]
 fn the_operators_additions_and_the_bypass_header_are_redacted_too() {
     let settings = SamplingSettings {
         redact_headers: vec!["X-Internal-Key".into()],

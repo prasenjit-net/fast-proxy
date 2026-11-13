@@ -20,6 +20,9 @@ pub struct SamplingConfig {
     /// The longest a kept sample waits for its batch.
     #[serde(deserialize_with = "deserialize_duration")]
     pub batch_interval: Duration,
+    /// How often this instance prunes the shared sample table (retention).
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub prune_interval: Duration,
     /// The most memory, in bytes, that captured bodies may hold at once.
     pub body_budget_bytes: u64,
 }
@@ -31,6 +34,7 @@ impl Default for SamplingConfig {
             queue_depth: 1024,
             batch_size: 50,
             batch_interval: Duration::from_millis(250),
+            prune_interval: Duration::from_secs(30),
             body_budget_bytes: 16 * 1024 * 1024,
         }
     }

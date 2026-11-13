@@ -107,6 +107,12 @@ fn validate_sampling(sampling: &SamplingConfig) -> Result<(), ConfigError> {
         10,
         60_000,
     )?;
+    within(
+        "prune_interval",
+        sampling.prune_interval.as_millis() as u64,
+        100,
+        86_400_000,
+    )?;
     within("body_budget_bytes", sampling.body_budget_bytes, 0, 4 << 30)
 }
 
@@ -324,6 +330,14 @@ mod tests {
             (
                 "batch_interval",
                 Box::new(|c| c.sampling.batch_interval = Duration::from_secs(61)),
+            ),
+            (
+                "prune_interval",
+                Box::new(|c| c.sampling.prune_interval = Duration::from_millis(99)),
+            ),
+            (
+                "prune_interval",
+                Box::new(|c| c.sampling.prune_interval = Duration::from_secs(86_401)),
             ),
             (
                 "body_budget_bytes",

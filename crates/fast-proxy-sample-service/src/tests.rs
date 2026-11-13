@@ -776,3 +776,42 @@ fn the_reader_does_not_block_the_writer_and_sees_new_samples() {
     write(&mut writer, vec![sample(1, "a", "shop")]);
     assert_eq!(reader.list(&SampleQuery::default()).unwrap().len(), 1);
 }
+
+mod retention_properties {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(30))]
+
+        /// Whatever the table holds and whatever the limits, one pass leaves a
+        /// table within its row and byte limits, with nothing older than the
+        /// retention, keeping the newest samples.
+        #[test]
+        fn a_pass_leaves_the_table_within_every_limit(
+            recent in 0i64..300,
+            old in 0i64..150,
+            path_bytes in 0usize..6000,
+            max_rows in 100u64..300,
+            max_mib in 1u64..3,
+            batch in 1u32..200,
+        ) {
+            let (mut shared, now) = aged_table(recent, old, path_bytes);
+            set_retention(&shared.primary, 1, max_rows, max_mib << 20);
+            let report = prune_once(&mut shared.primary, now, batch, Duration::ZERO).unwrap();
+            let usage = report.usage;
+            prop_assert!(usage.rows <= max_rows, "{} rows over {max_rows}", usage.rows);
+            prop_assert!(usage.bytes <= max_mib << 20, "{} bytes over {}", usage.bytes, max_mib << 20);
+            if let Some(oldest) = usage.oldest_at_ms {
+                prop_assert!(oldest >= now - DAY_MS, "a sample older than the retention survived");
+            }
+            prop_assert!(usage.rows <= recent as u64, "only recent samples remain");
+            // Nothing needless was removed: with no excess, every recent one stays.
+            let fits = recent as u64 <= max_rows && (recent as u64) * (path_bytes as u64 + 600) < (max_mib << 20) / 2;
+            if fits {
+                prop_assert_eq!(usage.rows, recent as u64);
+            }
+        }
+    }
+}

@@ -32,6 +32,7 @@ fn the_sampling_section_defaults_and_parses() {
         (1024, 50, 16 * 1024 * 1024)
     );
     assert_eq!(defaults.batch_interval, Duration::from_millis(250));
+    assert_eq!(defaults.prune_interval, Duration::from_secs(30));
     let config = parse(
         r#"
         [sampling]
@@ -39,6 +40,7 @@ fn the_sampling_section_defaults_and_parses() {
         queue_depth = 64
         batch_size = 10
         batch_interval = "1s"
+        prune_interval = "5m"
         body_budget_bytes = 1048576
         "#,
     )
@@ -46,6 +48,7 @@ fn the_sampling_section_defaults_and_parses() {
     assert!(!config.sampling.enabled);
     assert_eq!(config.sampling.queue_depth, 64);
     assert_eq!(config.sampling.batch_interval, Duration::from_secs(1));
+    assert_eq!(config.sampling.prune_interval, Duration::from_secs(300));
     assert_eq!(config.sampling.body_budget_bytes, 1_048_576);
 }
 

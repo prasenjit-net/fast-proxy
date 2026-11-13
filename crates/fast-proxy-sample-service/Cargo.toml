@@ -11,5 +11,6 @@ fast-proxy-sampling = { path = "../fast-proxy-sampling" }
 fast-proxy-store = { path = "../fast-proxy-store" }
 
 [dev-dependencies]
+proptest = "1"
 tempfile = { workspace = true }
 rusqlite = { version = "0.37", features = ["bundled"] }

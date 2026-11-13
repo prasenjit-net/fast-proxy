@@ -356,3 +356,75 @@ per point; differences under about 10% are noise. Not measured: the cost of writ
 maintenance state (a normal configuration write, see the M2 reload cost), and the admin
 plane's own throughput (it is not on the data path and is protected by the throttle, not
 tuned for load).
+
+## M6 results: request sampling
+
+Run with `scripts/bench-m6.sh <results-file> [rounds]` (builds the release binaries, starts
+one `bench_backend`, and drives the real proxy with `oha -c 64`; the admin plane runs with
+authentication off on loopback). Same machine and tools as above, plain HTTP, 2-byte
+responses, the proxy with `--log-level "info,access=off"`; each point is 6 s after a 2 s
+warm-up, three rounds, the five scenarios in turn within a round. Latencies are in
+microseconds (what `oha` prints for these values, times 1000 by the script).
+
+| Scenario | Round 1 | Round 2 | Round 3 | Mean rps | vs sampling off |
+|---|---:|---:|---:|---:|---:|
+| Fast backend, sampling **off** (`--no-sampling`) | 96,094 | 93,516 | 93,381 | 94,330 | n/a |
+| Fast backend, sampling on at its defaults | 92,027 | 95,711 | 95,478 | 94,405 | +0.1% |
+| Fast backend, sampling on, **bodies on** for the route | 96,579 | 90,693 | 91,675 | 92,982 | -1.4% |
+| Backend **down** (every request a connectivity failure), off | 71,086 | 67,231 | 68,076 | 68,798 | n/a |
+| Backend **down**, sampling on at its defaults | 66,194 | 66,402 | 64,357 | 65,651 | -4.6% |
+
+Median latency was 0.65 ms (all fast-backend rows) and 0.86 ms (backend down) in every
+scenario; p99 was 1.2 to 1.3 ms with a fast backend and 1.5 ms (off) against 1.6 ms (on) with
+the backend down.
+
+Against the budgets of [M6-PLAN.md](M6-PLAN.md) section 8:
+
+- **Sampling on at defaults, healthy traffic: within 2%.** Met: +0.1%, inside the spread of
+  the rounds (the same scenario varies by about 4% from round to round).
+- **Every request a connectivity failure: within about 5%.** Met, at the edge: -4.6%. The
+  cost is the work that cannot be skipped for a failed request (the failure is classified, the
+  attempt log is kept, the storm guard is consulted: one atomic, and the sample is built only
+  for the few the guard lets through). The table gained the burst and a few more, not tens of
+  thousands of rows (`tests/sampling_under_load.rs` asserts at most eight).
+- **Body capture: a documented cost, not a gate.** -1.4% on a route that opts in, with
+  nothing triggering a sample. The copy is bounded by the cap (4 KiB by default) and by the
+  process-wide body budget; the capture is released as soon as the request finishes unsampled.
+- **Configuration writes during a flood: within a small multiple of idle.** Asserted by
+  `tests/sampling_under_load.rs` (a settings write in the middle of an eight-client flood of
+  connectivity failures completes in under half a second or 30 times its idle latency,
+  whichever is larger); the writer has its own connection and thread, and the pruner
+  re-measures the table between steps outside the write lock so it cannot hold it.
+
+An earlier run (PR5) gave 96.7k off and 96.5k on with a fast backend and 68.0k and 69.3k with the
+backend down: the same picture. The caveats of M1 apply (one machine shared by the load
+generator, backend and proxy; read the figures as ratios; differences under about 10% are
+noise). The first round overlapped a compile on the same machine and is the noisiest.
+
+### Operating note: sizing and watching sampling
+
+- **The table.** One sample is about 0.5 to 1 KiB without bodies (the default 100,000 rows
+  is 50 to 100 MiB); with bodies on it can hold up to the two caps more. Retention is the
+  smaller of the age (7 days), the row count (100,000) and the byte limit (256 MiB); every
+  instance prunes, and `[sampling] prune_interval` (default 30 s) says how often. A table
+  above its limits for a moment is normal between passes.
+- **The queue and the body budget** (`[sampling]` in `config.toml`, a restart to change):
+  `queue_depth` (1,024) is how many kept samples may wait for their batch; beyond it samples
+  are dropped and counted, never queued without bound. `body_budget_bytes` (16 MiB) bounds
+  the memory of captured bodies at once; a request that cannot get its share is not captured
+  and the drop is counted as `budget`.
+- **Reading the counters.** `fastproxy_samples_captured_total{trigger}` is what was kept;
+  `fastproxy_samples_dropped_total{reason}` is what matched a trigger and was not kept:
+  `storm_guard` (an outage, by design), `rate_limit` (the global cap), `queue_full` and
+  `budget` (the proxy could not keep up or was out of memory for bodies), `store_error` (the
+  database refused the write: busy, full or read-only). `storm_guard` and `rate_limit` are
+  the guards working; the other three deserve a look. `fastproxy_samples_written_total`,
+  `fastproxy_sample_table_rows` and `fastproxy_sample_table_bytes` say what reached the
+  database.
+- **A busy database.** Sample batches use their own connection and fail rather than wait
+  (about two seconds), counting `store_error` and backing off, so a busy database costs
+  samples, never requests or configuration writes. If `store_error` keeps growing, look at
+  the disk and at other processes holding the file.
+- **A backup** of the database contains redacted request data (client addresses, paths,
+  bodies where a route opted in) as well as the configuration. Protect it like the
+  database. See [security-review-m6.md](security-review-m6.md).

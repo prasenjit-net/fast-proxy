@@ -72,6 +72,12 @@ change is recorded so it can be rolled back.
   by network or secret header so you can verify a deploy before reopening. It survives
   a restart, follows across instances, never touches an upstream and leaves health
   checks running.
+- **Request sampling.** The proxy keeps a redacted copy of the unusual requests: those that
+  failed to reach an upstream (an upstream's own 5xx is not one), were retried to an answer,
+  ran slow, came from a client that keeps failing, were very large or had odd headers, plus a
+  tiny random baseline. Samples live in the shared database (every instance's, listed by any),
+  are bounded by age, rows and bytes, and a storm guard keeps an outage from filling the table.
+  Bodies are off unless a route opts in. See [Request sampling](#request-sampling).
 - **A CLI and a complete admin UI.** `fast-proxy maintenance`, `reload`, `status`,
   `audit`, `config validate` and the offline `token` commands; the UI adds sign-in,
   tokens, the audit log, maintenance controls with a live countdown and banner, and a
@@ -178,7 +184,7 @@ and the decision records in [docs/adr/](docs/adr/).
 | TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
 | ACME automatic certificates | Planned | M4 |
 | Admin authentication, admin TLS, maintenance mode, audit log, CLI, UI pages | Done | M5 |
-| Request sampling of unusual requests | Planned | M6 |
+| Request sampling of unusual requests (redacted, stored in the shared database) | Done | M6 |
 | Rate and connection limits, hardening, 1.0 | Planned | M7 |
 
 ## CLI
@@ -230,6 +236,7 @@ fast-proxy audit --limit 20 --actor ci               # the audit tail, oldest fi
 |---|---|---|
 | `maintenance on\|off\|status` | a running proxy | `--subsystem <name\|id>`, `--route <prefix>` choose the scope (default: the whole proxy); `on` takes `--ttl`, `--message`, `--retry-after`, `--bypass-cidr` (repeatable), `--bypass-header` and `--bypass-secret` |
 | `reload`, `status`, `audit` | a running proxy | as above |
+| `samples list\|export` | a running proxy (admin token) | the sampled requests, newest first; filters `--trigger` (repeatable), `--status-class`, `--subsystem`, `--route`, `--instance`, `--client`, `--min-ms`, `--since 30m`; `list` takes `--limit`, `export` writes NDJSON to stdout |
 | `config validate [--check-database [PATH]]` | files only | parses and checks the config file with the command-line overrides applied, **creating nothing**; with `--check-database` it also opens the database **read-only** and compiles the stored configuration (certificates stay sealed, so HTTPS settings are not checked against them, and the output says so) |
 | `token create\|list\|revoke` | the database file | the way back in when every token is lost: it works directly on the file (also while the proxy runs, which picks the change up at its next sync), prints a new token **once**, never lists a secret, writes an audit entry as `cli`, and keeps the last admin token from being revoked |
 
@@ -263,6 +270,10 @@ failed (the message carries the proxy's own reason and names each bad field),
 | `admin.tls.enabled` | `false` | Serve the admin plane over HTTPS (the plain port is then not open). `--admin-tls` turns it on |
 | `admin.tls.names` | `["localhost"]` | Names and IP addresses of the self-signed certificate generated the first time it is needed |
 | `admin.tls.certificate` | `admin` | The stored certificate to serve, by name. Upload a certificate and key of that name on the Certificates page to replace the generated one, live |
+| `sampling.enabled` | `true` | Process switch for request sampling (`--sampling` / `--no-sampling`); what is sampled lives in the database |
+| `sampling.queue_depth`, `batch_size`, `batch_interval` | `1024`, `50`, `250ms` | Kept samples that may wait, rows per write, the longest a sample waits for its batch |
+| `sampling.prune_interval` | `30s` | How often this instance prunes the shared sample table |
+| `sampling.body_budget_bytes` | `16 MiB` | Memory that captured bodies may hold at once |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
@@ -321,6 +332,12 @@ All routes except `/api/health` need `Authorization: Bearer <token>`; a missing 
 | POST, DELETE | `/api/subsystems/{id}/certificate` | Upload a certificate and attach it in one step / detach (a development certificate takes over while HTTPS is on) |
 | GET, POST | `/api/ca-bundles` | List / upload `{name, pem}` CA bundles that upstream groups name to verify TLS backends |
 | DELETE | `/api/ca-bundles/{id}` | Delete (409 while an upstream group names it) |
+| GET, PUT | `/api/sampling` | The sampling settings, overrides and status (readable by a `viewer`) / replace the settings (every field is required) |
+| PUT, DELETE | `/api/sampling/overrides` | Set or clear the override of a subsystem (`subsystemId`) or a route (`routeId`): `enabled`, `captureBodies`, `baselinePerMille`, `slowThresholdMs` |
+| GET | `/api/samples?limit=&before=&trigger=&statusClass=&subsystem=&route=&instance=&client=&minMs=&since=` | Sampled requests, newest first, paged (admin only) |
+| GET | `/api/samples/{id}` | One sample with its headers, bodies and attempts (admin only) |
+| GET | `/api/samples/export` | The same filters as NDJSON, streamed, audited (admin only) |
+| DELETE | `/api/samples` | Delete every sample, audited (admin only) |
 | GET | `/ws` | WebSocket: server-push events |
 
 A subsystem takes an `https` object (`enabled`, `certificateId`, `redirect` `off`/`301`/`308`, `hsts`), and an upstream group a `tls` object (`enabled`, `verify`, `serverName`, `ca`). Requests that carry a private key (upload, replace with a key, self-signed) need an `admin` token and a **protected channel** (the admin plane on loopback, or served over TLS).
@@ -352,6 +369,44 @@ WebSocket events are JSON discriminated by `type`:
 { "type": "certState", "change": "uploaded", "certificate": "shop", "timestampMs": 0 }
 { "type": "hello",    "message": "Connected to Fast Proxy v0.1.0", "timestampMs": 0 }
 ```
+
+## Request sampling
+
+Turned on by default; the proxy keeps a redacted copy of requests that are worth a look.
+
+| Trigger | Fires when |
+|---|---|
+| `upstream_failure` | a connect, TLS or timeout failure ended the request (the proxy's own 502 or 504) |
+| `retried` | a connectivity failure was retried and the request then got an answer |
+| `slow` | it took longer than `slowThresholdMs` (2 s) |
+| `slow_p99` | several times the route's recent p99 (off by default) |
+| `client_errors` | one client address earned many 4xx in a minute |
+| `oversized_request`, `oversized_response` | a body reached the size limit |
+| `unusual_headers` | very many or long headers, odd bytes, a repeated `Host`, an unknown method |
+| `baseline` | a random 1 in 1000 ordinary requests, for comparison |
+
+An upstream's own 5xx is **never** a trigger. A storm guard keeps a burst (3) and then one
+sample per 30 s per route, trigger and endpoint, and the next kept one says how many it stands
+for; a global limit (20/s) caps the rest. Dropped candidates are counted by reason in
+`fastproxy_samples_dropped_total`.
+
+```sh
+curl -s -H "$H" $A/sampling                         # settings, overrides, status
+curl -s -H "$H" "$A/samples?trigger=upstream_failure&limit=5"
+curl -s -H "$H" $A/samples/1                        # headers, bodies, each upstream attempt
+fast-proxy samples list --since 1h --subsystem shop
+fast-proxy samples export --trigger slow > slow.ndjson
+```
+
+**What is redacted before anything is stored:** the values of `Authorization`, `Cookie`,
+`X-Api-Key` and similar headers (only a fixed set of ordinary headers is kept at all, plus
+those you list), the values of query parameters and body fields named like `token`,
+`password`, `secret` and the built-in list, the query inside `Referer` and `Location`, and
+anything you add under Settings. **What is not:** a secret in a field on no list, in the path,
+or in free text; the access log. Bodies are off until a route opts in (`captureBodies` in an
+override, with a warning in the UI), only text types, cut at 4 KiB. Samples hold client
+addresses and are readable by admin tokens only; the database file is created mode 0600.
+[docs/security-review-m6.md](docs/security-review-m6.md) lists the limits.
 
 ## Maintenance mode
 
@@ -624,6 +679,13 @@ cargo llvm-cov --workspace --summary-only   # coverage (needs cargo-llvm-cov)
   any secret, and `tests/cluster_operations.rs` runs two processes with different master
   keys on one database (`admin_auth.rs`, `admin_tls.rs`, `maintenance.rs` and `cli.rs`
   cover the rest). `docs/security-review-m5.md` records the review.
+- `tests/sampling.rs` is the M6 exit criteria against the real binary: every trigger, the
+  negative case (an upstream's 5xx), the baseline, overrides, a settings change that keeps a
+  connection, export and clear, the rate limit and the storm guard on a thousand failures.
+  `tests/sampling_hygiene.rs` sends secrets in headers, query and bodies and scans the API,
+  export, metrics and the database files; `tests/sampling_under_load.rs` floods one route with
+  connectivity failures; `tests/sampling_cluster.rs` runs two processes on one database.
+  `docs/security-review-m6.md` records the review.
 - Timing measurements are `#[ignore]`d tests, run in release mode (see
   [docs/benchmarks.md](docs/benchmarks.md)).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all -- --check`

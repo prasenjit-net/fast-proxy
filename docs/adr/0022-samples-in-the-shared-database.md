@@ -102,3 +102,10 @@ run's own p99 moved between 1.4 and 5 ms from run to run, so read the p99 column
   `journal_size_limit` so the WAL is truncated after a checkpoint.
 - Not measured: Linux and Windows, a spinning disk, `synchronous = FULL`, a network file system
   (SQLite on one is not supported anyway). Q3 and Q6 repeat the key runs against the real stack.
+
+## Found while building (M6 PR8)
+
+The database file now holds redacted request data, so a new file is created with mode 0600
+(SQLite gives `-wal` and `-shm` the same). The pruner's period is configurable
+(`[sampling] prune_interval`, default 30 s). The sample size measured is about 0.7 KiB
+without bodies. See [../security-review-m6.md](../security-review-m6.md).

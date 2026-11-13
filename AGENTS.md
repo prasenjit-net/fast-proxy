@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. Milestone 5 is complete as well: the admin plane needs a bearer token (two roles), every change is audited with its actor, maintenance mode closes the whole proxy, a subsystem or one route (503, TTL, bypass), the admin plane can serve TLS, and a CLI does the common operations. ACME is the next milestone (M4 was skipped).
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. Milestone 5 is complete as well: the admin plane needs a bearer token (two roles), every change is audited with its actor, maintenance mode closes the whole proxy, a subsystem or one route (503, TTL, bypass), the admin plane can serve TLS, and a CLI does the common operations. Milestone 6 is complete: request sampling of unusual requests (tail-based, redacted, stored in the shared database, with a storm guard, admin API, CLI and UI). ACME is the next milestone (M4 was skipped).
 
 - Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
@@ -76,7 +76,7 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-sampling/` is request sampling with no HTTP and no database (M6): the decision
   (`decide`), `LatencyWindow`, `ClientErrors`, `StormGuard`, `RateLimiter`, the `Redactor`, the `Sample`
   encoding and `SampleQuery`, the `Batcher`, and the `Sampler` handle with its worker thread and the `SampleSink`
-  trait. The data plane will depend on it; it depends on `model` only.
+  trait. The data plane depends on it; it depends on `model` only. Its token bucket (`bucket.rs`) ignores a clock reading slightly older than the stored one, so concurrent callers cannot refill it.
 - `crates/fast-proxy-sample-service/` stores samples in the shared database (M6): `SampleWriter` (the sampler's sink,
   on its own connection, no revision), `Pruner` (retention by age, rows and bytes; every instance runs one) and
   `SampleReader` (what the admin plane reads; every instance's samples). Samples are telemetry, not configuration: they
@@ -101,7 +101,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `maintenance.rs`, `maintenance_under_load.rs`, `secret_hygiene.rs`, `cluster_operations.rs`,
   `admin_auth.rs`, `admin_tls.rs` and `cli.rs` are M5's (`common/console.rs` starts the
   binary with authentication on and reads the bootstrap token from its console).
-  Tests that deliver real signals are `#[cfg(unix)]`.
+  `sampling.rs` (the M6 exit criteria), `sampling_hygiene.rs`, `sampling_under_load.rs` and
+  `sampling_cluster.rs` are M6's. Tests that deliver real signals are `#[cfg(unix)]`.
+  The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
+  `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
   (measured with `oha` against the `bench_backend` example in the data plane crate).
 - `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,
@@ -154,6 +157,12 @@ These invariants hold across the codebase; do not break them without an ADR in `
   (`fast-proxy-auth`). A token, a bypass secret, a WebSocket ticket or a key appears in no
   log line, metric, audit entry, revision, event or API response (`tests/secret_hygiene.rs`
   checks every one against the real binary). Every type that holds one has a redacted `Debug`.
+- **Samples are written by the sample service, never by `ConfigService`, and never create a
+  revision.** Redaction happens before a sample is queued, so no secret reaches the queue, the
+  database, the API, the export or a metric (`tests/sampling_hygiene.rs`). An upstream's own 5xx
+  is never a trigger; a connectivity failure is, behind the storm guard. Only an `admin` reads
+  samples (`Action::Samples`). Metric labels for sampling are only `trigger` and `reason`.
+  The database file is created mode 0600.
 - **The audit row is written in the same transaction as the change.** Refusals (401, 403,
   421, rejected writes) are written by the access middleware through `record_audit`;
   entries for callers that are not authenticated are capped per minute for the process.
