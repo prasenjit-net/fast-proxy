@@ -63,6 +63,13 @@ impl SamplingPolicy {
     }
 }
 
+impl Default for SamplingPolicy {
+    /// Samples nothing: the policy of an empty snapshot.
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +115,6 @@ mod tests {
         let policy = SamplingPolicy::disabled();
         assert!(!policy.enabled);
         assert_eq!(policy.slow_threshold_ms, 2000);
+        assert_eq!(SamplingPolicy::default(), policy);
     }
 }

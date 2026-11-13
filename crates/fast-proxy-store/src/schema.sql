@@ -253,3 +253,5 @@ CREATE INDEX sample_at        ON sample (at);
 CREATE INDEX sample_subsystem ON sample (subsystem, id);
 CREATE INDEX sample_status    ON sample (status, id);
 CREATE INDEX sample_instance  ON sample (instance, id);
+-- Lets the table's size be summed from the index alone, without reading rows.
+CREATE INDEX sample_size      ON sample (size_bytes);

@@ -669,6 +669,7 @@ dependencies = [
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
+ "fast-proxy-sampling",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
@@ -742,6 +743,7 @@ dependencies = [
  "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
+ "fast-proxy-sampling",
  "fast-proxy-test-pki",
  "fast-proxy-tls",
  "http",
@@ -749,6 +751,17 @@ dependencies = [
  "rustls",
  "thiserror 2.0.19",
  "tracing",
+]
+
+[[package]]
+name = "fast-proxy-sample-service"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "fast-proxy-sampling",
+ "fast-proxy-store",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]

@@ -84,13 +84,34 @@ pub struct Usage {
     pub oldest_at_ms: Option<i64>,
 }
 
-/// The bounds the table is pruned to; whichever is exceeded first applies.
+/// How far over its limits the table is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RetentionLimits {
-    /// Samples finished before this time (unix milliseconds) are too old.
-    pub older_than_ms: i64,
-    pub max_rows: u64,
-    pub max_bytes: u64,
+pub struct Excess {
+    pub rows: u64,
+    pub bytes: u64,
+}
+
+impl Excess {
+    pub fn is_none(self) -> bool {
+        self.rows == 0 && self.bytes == 0
+    }
+}
+
+impl Usage {
+    /// How much of this usage is over `max_rows` and `max_bytes`.
+    pub fn excess(self, max_rows: u64, max_bytes: u64) -> Excess {
+        Excess {
+            rows: self.rows.saturating_sub(max_rows),
+            bytes: self.bytes.saturating_sub(max_bytes),
+        }
+    }
+}
+
+/// What a delete step removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deleted {
+    pub rows: u64,
+    pub bytes: u64,
 }
 
 /// Stores `samples` all-or-nothing and returns how many were stored. A sample
@@ -110,7 +131,10 @@ pub fn insert_batch(conn: &Connection, samples: &[NewSample]) -> Result<usize, S
             Ok(count)
         }
         Err(err) => {
-            conn.execute_batch("ROLLBACK TO sample_batch; RELEASE sample_batch")?;
+            // SQLite rolls the whole transaction back by itself on some errors
+            // (a full disk), taking the savepoint with it; the error to report
+            // is the original one, not the failure to undo it.
+            let _ = conn.execute_batch("ROLLBACK TO sample_batch; RELEASE sample_batch");
             Err(err)
         }
     }
@@ -155,6 +179,35 @@ fn stored_size(sample: &NewSample) -> i64 {
         + sample.client.len()
         + sample.method.len();
     i64::try_from(bytes).unwrap_or(i64::MAX)
+}
+
+/// Samples matching `filter`, newest first, with their detail: for export.
+/// Lists that do not need the detail use [`list`], which never reads it.
+pub fn list_records(
+    conn: &Connection,
+    filter: &SampleFilter,
+) -> Result<Vec<SampleRecord>, StoreError> {
+    let (clauses, mut values) = where_clause(filter);
+    let limit = filter.limit.unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);
+    values.push(Value::from(i64::from(limit)));
+    let sql = format!(
+        "SELECT id, at, instance, request_id, triggers, primary_trigger, subsystem, route, client,
+                method, status, total_ms, size_bytes, detail
+         FROM sample {clauses} ORDER BY id DESC LIMIT ?{}",
+        values.len()
+    );
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(values), |row| {
+        Ok((read_summary(row)?, row.get::<_, String>(13)?))
+    })?;
+    rows.map(|row| {
+        let (summary, detail) = row?;
+        Ok(SampleRecord {
+            summary: summary?,
+            detail,
+        })
+    })
+    .collect()
 }
 
 /// Samples matching `filter`, newest first. Never reads the detail.
@@ -236,11 +289,15 @@ pub fn get(conn: &Connection, id: i64) -> Result<SampleRecord, StoreError> {
 /// How many rows the table holds, how many bytes they count for, and the age
 /// of the oldest.
 pub fn usage(conn: &Connection) -> Result<Usage, StoreError> {
-    let (rows, bytes, oldest): (i64, i64, Option<i64>) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), MIN(at) FROM sample",
+    // Three queries, each answered from one narrow index, rather than one that
+    // would have to read every row.
+    let rows: i64 = conn.query_row("SELECT COUNT(*) FROM sample", [], |row| row.get(0))?;
+    let bytes: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(size_bytes), 0) FROM sample",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        |row| row.get(0),
     )?;
+    let oldest: Option<i64> = conn.query_row("SELECT MIN(at) FROM sample", [], |row| row.get(0))?;
     Ok(Usage {
         rows: u64::try_from(rows).unwrap_or(0),
         bytes: u64::try_from(bytes).unwrap_or(0),
@@ -248,58 +305,50 @@ pub fn usage(conn: &Connection) -> Result<Usage, StoreError> {
     })
 }
 
-/// Deletes up to `batch` of the oldest samples that break a limit: first the
-/// ones that are too old, then the oldest ones beyond the row and byte limits.
-/// Returns how many were deleted; call again until it returns 0. One short
-/// statement per call, so the write lock is never held long.
-pub fn prune_step(
+/// Deletes up to `batch` of the samples that finished before `cutoff_ms`,
+/// oldest first, through the time index. Returns how many; call again until it
+/// returns 0.
+pub fn delete_older_than(
     conn: &Connection,
-    limits: &RetentionLimits,
+    cutoff_ms: i64,
     batch: u32,
 ) -> Result<usize, StoreError> {
-    let too_old = conn.execute(
+    Ok(conn.execute(
         "DELETE FROM sample WHERE id IN
-           (SELECT id FROM sample WHERE at < ?1 ORDER BY id LIMIT ?2)",
-        params![limits.older_than_ms, batch],
-    )?;
-    if too_old > 0 {
-        return Ok(too_old);
-    }
-    let usage = usage(conn)?;
-    let excess_rows = usage.rows.saturating_sub(limits.max_rows);
-    let excess_bytes = usage.bytes.saturating_sub(limits.max_bytes);
-    if excess_rows == 0 && excess_bytes == 0 {
-        return Ok(0);
-    }
-    delete_oldest_covering(conn, excess_rows, excess_bytes, batch)
+           (SELECT id FROM sample WHERE at < ?1 ORDER BY at LIMIT ?2)",
+        params![cutoff_ms, batch],
+    )?)
 }
 
 /// Deletes the oldest samples, at most `batch`, stopping as soon as at least
-/// `rows` rows and `bytes` bytes are gone.
-fn delete_oldest_covering(
+/// `excess.rows` rows and `excess.bytes` bytes are gone. It reads only the
+/// `batch` oldest rows, so it is cheap however large the table is; the caller
+/// measures the table once (with [`usage`]) and subtracts what each call
+/// returns.
+pub fn delete_oldest_covering(
     conn: &Connection,
-    rows: u64,
-    bytes: u64,
+    excess: Excess,
     batch: u32,
-) -> Result<usize, StoreError> {
+) -> Result<Deleted, StoreError> {
     let mut statement = conn.prepare("SELECT id, size_bytes FROM sample ORDER BY id LIMIT ?1")?;
     let oldest = statement.query_map([batch], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
     })?;
-    let (mut count, mut size, mut last_id) = (0u64, 0u64, None);
+    let (mut rows, mut bytes, mut last_id) = (0u64, 0u64, None);
     for row in oldest {
-        let (id, row_size) = row?;
-        count += 1;
-        size += u64::try_from(row_size).unwrap_or(0);
+        let (id, size) = row?;
+        rows += 1;
+        bytes += u64::try_from(size).unwrap_or(0);
         last_id = Some(id);
-        if count >= rows && size >= bytes {
+        if rows >= excess.rows && bytes >= excess.bytes {
             break;
         }
     }
     let Some(last_id) = last_id else {
-        return Ok(0);
+        return Ok(Deleted { rows: 0, bytes: 0 });
     };
-    Ok(conn.execute("DELETE FROM sample WHERE id <= ?1", [last_id])?)
+    conn.execute("DELETE FROM sample WHERE id <= ?1", [last_id])?;
+    Ok(Deleted { rows, bytes })
 }
 
 /// Deletes up to `batch` of the oldest samples whatever their age (clearing

@@ -77,6 +77,11 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   (`decide`), `LatencyWindow`, `ClientErrors`, `StormGuard`, `RateLimiter`, the `Redactor`, the `Sample`
   encoding and `SampleQuery`, the `Batcher`, and the `Sampler` handle with its worker thread and the `SampleSink`
   trait. The data plane will depend on it; it depends on `model` only.
+- `crates/fast-proxy-sample-service/` stores samples in the shared database (M6): `SampleWriter` (the sampler's sink,
+  on its own connection, no revision), `Pruner` (retention by age, rows and bytes; every instance runs one) and
+  `SampleReader` (what the admin plane reads; every instance's samples). Samples are telemetry, not configuration: they
+  never go through `ConfigService::apply` and never make another instance reload. Sampling *settings* do, like every
+  other write.
 - `crates/fast-proxy-tls/` is everything about certificates and keys, with no HTTP
   knowledge: PEM parsing and validation, the `Vault` (AES-256-GCM under the master
   key), the self-signed generator, `CertCache` (parsed keys, unchanged entries

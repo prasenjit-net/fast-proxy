@@ -98,6 +98,10 @@ mod tests {
                 .unwrap(),
             ),
             maintenance: None,
+            sampling: crate::CompiledSampling {
+                policy: Arc::default(),
+                latency: Arc::default(),
+            },
         }
     }
 

@@ -1,6 +1,6 @@
 use fast_proxy_model::{Trigger, TriggerSet};
 
-use super::samples::{self, NewSample, RetentionLimits, SampleFilter, MAX_PAGE};
+use super::samples::{self, Excess, NewSample, SampleFilter, MAX_PAGE};
 use crate::{Database, StoreError};
 
 fn triggers(list: &[Trigger]) -> TriggerSet {
@@ -357,27 +357,56 @@ fn usage_counts_rows_bytes_and_the_oldest() {
     assert_eq!(usage.bytes, listed);
 }
 
-fn limits(older_than_ms: i64, max_rows: u64, max_bytes: u64) -> RetentionLimits {
-    RetentionLimits {
+struct Limits {
+    older_than_ms: i64,
+    max_rows: u64,
+    max_bytes: u64,
+}
+
+fn limits(older_than_ms: i64, max_rows: u64, max_bytes: u64) -> Limits {
+    Limits {
         older_than_ms,
         max_rows,
         max_bytes,
     }
 }
 
-fn prune_all(db: &Database, limits: &RetentionLimits, batch: u32) -> usize {
+/// What the pruner does: the old ones through the index, then the excess
+/// measured once and removed oldest first. Returns how many were deleted.
+fn prune_all(db: &Database, limits: &Limits, batch: u32) -> usize {
     let mut total = 0;
     loop {
-        let deleted = db.read(|c| samples::prune_step(c, limits, batch)).unwrap();
-        if deleted == 0 {
-            return total;
-        }
+        let deleted = db
+            .read(|c| samples::delete_older_than(c, limits.older_than_ms, batch))
+            .unwrap();
         assert!(
             deleted <= batch as usize,
             "never more than one batch per step"
         );
+        if deleted == 0 {
+            break;
+        }
         total += deleted;
     }
+    let mut excess = db
+        .read(samples::usage)
+        .unwrap()
+        .excess(limits.max_rows, limits.max_bytes);
+    while !excess.is_none() {
+        let gone = db
+            .read(|c| samples::delete_oldest_covering(c, excess, batch))
+            .unwrap();
+        assert!(gone.rows <= u64::from(batch));
+        if gone.rows == 0 {
+            break;
+        }
+        total += gone.rows as usize;
+        excess = Excess {
+            rows: excess.rows.saturating_sub(gone.rows),
+            bytes: excess.bytes.saturating_sub(gone.bytes),
+        };
+    }
+    total
 }
 
 #[test]
@@ -476,4 +505,57 @@ fn a_stored_row_that_cannot_be_read_back_is_corruption() {
         .read(|c| samples::list(c, &SampleFilter::default()))
         .unwrap_err();
     assert!(matches!(err, StoreError::Internal(_)));
+}
+
+#[test]
+fn a_record_list_carries_the_detail_in_the_same_order_and_filters_as_the_summary_list() {
+    let db = db();
+    let mut rows: Vec<NewSample> = (1..=4).map(sample).collect();
+    rows[1].subsystem = "blog".into();
+    insert(&db, &rows);
+    let filter = SampleFilter {
+        subsystem: Some("shop".into()),
+        limit: Some(2),
+        ..Default::default()
+    };
+    let records = db.read(|c| samples::list_records(c, &filter)).unwrap();
+    let summaries = list(&db, &filter);
+    assert_eq!(
+        records
+            .iter()
+            .map(|r| r.summary.clone())
+            .collect::<Vec<_>>(),
+        summaries
+    );
+    assert_eq!(records[0].detail, "{\"n\":4}");
+    assert_eq!(records.len(), 2);
+}
+
+#[test]
+fn a_full_database_reports_the_real_error_and_the_connection_stays_usable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("x.db");
+    let mut db = Database::open(&path).unwrap();
+    let pages: i64 = db
+        .read(|c| Ok(c.pragma_query_value(None, "page_count", |r| r.get(0))?))
+        .unwrap();
+    db.read(|c| Ok(c.pragma_update(None, "max_page_count", pages + 6)?))
+        .unwrap();
+    let big: Vec<NewSample> = (0..100)
+        .map(|n| NewSample {
+            detail: "x".repeat(4000),
+            ..sample(n)
+        })
+        .collect();
+    let err = db
+        .write_unrecorded(|c| samples::insert_batch(c, &big))
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("full"),
+        "the error says the database is full, not that a savepoint is missing: {err}"
+    );
+    assert!(list(&db, &SampleFilter::default()).is_empty());
+    db.write_unrecorded(|c| samples::insert_batch(c, &[sample(1)]))
+        .unwrap();
+    assert_eq!(list(&db, &SampleFilter::default()).len(), 1);
 }

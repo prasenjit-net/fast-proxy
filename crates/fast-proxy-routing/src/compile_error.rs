@@ -56,4 +56,8 @@ pub enum CompileError {
     UnknownMaintenanceSubsystem { id: i64 },
     #[error("maintenance is set for route {id}, which does not exist")]
     UnknownMaintenanceRoute { id: i64 },
+    #[error("sampling is overridden for subsystem {id}, which does not exist")]
+    UnknownSamplingSubsystem { id: i64 },
+    #[error("sampling is overridden for route {id}, which does not exist")]
+    UnknownSamplingRoute { id: i64 },
 }

@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR3 (the sampling crate) written; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR4 (settings writes, compile, the sample service) written; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -452,43 +452,54 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream SV: The sample service (new crate `fast-proxy-sample-service`)
 
-- [ ] **SV1 (M) The writer.** Implements `SampleSink` over the second connection (S5): one transaction per
+- [x] **SV1 (M) The writer.** Implements `SampleSink` over the second connection (S5): one transaction per
   batch, a busy timeout, a backoff after a failure (no unbounded retry, no unbounded memory while it backs off),
   the instance id stamped on every row, and metrics hooks for written rows and failures.
   *Done when:* tests cover a batch landing atomically, a locked database and a full disk each dropping and counting
   (G2: a full disk must never panic the writer), `journal_size_limit` being set, recovery after the
   lock clears, two writers (two threads, and two processes in the integration test) producing one increasing id
   sequence, and shutdown flushing.
-- [ ] **SV2 (M) The retention pruner.** Every instance runs it every 30 seconds, reads the live retention
+- [x] **SV2 (M) The retention pruner.** Every instance runs it every 30 seconds, reads the live retention
   settings, and deletes oldest-first in batches of 500 (age, then rows, then bytes), yielding between batches;
   idempotent and leaderless; a failed pass is counted and retried next tick.
   *Done when:* tests cover each limit alone and together, two pruners racing without error or over-deleting by
   more than a batch, a settings change taking effect on the next pass, and a 200 000-row prune never holding the
   write lock for more than a small bounded time.
-- [ ] **SV3 (M) The reader.** The queries the admin plane calls (list with filters and cursor, detail, paged
+- [x] **SV3 (M) The reader.** The queries the admin plane calls (list with filters and cursor, detail, paged
   export, clear, the status aggregate), on a read connection, returning typed samples.
   *Done when:* tests cover every filter against rows from two instances, the cursor being stable while another
   writer inserts, and the list never reading `detail`.
+  *As built (PR4), what the tests changed in the design:* pruning first measured the table inside every write step and,
+  with a 2 ms pause, starved a configuration write for seconds on a 200 000-row table. Now the old samples go through the
+  time index (`delete_older_than`), the excess over the row and byte limits is removed oldest first
+  (`delete_oldest_covering`, which reads only the `batch` oldest rows), the table is **measured before every step outside the
+  write lock** (so two racing pruners over-delete by at most one step; `usage()` is three index-only queries, with a narrow
+  `sample_size` index for the sum), and the default pause between steps is 25 ms (SQLite hands the lock to whoever asks first
+  and a waiting writer sleeps between attempts). A full disk makes SQLite roll the transaction back by itself, so
+  `insert_batch` no longer lets the failed `ROLLBACK TO` hide the real error. The store gained `list_records` (with `detail`,
+  for the export).
 
 ### Workstream CS: Config service
 
-- [ ] **CS1 (M) Writes with audit.** `set_sampling`, `set_sampling_override`, `clear_sampling_override`, through
+- [x] **CS1 (M) Writes with audit.** `set_sampling`, `set_sampling_override`, `clear_sampling_override`, through
   `ConfigService::apply` with a `ChangeContext` and `Audited` descriptions (`sampling.update`,
   `sampling.override.set`, `sampling.override.clear`); validation by compiling the would-be policy; the audit
   detail holds names and numbers only.
   *Done when:* tests cover the revision, the audit row in the same transaction, a vetoed write leaving nothing,
   and the sync poll carrying a change to a second service.
-- [ ] **CS2 (S) Loading.** The settings and overrides are read with the rest of the state at start and on every
+- [x] **CS2 (S) Loading.** The settings and overrides are read with the rest of the state at start and on every
   reload and sync, and handed to compile; the `SamplingChanged` broadcast.
+  *Not done here:* the `SamplingChanged` WebSocket event belongs to the admin API (A3); this task loads the settings on start,
+  reload and sync, and the snapshot now carries them (`sampling_settings`) for the redactor.
 
 ### Workstream R: Routing and compile
 
-- [ ] **R1 (M) Compile the effective policy.** `SamplingInputs` (beside `Config`, like `MaintenanceInputs`) and a
+- [x] **R1 (M) Compile the effective policy.** `SamplingInputs` (beside `Config`, like `MaintenanceInputs`) and a
   `CompiledSampling` per route (and for the unmatched case), holding the `Arc<SamplingPolicy>` and the route's
   runtime handles from the `SamplingRuntime`.
   *Done when:* tests cover inheritance, a route deleted and recreated, and the runtime state surviving a swap by
   key while a removed route's state is dropped.
-- [ ] **R2 (S) Snapshot access.** The accessors the data plane uses, with no allocation and no clock read when the
+- [x] **R2 (S) Snapshot access.** The accessors the data plane uses, with no allocation and no clock read when the
   route's sampling is off.
 
 ### Workstream D: Data plane

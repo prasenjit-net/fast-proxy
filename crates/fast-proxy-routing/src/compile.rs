@@ -9,10 +9,12 @@ use fast_proxy_model::{
 use fast_proxy_tls::UpstreamTrust;
 
 use crate::compiled_upstream::GroupFault;
+use crate::sampling_table::SamplingTable;
 use crate::snapshot::{CompiledRoute, CompiledSubsystem};
 use crate::{
-    CompileError, CompiledHttps, CompiledMaintenance, CompiledUpstream, HostTable,
-    MaintenanceInputs, MaintenanceScope, RouteTable, Snapshot, TlsInputs,
+    CompileError, CompiledHttps, CompiledMaintenance, CompiledSampling, CompiledUpstream,
+    HostTable, MaintenanceInputs, MaintenanceScope, RouteTable, SamplingInputs, SamplingRuntime,
+    Snapshot, TlsInputs,
 };
 
 /// Compiles `config` into a snapshot labelled `version`. Pure and
@@ -56,7 +58,38 @@ pub fn compile_all(
     tls: &TlsInputs,
     maintenance: &MaintenanceInputs,
 ) -> Result<Snapshot, CompileError> {
+    compile_full(
+        version,
+        config,
+        previous,
+        tls,
+        maintenance,
+        &SamplingInputs::none(),
+    )
+}
+
+/// Like [`compile_all`], also resolving how every route is sampled from the
+/// sampling settings and overrides, and carrying the sampling runtime state
+/// (the guards and each route's rolling latency) into the snapshot. Fails when
+/// an override names a subsystem or route that does not exist.
+pub fn compile_full(
+    version: u64,
+    config: &Config,
+    previous: &RuntimeRegistry,
+    tls: &TlsInputs,
+    maintenance: &MaintenanceInputs,
+    sampling: &SamplingInputs,
+) -> Result<Snapshot, CompileError> {
     let scopes = ScopeTable::build(config, maintenance)?;
+    let sampling_table = SamplingTable::build(config, sampling)?;
+    let runtime = sampling
+        .runtime
+        .rebuilt_for(config.subsystems.iter().flat_map(|s| {
+            s.routes
+                .iter()
+                .filter(|r| r.enabled)
+                .map(|r| (s.name.as_str().to_string(), r.prefix.as_str().to_string()))
+        }));
     let registry = previous.rebuilt_for(
         config
             .subsystems
@@ -89,7 +122,14 @@ pub fn compile_all(
         }
         subsystems.insert(
             subsystem.id,
-            compile_subsystem(subsystem, &registry, tls, &scopes)?,
+            compile_subsystem(
+                subsystem,
+                &registry,
+                tls,
+                &scopes,
+                &sampling_table,
+                &runtime,
+            )?,
         );
     }
 
@@ -99,6 +139,9 @@ pub fn compile_all(
         hosts: HostTable::build(host_entries),
         subsystems,
         maintenance: scopes.global,
+        sampling_settings: Arc::new(sampling.settings.clone()),
+        unmatched_sampling: sampling_table.global_policy(),
+        sampling: runtime,
     })
 }
 
@@ -163,6 +206,8 @@ fn compile_subsystem(
     registry: &RuntimeRegistry,
     tls: &TlsInputs,
     scopes: &ScopeTable,
+    sampling: &SamplingTable<'_>,
+    runtime: &SamplingRuntime,
 ) -> Result<CompiledSubsystem, CompileError> {
     let name = subsystem.name.as_str();
     let https = compile_https(subsystem, tls)?;
@@ -200,6 +245,12 @@ fn compile_subsystem(
                 retry: route.retry,
                 upstream: Arc::clone(group),
                 maintenance: scopes.routes.get(&route.id).cloned(),
+                sampling: CompiledSampling {
+                    policy: sampling.route_policy(subsystem.id, route.id),
+                    latency: runtime
+                        .window(name, route.prefix.as_str())
+                        .unwrap_or_default(),
+                },
             },
         ));
     }
@@ -211,6 +262,7 @@ fn compile_subsystem(
         routes: RouteTable::build(routes),
         upstreams: groups,
         maintenance: scopes.subsystems.get(&subsystem.id).cloned(),
+        sampling: sampling.subsystem_policy(subsystem.id),
     })
 }
 
