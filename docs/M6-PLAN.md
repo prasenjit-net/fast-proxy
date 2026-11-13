@@ -1,6 +1,6 @@
 # M6 Plan: Request sampling of unusual requests
 
-Status: **draft v0.2 (2026-11-11), proposed; PR6 (the settings and samples API, the `samples` CLI) written; PR5 (data-plane capture, metrics, wiring) in review; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
+Status: **draft v0.2 (2026-11-11), proposed; PR7 (the admin UI) written; PR6 (the settings and samples API, the `samples` CLI) written; PR5 (data-plane capture, metrics, wiring) in review; PR4 (settings writes, compile, the sample service) in review; PR3 (the sampling crate) in review; PR2 (model, schema, repositories, second connection) in review; PR1 (ADRs 0020 to 0023, defaults) is the decision record; all (confirm) items accepted by the owner on 2026-11-11; spike G2 (2026-11-12) confirmed J15 and J17.** No code yet. v0.2 follows the owner's direction that **all
 sample data is stored in the database**, so samples work with several instances sharing one database (J3, J10,
 J11, J17, J18; the ring buffer and the spill file of v0.1 are gone). Items marked **(confirm)** need the
 owner's sign-off before the tasks that depend on them start.
@@ -572,21 +572,28 @@ Task IDs are referenced by the dependency table in section 7. Workstream letters
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (M) API client and types.** `lib/types.ts`, `lib/api.ts` functions, camelCase validation in
+- [x] **U1 (M) API client and types.** `lib/types.ts`, `lib/api.ts` functions, camelCase validation in
   `lib/validation.ts` (caps, rates, name lists), the new event in `LiveContext.tsx`.
-- [ ] **U2 (L) Samples page.** `pages/Samples.tsx`: a filterable table (trigger chips, status class, subsystem,
+- [x] **U2 (L) Samples page.** `pages/Samples.tsx`: a filterable table (trigger chips, status class, subsystem,
   route, minimum latency, time range), a live-tail toggle that polls with the cursor, a detail drawer (headers,
   bodies with a "truncated" or "omitted: reason" note, timings, attempts, the request id with a link to nothing
   else), export, clear with a confirmation. Admin only: a viewer sees an explanation and the status counters.
-- [ ] **U3 (M) Sampling settings.** A Sampling section in Settings: master status, trigger switches and
+- [x] **U3 (M) Sampling settings.** A Sampling section in Settings: master status, trigger switches and
   thresholds, the baseline rate and the rate limit with the plain meaning of each ("about 1 in 1000"), the
   redaction additions (the built-in lists shown read-only), the retention limits (age, rows, bytes) with the table's current size, and the drop counters.
-- [ ] **U4 (M) Per-target overrides and the body opt-in.** A sampling control on the subsystem detail page and on
+- [x] **U4 (M) Per-target overrides and the body opt-in.** A sampling control on the subsystem detail page and on
   each route: inherit, off, or custom, and an explicit "capture bodies" switch with a warning about what it holds.
-- [ ] **U5 (S) Dashboard card and navigation.** Capture rate and drops on the dashboard, a "Samples" sidebar item
+- [x] **U5 (S) Dashboard card and navigation.** Capture rate and drops on the dashboard, a "Samples" sidebar item
   (`navigation.ts`), the page title.
-- [ ] **U6 (S) Tests.** Vitest page tests with `test/mockApi.ts` for U2 to U5, including the viewer view, and the
+- [x] **U6 (S) Tests.** Vitest page tests with `test/mockApi.ts` for U2 to U5, including the viewer view, and the
   CSP check of the built page still passing.
+
+  *As built (PR7):* the settings card sits in Settings (a viewer reads it, `readonly`); the override control is a badge
+  plus a dialog on the subsystem page and in each route row (setting every field back to "same as global" deletes the
+  override instead of storing an empty one); the Samples page is admin only (a viewer gets an explanation and the counters,
+  and the page never asks for a sample); "Live" refetches every 5 s rather than polling with the cursor, because the
+  loaded pages are refetched together and stay consistent; the form takes sizes in MiB and KiB and the p99 factor as a
+  decimal, and converts to the API's units; `Traffic.samples` is required (no old servers to support). Tests: from 429 to 469 Vitest tests; ten mutations of the new code each turned a test red.
 
 ### Workstream Q: Quality
 

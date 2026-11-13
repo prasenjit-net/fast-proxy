@@ -198,6 +198,24 @@ describe("LiveProvider", () => {
     }
   });
 
+  it("refetches the sampling settings and the sample lists on a samplingChanged event", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await renderLive(client);
+    act(() => FakeSocket.last.open());
+    act(() => FakeSocket.last.receive({ type: "samplingChanged", timestampMs: 5 }));
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    const { predicate } = invalidate.mock.calls[0][0] as unknown as {
+      predicate: (query: { queryKey: unknown[] }) => boolean;
+    };
+    for (const key of ["sampling", "samples"]) {
+      expect(predicate({ queryKey: [key, "detail", 1] }), key).toBe(true);
+    }
+    for (const key of ["config", "subsystems", "audit"]) {
+      expect(predicate({ queryKey: [key] }), key).toBe(false);
+    }
+  });
+
   it("opens the socket with a single-use ticket, never the token", async () => {
     await renderLive();
     expect(ticketCalls).toBe(1);

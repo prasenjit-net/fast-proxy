@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api, ApiError, samplesExportQuery } from "./api";
 import { clearToken, getToken, setToken, setUnauthorizedHandler } from "./session";
 
 function mockFetchOnce(response: Partial<Response> & { json?: () => Promise<unknown> }) {
@@ -289,5 +289,48 @@ describe("endpoint calls", () => {
         since: "5",
       });
     });
+  });
+});
+
+describe("sampling calls", () => {
+  const ok = (body: unknown = {}) => mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(body) });
+
+  it("asks for a page of samples with only the filters that are set", async () => {
+    const fetchMock = ok();
+    await api.samples({ trigger: "slow", statusClass: 5, route: "/api", minMs: 500, sinceMs: 99 }, 12);
+    const [path] = fetchMock.mock.calls[0];
+    const query = new URLSearchParams(String(path).split("?")[1]);
+    expect(String(path)).toMatch(/^\/api\/samples\?/);
+    expect(Object.fromEntries(query)).toEqual({
+      limit: "50",
+      before: "12",
+      trigger: "slow",
+      statusClass: "5",
+      route: "/api",
+      minMs: "500",
+      since: "99",
+    });
+  });
+
+  it("builds the export query from the same filters, without paging", () => {
+    expect(samplesExportQuery({ client: "203.0.113.7", trigger: "retried" })).toBe(
+      "trigger=retried&client=203.0.113.7",
+    );
+    expect(samplesExportQuery({})).toBe("");
+  });
+
+  it("clears an override by its target, and writes with the right methods", async () => {
+    const fetchMock = ok();
+    await api.deleteSamplingOverride({ routeId: 7 });
+    await api.putSamplingOverride({ subsystemId: 2, enabled: false });
+    await api.putSampling({} as never);
+    await api.clearSamples();
+    const calls = fetchMock.mock.calls.map(([path, init]) => `${init?.method} ${path}`);
+    expect(calls).toEqual([
+      "DELETE /api/sampling/overrides?routeId=7",
+      "PUT /api/sampling/overrides",
+      "PUT /api/sampling",
+      "DELETE /api/samples",
+    ]);
   });
 });

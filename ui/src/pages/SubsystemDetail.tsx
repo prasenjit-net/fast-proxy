@@ -8,6 +8,7 @@ import HttpsSection from "../components/subsystem/HttpsSection";
 import MaintenanceSection from "../components/subsystem/MaintenanceSection";
 import RoutesSection from "../components/subsystem/RoutesSection";
 import SubsystemSettings from "../components/subsystem/SubsystemSettings";
+import SamplingControl from "../components/sampling/SamplingControl";
 import UpstreamsSection from "../components/subsystem/UpstreamsSection";
 import WriteOnly from "../components/WriteOnly";
 import { useToast } from "../context/ToastContext";
@@ -86,6 +87,13 @@ export default function SubsystemDetailPage() {
 
       <SubsystemSettings subsystem={subsystem} />
       <MaintenanceSection subsystem={subsystem} />
+      <section className="card">
+        <div className="card-head">
+          <h2>Request sampling</h2>
+          <span className="card-hint">routes can differ; they inherit from here</span>
+        </div>
+        <SamplingControl target={{ subsystemId: subsystem.id }} label={subsystem.name} />
+      </section>
       <HostsSection subsystem={subsystem} />
       <HttpsSection subsystem={subsystem} />
       <UpstreamsSection subsystem={subsystem} />

@@ -10,6 +10,7 @@ describe("pageTitle", () => {
     expect(pageTitle("/revisions")).toBe("Revisions");
     expect(pageTitle("/resolver")).toBe("Resolver");
     expect(pageTitle("/settings")).toBe("Settings");
+    expect(pageTitle("/samples")).toBe("Sampled requests");
   });
 
   it("calls a subsystem's detail page Subsystem", () => {

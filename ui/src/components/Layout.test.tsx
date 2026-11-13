@@ -150,6 +150,7 @@ describe("Layout navigation", () => {
       "Revisions",
       "Resolver",
       "Audit log",
+      "Sampled requests",
       "Tokens",
       "Settings",
     ]);
@@ -167,6 +168,7 @@ describe("Layout navigation", () => {
       .map((link) => link.textContent);
     expect(labels).not.toContain("Tokens");
     expect(labels).toContain("Audit log");
+    expect(labels).not.toContain("Sampled requests");
     expect(screen.getByText("ann")).toBeInTheDocument();
     expect(screen.getByText("viewer (read-only)")).toBeInTheDocument();
   });
