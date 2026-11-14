@@ -11,6 +11,8 @@ fast-proxy-config-service = { path = "../fast-proxy-config-service" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
+fast-proxy-sample-service = { path = "../fast-proxy-sample-service" }
+fast-proxy-sampling = { path = "../fast-proxy-sampling" }
 fast-proxy-store = { path = "../fast-proxy-store" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
 fast-proxy-tls = { path = "../fast-proxy-tls" }
@@ -34,4 +36,5 @@ bytes = "1"
 
 [dev-dependencies]
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
+tempfile = { workspace = true }
 http-body-util = { workspace = true }

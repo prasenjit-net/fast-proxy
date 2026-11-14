@@ -7,7 +7,10 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::cli::{AuditArgs, MaintenanceOff, MaintenanceOn, ScopeArgs};
+use crate::cli::{
+    AuditArgs, MaintenanceOff, MaintenanceOn, SampleFilters, SamplesExportArgs, SamplesListArgs,
+    ScopeArgs,
+};
 use crate::commands::client::AdminClient;
 use crate::commands::failure::{Failure, Outcome};
 
@@ -149,6 +152,93 @@ fn audit_line(entry: &Value) -> String {
     )
 }
 
+/// The query-string pairs for the filters the operator gave, `since` made
+/// absolute from `now_ms`.
+fn sample_filter_query(filters: &SampleFilters, now_ms: i64) -> String {
+    let mut query = String::new();
+    let mut add = |name: &str, value: String| {
+        let _ = write!(query, "&{name}={}", percent_encode(&value));
+    };
+    if !filters.triggers.is_empty() {
+        add("trigger", filters.triggers.join(","));
+    }
+    if let Some(class) = filters.status_class {
+        add("statusClass", class.to_string());
+    }
+    for (name, value) in [
+        ("subsystem", &filters.subsystem),
+        ("route", &filters.route),
+        ("instance", &filters.instance),
+        ("client", &filters.client),
+    ] {
+        if let Some(value) = value {
+            add(name, value.clone());
+        }
+    }
+    if let Some(min_ms) = filters.min_ms {
+        add("minMs", min_ms.to_string());
+    }
+    if let Some(since) = filters.since {
+        let since_ms = now_ms.saturating_sub(i64::try_from(since.as_millis()).unwrap_or(i64::MAX));
+        add("since", since_ms.max(0).to_string());
+    }
+    query
+}
+
+pub async fn samples_list(client: &AdminClient, args: &SamplesListArgs, now_ms: i64) -> Outcome {
+    let query = format!(
+        "limit={}{}",
+        args.limit,
+        sample_filter_query(&args.filters, now_ms)
+    );
+    let answer = client.get(&format!("/api/samples?{query}")).await?;
+    if args.remote.json {
+        return Ok(json_text(&answer));
+    }
+    let samples = answer["data"].as_array().cloned().unwrap_or_default();
+    if samples.is_empty() {
+        return Ok("no samples".to_string());
+    }
+    Ok(samples
+        .iter()
+        .map(sample_line)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// Every matching sample as the proxy sends it: one JSON object per line.
+pub async fn samples_export(
+    client: &AdminClient,
+    args: &SamplesExportArgs,
+    now_ms: i64,
+) -> Outcome {
+    let query = sample_filter_query(&args.filters, now_ms);
+    let text = client
+        .get_text(&format!(
+            "/api/samples/export?{}",
+            query.trim_start_matches('&')
+        ))
+        .await?;
+    Ok(text.trim_end_matches('\n').to_string())
+}
+
+fn sample_line(sample: &Value) -> String {
+    let at = UNIX_EPOCH + Duration::from_millis(sample["atMs"].as_u64().unwrap_or(0));
+    format!(
+        "{} {} {} {} {} {} {}ms {} instance={} id={}",
+        humantime::format_rfc3339_seconds(at),
+        sample["status"].as_u64().unwrap_or(0),
+        sample["primary"].as_str().unwrap_or("?"),
+        sample["subsystem"].as_str().unwrap_or("?"),
+        sample["route"].as_str().unwrap_or("?"),
+        sample["method"].as_str().unwrap_or("?"),
+        sample["totalMs"].as_u64().unwrap_or(0),
+        sample["client"].as_str().unwrap_or("?"),
+        sample["instance"].as_str().unwrap_or("?"),
+        sample["id"].as_i64().unwrap_or(0)
+    )
+}
+
 /// The request body for turning maintenance on: only what was asked for.
 fn request_body(args: &MaintenanceOn) -> Value {
     let mut body = json!({ "message": args.message });
@@ -264,7 +354,7 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::RemoteArgs;
+    use crate::cli::{RemoteArgs, SampleFilters};
 
     fn on() -> MaintenanceOn {
         MaintenanceOn {
@@ -347,5 +437,51 @@ mod tests {
     fn durations_read_in_words() {
         assert_eq!(duration_text(0), "0s");
         assert_eq!(duration_text(3_661), "1h 1m 1s");
+    }
+
+    #[test]
+    fn no_filters_give_an_empty_query_and_each_filter_its_own_pair() {
+        assert_eq!(sample_filter_query(&SampleFilters::default(), 1_000), "");
+        let filters = SampleFilters {
+            triggers: vec!["slow".into(), "retried".into()],
+            status_class: Some(5),
+            subsystem: Some("my shop".into()),
+            route: Some("/api".into()),
+            instance: Some("a-1".into()),
+            client: Some("203.0.113.9:1".into()),
+            min_ms: Some(250),
+            since: Some(Duration::from_secs(60)),
+        };
+        assert_eq!(
+            sample_filter_query(&filters, 100_000),
+            "&trigger=slow%2Cretried&statusClass=5&subsystem=my%20shop&route=%2Fapi\
+             &instance=a-1&client=203.0.113.9%3A1&minMs=250&since=40000"
+        );
+    }
+
+    #[test]
+    fn since_never_goes_before_the_epoch() {
+        let filters = SampleFilters {
+            since: Some(Duration::from_secs(3600)),
+            ..SampleFilters::default()
+        };
+        assert_eq!(sample_filter_query(&filters, 1_000), "&since=0");
+    }
+
+    #[test]
+    fn a_sample_reads_as_one_line() {
+        let line = sample_line(&json!({
+            "atMs": 1_700_000_000_000_u64, "status": 504, "primary": "upstream_failure",
+            "subsystem": "shop", "route": "/api", "method": "POST", "totalMs": 30012,
+            "client": "203.0.113.9:5", "instance": "a1", "id": 42
+        }));
+        assert_eq!(
+            line,
+            "2023-11-14T22:13:20Z 504 upstream_failure shop /api POST 30012ms 203.0.113.9:5 instance=a1 id=42"
+        );
+        assert!(
+            sample_line(&json!({})).contains('?'),
+            "missing fields do not panic"
+        );
     }
 }

@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
+import SamplingSettingsCard from "../components/sampling/SamplingSettingsCard";
 import { useConfig } from "../context/ConfigContext";
 import { useLive } from "../context/LiveContext";
 import { useSession } from "../context/SessionContext";
@@ -40,7 +41,7 @@ export default function SettingsPage() {
   });
 
   return (
-    <div className="flex max-w-[720px] flex-col gap-4">
+    <div className="flex max-w-[760px] flex-col gap-4">
       <section className="card">
         <div className="card-head">
           <h2>Appearance</h2>
@@ -101,6 +102,8 @@ export default function SettingsPage() {
           </p>
         ) : null}
       </section>
+
+      <SamplingSettingsCard />
 
       <section className="card">
         <div className="card-head">

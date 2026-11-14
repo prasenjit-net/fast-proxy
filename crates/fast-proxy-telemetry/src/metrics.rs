@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::admin_metrics::{AdminMetrics, AdminResult, AuditResult};
 use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
+use crate::sampling_metrics::{SampleDropReason, SamplerReading, SamplingMetrics};
 use crate::tls_metrics::{
     CacheResult, CertificateReading, HandshakeResult, SyncResult, TlsMetrics,
 };
@@ -67,6 +68,11 @@ pub struct TrafficTotals {
     pub per_subsystem: HashMap<String, Counts>,
     pub active_connections: i64,
     pub active_requests: i64,
+    /// Requests the sampler has kept since the start.
+    pub samples_captured: u64,
+    /// Samples that matched a trigger but were lost (rate limit, storm guard,
+    /// full queue, database errors) since the start.
+    pub samples_dropped: u64,
 }
 
 impl TrafficTotals {
@@ -97,6 +103,7 @@ pub struct Metrics {
     upstream: UpstreamMetrics,
     tls: TlsMetrics,
     maintenance: MaintenanceMetrics,
+    sampling: SamplingMetrics,
     admin: AdminMetrics,
 }
 
@@ -137,11 +144,13 @@ impl Metrics {
         let upstream = UpstreamMetrics::new(&registry);
         let tls = TlsMetrics::new(&registry);
         let maintenance = MaintenanceMetrics::new(&registry);
+        let sampling = SamplingMetrics::new(&registry);
         let admin = AdminMetrics::new(&registry);
         Self {
             upstream,
             tls,
             maintenance,
+            sampling,
             admin,
             cancelled: counter_vec(
                 &registry,
@@ -218,6 +227,27 @@ impl Metrics {
     /// Counts a request that passed through a maintenance scope by a bypass rule.
     pub fn maintenance_bypass(&self, scope: &str, subsystem: &str) {
         self.maintenance.bypass(scope, subsystem);
+    }
+
+    /// Counts a request the sampler kept, by the trigger that matched first.
+    pub fn sample_captured(&self, trigger: &'static str) {
+        self.sampling.captured(trigger);
+    }
+
+    /// Counts a candidate sample that was not kept.
+    pub fn sample_dropped(&self, reason: SampleDropReason) {
+        self.sampling.dropped(reason);
+    }
+
+    /// Samples kept and samples lost since the start, for the live traffic view.
+    pub fn sample_totals(&self) -> (u64, u64) {
+        self.sampling.totals()
+    }
+
+    /// Publishes the readings of the sampler's queue, the database writer and
+    /// the pruner, which keep their own counts.
+    pub fn publish_sampler(&self, reading: SamplerReading) {
+        self.sampling.publish(reading);
     }
 
     /// Sets which maintenance scopes are on; any not listed read as off.
@@ -357,9 +387,12 @@ impl Metrics {
     /// Reads the cumulative request and error counts per subsystem, plus the
     /// current gauges, for the live traffic sampler.
     pub fn traffic_totals(&self) -> TrafficTotals {
+        let (samples_captured, samples_dropped) = self.sampling.totals();
         let mut totals = TrafficTotals {
             active_connections: self.active_connections.get(),
             active_requests: self.active_requests.get(),
+            samples_captured,
+            samples_dropped,
             ..TrafficTotals::default()
         };
         let mut maintenance_answers: HashMap<String, u64> = HashMap::new();

@@ -34,7 +34,15 @@ export interface Traffic {
   total: TrafficRates;
   activeConnections: number;
   activeRequests: number;
+  /** What the sampler kept and lost in the window. */
+  samples: SampleRates;
   subsystems: SubsystemTraffic[];
+}
+
+export interface SampleRates {
+  capturedTotal: number;
+  capturedPerSec: number;
+  droppedPerSec: number;
 }
 
 export interface Envelope<T> {
@@ -551,3 +559,171 @@ export type MaintenanceTarget =
   | { scope: "global" }
   | { scope: "subsystem"; subsystemId: number; name: string }
   | { scope: "route"; subsystemId: number; routeId: number; prefix: string };
+
+// ---- Request sampling -------------------------------------------------------
+
+export type SampleTrigger =
+  | "upstream_failure"
+  | "retried"
+  | "slow"
+  | "slow_p99"
+  | "client_errors"
+  | "oversized_request"
+  | "oversized_response"
+  | "unusual_headers"
+  | "baseline";
+
+/** The names redacted whatever the settings say; shown read-only. */
+export interface BuiltInRedaction {
+  headers: string[];
+  queryParams: string[];
+  bodyFields: string[];
+}
+
+/** Every setting of `PUT /api/sampling` (all are required: a replace, not a patch). */
+export interface SamplingSettingsInput {
+  enabled: boolean;
+  triggers: SampleTrigger[];
+  slowThresholdMs: number;
+  slowP99FactorX10: number;
+  slowP99FloorMs: number;
+  clientErrorsPerMin: number;
+  oversizedRequestBytes: number;
+  oversizedResponseBytes: number;
+  baselinePerMille: number;
+  ratePerSec: number;
+  rateBurst: number;
+  stormBurst: number;
+  stormIntervalSecs: number;
+  retentionDays: number;
+  maxRows: number;
+  maxBytes: number;
+  bodyRequestCap: number;
+  bodyResponseCap: number;
+  extraHeaders: string[];
+  redactHeaders: string[];
+  redactQueryParams: string[];
+  redactBodyFields: string[];
+}
+
+export interface SamplingSettings extends SamplingSettingsInput {
+  builtInRedaction: BuiltInRedaction;
+  updatedBy: string;
+  updatedAtMs: number;
+}
+
+/** What a subsystem's or a route's override changes; null inherits. */
+export interface SamplingOverride {
+  scope: "subsystem" | "route";
+  subsystemId: number | null;
+  subsystem: string | null;
+  routeId: number | null;
+  route: string | null;
+  enabled: boolean | null;
+  captureBodies: boolean | null;
+  baselinePerMille: number | null;
+  slowThresholdMs: number | null;
+  slowP99FactorX10: number | null;
+  setBy: string;
+  setAtMs: number;
+}
+
+/** The body of `PUT /api/sampling/overrides`: one target, and the fields to override. */
+export interface SamplingOverrideInput {
+  subsystemId?: number;
+  routeId?: number;
+  enabled?: boolean;
+  captureBodies?: boolean;
+  baselinePerMille?: number;
+  slowThresholdMs?: number;
+  slowP99FactorX10?: number;
+}
+
+/** What a viewer may see of sampling: counts, never a sample. */
+export interface SamplingStatus {
+  /** Whether this process samples (`[sampling].enabled`, a restart to change). */
+  processEnabled: boolean;
+  captured: number;
+  dropped: number;
+  /** The shared table; null when it could not be read just now. */
+  table: { rows: number; bytes: number; oldestAtMs: number | null } | null;
+}
+
+export interface SamplingView {
+  settings: SamplingSettings;
+  overrides: SamplingOverride[];
+  status: SamplingStatus;
+}
+
+/** One sample in a list: the short columns, never the detail. */
+export interface SampleSummary {
+  id: number;
+  atMs: number;
+  instance: string;
+  requestId: string;
+  triggers: SampleTrigger[];
+  primary: SampleTrigger;
+  subsystem: string;
+  route: string;
+  client: string;
+  method: string;
+  status: number;
+  totalMs: number;
+  sizeBytes: number;
+}
+
+export interface SamplePage {
+  data: SampleSummary[];
+  /** Pass as `before` for the next, older page; null on the last page. */
+  nextBefore: number | null;
+  version: number;
+}
+
+export interface SampleBody {
+  text: string;
+  truncated: boolean;
+}
+
+/** One sample with its headers, bodies and attempts (all already redacted). */
+export interface SampleDetail {
+  id: number;
+  atMs: number;
+  instance: string;
+  requestId: string;
+  triggers: SampleTrigger[];
+  primary: SampleTrigger;
+  subsystem: string;
+  route: string;
+  client: string;
+  request: {
+    method: string;
+    path: string;
+    query: string | null;
+    headers: [string, string][];
+    bytes: number;
+    body: SampleBody | null;
+    unusual?: string[];
+  };
+  response: {
+    status: number;
+    headers: [string, string][];
+    bytes: number;
+    body: SampleBody | null;
+    bodyOmitted: string | null;
+  };
+  totalMs: number;
+  upstream: { attempts: { endpoint: string; failure: string | null; status: number | null }[] };
+  /** How many candidates of the same kind were dropped before this one. */
+  suppressed?: { count: number; sinceMs: number };
+}
+
+export interface SampleFilters {
+  trigger?: SampleTrigger;
+  statusClass?: number;
+  subsystem?: string;
+  route?: string;
+  instance?: string;
+  client?: string;
+  minMs?: number;
+  sinceMs?: number;
+}

@@ -8,6 +8,7 @@ export function trafficSample(overrides: Partial<Traffic> = {}): Traffic {
     total: { requestsTotal: 120, requestsPerSec: 12.5, errorRate: 0.25 },
     activeConnections: 3,
     activeRequests: 1,
+    samples: { capturedTotal: 7, capturedPerSec: 0.5, droppedPerSec: 0 },
     subsystems: [
       { name: "shop", requestsTotal: 100, requestsPerSec: 10, errorRate: 0.1 },
     ],

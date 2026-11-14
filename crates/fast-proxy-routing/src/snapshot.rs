@@ -4,10 +4,15 @@ use std::time::Duration;
 
 use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_model::{
-    RetryPolicy, RouteId, SubsystemId, SubsystemName, UpstreamGroupId, UpstreamPrefix,
+    RetryPolicy, RouteId, SamplingSettings, SubsystemId, SubsystemName, UpstreamGroupId,
+    UpstreamPrefix,
 };
+use fast_proxy_sampling::SamplingPolicy;
 
-use crate::{CompiledHttps, CompiledMaintenance, CompiledUpstream, HostTable, RouteTable};
+use crate::{
+    CompiledHttps, CompiledMaintenance, CompiledSampling, CompiledUpstream, HostTable, RouteTable,
+    SamplingRuntime,
+};
 
 /// A route with its upstream group resolved. The endpoint is chosen per
 /// request from [`CompiledRoute::upstream`].
@@ -26,6 +31,8 @@ pub struct CompiledRoute {
     pub upstream: Arc<CompiledUpstream>,
     /// Maintenance set on this route alone, while active.
     pub maintenance: Option<Arc<CompiledMaintenance>>,
+    /// How requests on this route are sampled.
+    pub sampling: CompiledSampling,
 }
 
 /// One subsystem ready for request handling. Disabled routes are not
@@ -41,6 +48,8 @@ pub struct CompiledSubsystem {
     pub upstreams: HashMap<UpstreamGroupId, Arc<CompiledUpstream>>,
     /// Maintenance set on the whole subsystem, while active.
     pub maintenance: Option<Arc<CompiledMaintenance>>,
+    /// How requests are sampled when no route of this subsystem took them.
+    pub sampling: Arc<SamplingPolicy>,
 }
 
 /// The immutable, ready-to-serve view of the whole configuration at one
@@ -55,12 +64,25 @@ pub struct Snapshot {
     pub subsystems: HashMap<SubsystemId, CompiledSubsystem>,
     /// Maintenance set on the whole proxy, while active.
     pub maintenance: Option<Arc<CompiledMaintenance>>,
+    /// The global sampling settings this snapshot was compiled from (the
+    /// redactor's additions come from here).
+    pub sampling_settings: Arc<SamplingSettings>,
+    /// How requests no subsystem took are sampled.
+    pub unmatched_sampling: Arc<SamplingPolicy>,
+    /// The process-wide sampling state and every route's rolling latency.
+    pub sampling: SamplingRuntime,
 }
 
 impl Snapshot {
     /// The snapshot before any configuration exists: version 0, no hosts.
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// The sampling state to hand to the next compile, so a configuration
+    /// change resets neither the guards nor a route's rolling latency.
+    pub fn sampling_runtime(&self) -> SamplingRuntime {
+        self.sampling.clone()
     }
 
     /// The runtime state of every endpoint in this snapshot; the next

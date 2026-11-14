@@ -18,6 +18,7 @@ use fast_proxy_dataplane::{
     UpstreamClient,
 };
 use fast_proxy_health::{run_status_gauges, HealthEngine};
+use fast_proxy_sample_service::SampleReader;
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use fast_proxy_tls::{build_server_config, MinTlsVersion, ServerConfigError, ServerTlsPolicy};
@@ -26,6 +27,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
+use crate::sampling::{Sampling, SamplingError};
 
 /// The environment variable that seeds the first admin token (for containers).
 const BOOTSTRAP_TOKEN_VARIABLE: &str = "FAST_PROXY_BOOTSTRAP_TOKEN";
@@ -61,6 +63,8 @@ pub enum StartupError {
     AdminTls(#[from] ServerConfigError),
     #[error("the admin server failed: {0}")]
     AdminServe(std::io::Error),
+    #[error(transparent)]
+    Sampling(#[from] SamplingError),
 }
 
 /// Starts everything and serves until Ctrl-C. Every listener is bound
@@ -113,6 +117,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             })
             .collect(),
         database_path: database.display().to_string(),
+        sampling_enabled: config.sampling.enabled,
         tls: TlsInfo {
             enabled: config.data_plane.tls.enabled,
             listen: https.as_ref().map(|plane| plane.listener().local_addr()),
@@ -156,6 +161,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         metrics.clone(),
         endpoint_events.clone(),
         security,
+        // Reads the samples of every instance sharing the database, whether or
+        // not this process samples.
+        Arc::new(SampleReader::open(&database, Duration::from_secs(5))?),
     ));
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
@@ -193,14 +201,34 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         data_stop.clone(),
     ));
 
+    // Request sampling: its thread, the pruner and the periodic upkeep. Off
+    // costs nothing; on, the data plane only holds the handle.
+    let sampling = if config.sampling.enabled {
+        let started = Sampling::start(
+            &config.sampling,
+            &database,
+            config_service.instance_id(),
+            &config_service.snapshot_holder().load(),
+        )?;
+        started.spawn_upkeep(
+            config_service.snapshot_holder(),
+            config_service.subscribe(),
+            metrics.clone(),
+            data_stop.clone(),
+        );
+        Some(started)
+    } else {
+        None
+    };
+    let mut observability = Observability::new(metrics.clone(), access_log.clone());
+    if let Some(sampling) = &sampling {
+        observability = observability.with_sampler(sampling.sampler());
+    }
     let pipeline = Arc::new(
         RequestPipeline::new(
             config_service.snapshot_holder(),
             UpstreamClient::new(trusted_proxies.clone(), metrics.clone(), endpoint_events),
-            Observability {
-                metrics,
-                access_log: access_log.clone(),
-            },
+            observability,
         )
         .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref()))
         .with_trusted_proxies(trusted_proxies),
@@ -271,6 +299,11 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
                 report.forced_connections
             );
         }
+    }
+    // Every request has finished, so every sample has been handed over: write
+    // what is queued and stop the sampler and the pruner.
+    if let Some(sampling) = sampling {
+        let _ = tokio::task::spawn_blocking(move || sampling.shutdown()).await;
     }
     // Every request finishes before this point; make sure its line is on disk.
     access_log.flush().await;

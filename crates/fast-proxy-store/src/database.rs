@@ -7,8 +7,10 @@ use crate::repository::load;
 use crate::{revision, StoreError};
 
 /// Bump together with `schema.sql`. Stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 /// The actor recorded for changes nobody asked for by name (the sweeper, tests).
+/// The WAL is truncated to this size after a checkpoint.
+const WAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
 const SYSTEM_ACTOR: &str = "system";
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -29,6 +31,31 @@ pub struct Mutation<T> {
     pub summary: String,
 }
 
+/// Creates the database file readable by its owner only, when there is none yet.
+/// The file holds certificate ciphertext, token hashes and, since request
+/// sampling, redacted request data (client addresses, paths, optionally bodies);
+/// SQLite gives the `-wal` and `-shm` files the mode of the main file. An
+/// existing file keeps whatever mode its owner chose.
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+    {
+        Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => Err(err),
+        _ => Ok(()),
+    }
+}
+
+/// Windows has no mode bits; the state directory's access rules apply.
+#[cfg(not(unix))]
+fn create_private_file(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// A synchronous handle on the SQLite file. It is not `Sync`; the async
 /// [`Store`](crate::Store) keeps one on a dedicated thread.
 pub struct Database {
@@ -42,7 +69,22 @@ impl Database {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
+        create_private_file(path)?;
         Self::prepare(Connection::open(path)?)
+    }
+
+    /// Opens another connection to a database this process already opened, for
+    /// the sample service: its writes go on a thread of their own, so a burst of
+    /// sample batches never queues in front of a configuration write. Writers
+    /// still take turns in SQLite; one that cannot get the lock within
+    /// `busy_timeout` fails with an error instead of waiting.
+    pub fn open_secondary(
+        path: &Path,
+        busy_timeout: std::time::Duration,
+    ) -> Result<Self, StoreError> {
+        let database = Self::prepare(Connection::open(path)?)?;
+        database.conn.busy_timeout(busy_timeout)?;
+        Ok(database)
     }
 
     /// Opens an existing database for reading only: nothing is created, no
@@ -78,6 +120,8 @@ impl Database {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Keeps the WAL file from staying large after a burst of writes (spike G2).
+        conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
         // Returns the resulting mode as a row; in-memory databases stay "memory".
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
         let database = Self { conn };
@@ -120,6 +164,22 @@ impl Database {
     /// The latest revision number (0 for a fresh database).
     pub fn current_version(&self) -> Result<u64, StoreError> {
         revision::current_version(&self.conn)
+    }
+
+    /// Runs `write` in one write transaction that records **no revision**: for
+    /// high-volume data that is not configuration (samples). Nothing here may
+    /// change `Config`; nothing is audited per call and the cluster generation
+    /// does not move, so other instances do not reload.
+    pub fn write_unrecorded<T>(
+        &mut self,
+        write: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let value = write(&tx)?;
+        tx.commit()?;
+        Ok(value)
     }
 
     /// [`write_as`](Self::write_as) with the actor `system`.
@@ -167,6 +227,38 @@ mod tests {
     use super::*;
     use crate::repository::subsystems;
     use crate::test_support::{seed, subsystem_fields};
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_database_and_its_wal_files_are_readable_by_the_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fast-proxy.db");
+        let mut db = Database::open(&path).unwrap();
+        seed(&mut db, "shop", "s.example.com");
+        assert_eq!(mode_of(&path), 0o600);
+        for suffix in ["-wal", "-shm"] {
+            let side = dir.path().join(format!("fast-proxy.db{suffix}"));
+            assert_eq!(mode_of(&side), 0o600, "{suffix}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_database_keeps_the_mode_its_owner_gave_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fast-proxy.db");
+        drop(Database::open(&path).unwrap());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        drop(Database::open(&path).unwrap());
+        assert_eq!(mode_of(&path), 0o640);
+    }
 
     #[test]
     fn creates_the_schema_in_an_empty_file_and_reopens_idempotently() {
@@ -264,8 +356,108 @@ mod tests {
     }
 
     #[test]
+    fn a_secondary_connection_shares_the_file_and_sets_the_wal_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        let mut primary = Database::open(&path).unwrap();
+        let mut secondary =
+            Database::open_secondary(&path, std::time::Duration::from_secs(1)).unwrap();
+        seed(&mut primary, "shop", "s.example.com");
+        assert_eq!(
+            secondary.load_all().unwrap().subsystems.len(),
+            1,
+            "it sees the primary's commit"
+        );
+        let (mode, limit): (String, i64) = secondary
+            .read(|c| {
+                Ok((
+                    c.pragma_query_value(None, "journal_mode", |r| r.get(0))?,
+                    c.pragma_query_value(None, "journal_size_limit", |r| r.get(0))?,
+                ))
+            })
+            .unwrap();
+        assert_eq!((mode.as_str(), limit), ("wal", WAL_SIZE_LIMIT_BYTES));
+        secondary
+            .write_unrecorded(|c| {
+                c.execute(
+                    "INSERT INTO vault (id, check_nonce, check_blob) VALUES (1, x'00', x'00')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let vault_rows: i64 = primary
+            .read(|c| Ok(c.query_row("SELECT COUNT(*) FROM vault", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(vault_rows, 1, "the primary sees the secondary's commit");
+    }
+
+    #[test]
+    fn writers_on_two_connections_take_turns_and_both_finish() {
+        use crate::repository::samples::{self, NewSample};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        let mut primary = Database::open(&path).unwrap();
+        let sample_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut secondary =
+                Database::open_secondary(&sample_path, std::time::Duration::from_secs(5)).unwrap();
+            for round in 0..40 {
+                let batch: Vec<NewSample> = (0..50)
+                    .map(|n| NewSample {
+                        at_ms: round * 100 + n,
+                        instance: "b".into(),
+                        request_id: format!("r{round}-{n}"),
+                        triggers: [fast_proxy_model::Trigger::Slow].into_iter().collect(),
+                        subsystem: "shop".into(),
+                        route: "/".into(),
+                        client: "c".into(),
+                        method: "GET".into(),
+                        status: 200,
+                        total_ms: 1,
+                        detail: "x".repeat(1500),
+                    })
+                    .collect();
+                secondary
+                    .write_unrecorded(|c| samples::insert_batch(c, &batch))
+                    .unwrap();
+            }
+        });
+        for n in 0..40 {
+            seed(&mut primary, &format!("s{n}"), &format!("s{n}.example.com"));
+        }
+        writer.join().unwrap();
+        assert_eq!(
+            primary.current_version().unwrap(),
+            40,
+            "only the configuration writes made revisions"
+        );
+        assert_eq!(primary.read(samples::usage).unwrap().rows, 2000);
+    }
+
+    #[test]
+    fn a_secondary_that_cannot_get_the_write_lock_fails_instead_of_hanging() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("x.db");
+        drop(Database::open(&path).unwrap());
+        let holder = Connection::open(&path).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut secondary =
+            Database::open_secondary(&path, std::time::Duration::from_millis(100)).unwrap();
+        let started = std::time::Instant::now();
+        let err = secondary.write_unrecorded(|_| Ok(())).unwrap_err();
+        assert!(matches!(err, StoreError::Internal(_)), "{err}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "it gave up at the busy timeout"
+        );
+        holder.execute_batch("ROLLBACK").unwrap();
+        secondary.write_unrecorded(|_| Ok(())).unwrap();
+    }
+
+    #[test]
     fn rejects_a_database_with_a_different_schema_version() {
-        for found in [1, 2, 3, 99] {
+        for found in [1, 2, 3, 4, 99] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("old.db");
             Connection::open(&path)

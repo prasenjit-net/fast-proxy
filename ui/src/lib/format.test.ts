@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatBytes,
   formatCountdown,
   formatDurationMs,
   formatNumber,
@@ -97,5 +98,17 @@ describe("formatCountdown", () => {
     expect(formatCountdown(3723)).toBe("1:02:03");
     expect(formatCountdown(0.4)).toBe("ending");
     expect(formatCountdown(-5)).toBe("ending");
+  });
+});
+
+describe("formatBytes", () => {
+  it("uses the largest unit that keeps the number short", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(1023)).toBe("1023 B");
+    expect(formatBytes(1024)).toBe("1.0 KiB");
+    expect(formatBytes(2048)).toBe("2.0 KiB");
+    expect(formatBytes(12 * 1024 * 1024)).toBe("12 MiB");
+    expect(formatBytes(256 * 1024 * 1024)).toBe("256 MiB");
+    expect(formatBytes(3 * 1024 ** 3)).toBe("3.0 GiB");
   });
 });

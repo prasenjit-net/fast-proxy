@@ -4,6 +4,8 @@ use std::time::Duration;
 use fast_proxy_tls::MinTlsVersion;
 use serde::{Deserialize, Deserializer};
 
+use super::duration::deserialize_duration;
+
 /// The `[data_plane.tls]` section: the process-wide TLS switch and policy.
 /// There are no certificate or key entries: certificates live in the database
 /// and are managed in the admin UI/API (ADR 0010).
@@ -65,9 +67,4 @@ fn deserialize_min_version<'de, D: Deserializer<'de>>(
     let raw = String::deserialize(deserializer)?;
     MinTlsVersion::parse(&raw)
         .ok_or_else(|| serde::de::Error::custom("min_version must be \"1.2\" or \"1.3\""))
-}
-
-fn deserialize_duration<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
-    let raw = String::deserialize(deserializer)?;
-    humantime::parse_duration(&raw).map_err(serde::de::Error::custom)
 }

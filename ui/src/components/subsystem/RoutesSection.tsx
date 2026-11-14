@@ -7,6 +7,7 @@ import { formatDurationMs } from "../../lib/format";
 import { useRefreshConfigData } from "../../lib/refreshConfigData";
 import type { Route, RouteInput, SubsystemDetail } from "../../lib/types";
 import ConfirmDialog from "../ConfirmDialog";
+import SamplingControl from "../sampling/SamplingControl";
 import MaintenanceControl from "../maintenance/MaintenanceControl";
 import RouteForm from "../forms/RouteForm";
 import Modal from "../Modal";
@@ -104,6 +105,7 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                 <th className="py-2 pr-4 font-medium">Timeouts</th>
                 <th className="py-2 pr-4 font-medium">Enabled</th>
                 <th className="py-2 pr-4 font-medium">Maintenance</th>
+                <th className="py-2 pr-4 font-medium">Sampling</th>
                 <th className="py-2" />
               </tr>
             </thead>
@@ -136,6 +138,9 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                         prefix: route.prefix,
                       }}
                     />
+                  </td>
+                  <td className="py-2 pr-4">
+                    <SamplingControl target={{ routeId: route.id }} label={`route ${route.prefix}`} />
                   </td>
                   <td className="py-2 text-right whitespace-nowrap">
                     <WriteOnly>

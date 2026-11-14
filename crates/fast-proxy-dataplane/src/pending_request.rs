@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use fast_proxy_telemetry::{AccessRecord, ActiveRequest, DataPlaneFields, Plane};
 
+use crate::sampling_tail::{Finished, SamplingTail};
 use crate::tracked_body::{Observability, RequestSummary};
 
 /// The status recorded for a request whose client left before the response.
@@ -22,6 +23,7 @@ struct Inner {
     version: String,
     fields: DataPlaneFields,
     active: ActiveRequest,
+    sampling: Option<SamplingTail>,
 }
 
 /// Owns everything needed to report a request, until it has a response.
@@ -48,6 +50,7 @@ impl PendingRequest {
                 version,
                 fields,
                 active,
+                sampling: None,
             }),
             observability,
         }
@@ -59,6 +62,20 @@ impl PendingRequest {
             Some(inner) => &mut inner.fields,
             None => unreachable!("a pending request is only emptied by complete or drop"),
         }
+    }
+
+    /// Starts gathering what the sampling decision will need.
+    pub(crate) fn set_sampling(&mut self, tail: SamplingTail) {
+        if let Some(inner) = &mut self.inner {
+            inner.sampling = Some(tail);
+        }
+    }
+
+    /// The sampling state, while there is no response yet.
+    pub(crate) fn sampling_mut(&mut self) -> Option<&mut SamplingTail> {
+        self.inner
+            .as_mut()
+            .and_then(|inner| inner.sampling.as_mut())
     }
 
     /// The response head is decided: hands over what the response body needs
@@ -75,6 +92,7 @@ impl PendingRequest {
             version: inner.version,
             status,
             fields: inner.fields,
+            sampling: inner.sampling,
         };
         (summary, inner.active)
     }
@@ -101,5 +119,20 @@ impl Drop for PendingRequest {
             data_plane: Some(fields),
             actor: None,
         });
+        if let (Some(tail), Some(sampler)) = (inner.sampling, self.observability.sampler.as_deref())
+        {
+            tail.finish(&Finished {
+                metrics,
+                sampler,
+                fields,
+                method: &inner.method,
+                uri: &inner.uri,
+                client: inner.client,
+                status: CLIENT_CLOSED,
+                elapsed,
+                bytes_out: 0,
+                cancelled: true,
+            });
+        }
     }
 }

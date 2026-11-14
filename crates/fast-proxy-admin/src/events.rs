@@ -70,6 +70,14 @@ pub enum Event {
         timestamp_ms: i64,
     },
 
+    /// Sampling changed: `change` is `settings`, `override` or `cleared` (the
+    /// stored samples were deleted). Carries no setting and no sample.
+    #[serde(rename_all = "camelCase")]
+    SamplingChanged {
+        change: &'static str,
+        timestamp_ms: i64,
+    },
+
     #[serde(rename_all = "camelCase")]
     Activity {
         kind: String,

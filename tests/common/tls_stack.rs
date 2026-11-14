@@ -128,10 +128,8 @@ impl Stack {
                 .await
                 .unwrap(),
         );
-        let observability = Observability {
-            metrics: metrics.clone(),
-            access_log: Arc::new(AccessLog::open(None).await),
-        };
+        let observability =
+            Observability::new(metrics.clone(), Arc::new(AccessLog::open(None).await));
         let forwarder = UpstreamClient::new(
             TrustedProxies::parse(&[]).unwrap(),
             metrics.clone(),

@@ -20,6 +20,11 @@ pub enum Command {
     Status(RemoteArgs),
     /// Show recent audit entries of a running proxy
     Audit(AuditArgs),
+    /// List or export the sampled requests of a running proxy (an admin token)
+    Samples {
+        #[command(subcommand)]
+        action: SamplesAction,
+    },
     /// Check configuration without starting anything
     Config {
         #[command(subcommand)]
@@ -126,6 +131,62 @@ pub struct AuditArgs {
     /// Only `ok`, `denied` or `failed`
     #[arg(long)]
     pub outcome: Option<String>,
+}
+
+/// Which sampled requests to pick; the same filters as the API's.
+#[derive(Args, Debug, Clone, Default)]
+pub struct SampleFilters {
+    /// Only samples with this trigger, such as upstream_failure or slow (repeatable)
+    #[arg(long = "trigger")]
+    pub triggers: Vec<String>,
+    /// Only this status class: 1 to 5 (4 is 4xx)
+    #[arg(long)]
+    pub status_class: Option<u8>,
+    /// Only this subsystem, by name
+    #[arg(long)]
+    pub subsystem: Option<String>,
+    /// Only this route prefix, such as /api
+    #[arg(long)]
+    pub route: Option<String>,
+    /// Only the samples taken by this instance
+    #[arg(long)]
+    pub instance: Option<String>,
+    /// Only this client address, such as 203.0.113.9:51544
+    #[arg(long)]
+    pub client: Option<String>,
+    /// Only requests that took at least this many milliseconds
+    #[arg(long)]
+    pub min_ms: Option<u32>,
+    /// Only samples from this long ago until now, such as 30m or 2h
+    #[arg(long, value_parser = humantime::parse_duration)]
+    pub since: Option<Duration>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SamplesAction {
+    /// Show recent samples, one line each, newest first
+    List(SamplesListArgs),
+    /// Print every matching sample as one JSON object per line
+    Export(SamplesExportArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SamplesListArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    #[command(flatten)]
+    pub filters: SampleFilters,
+    /// How many samples to show
+    #[arg(long, default_value_t = 20)]
+    pub limit: u32,
+}
+
+#[derive(Args, Debug)]
+pub struct SamplesExportArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    #[command(flatten)]
+    pub filters: SampleFilters,
 }
 
 #[derive(Subcommand, Debug)]

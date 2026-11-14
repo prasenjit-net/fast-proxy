@@ -10,6 +10,8 @@
 // back) refetches the live endpoint status and the upstream health summary.
 // A tokenChanged or maintenanceChanged event refetches everything that shows them
 // (the lists, the status card, the audit log).
+// A samplingChanged event (settings, an override, or the samples were cleared) refetches
+// the sampling view, the sample lists and the status card.
 // A certState event (a certificate was uploaded, replaced, deleted or generated)
 // refetches the certificate list, the TLS state and the status card.
 // The socket cannot carry an Authorization header, so each connection first
@@ -28,7 +30,12 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type Traffic } from "../lib/api";
-import { refreshCertificates, refreshConfigData, refreshEndpointStatus } from "../lib/refreshConfigData";
+import {
+  refreshCertificates,
+  refreshConfigData,
+  refreshEndpointStatus,
+  refreshSampling,
+} from "../lib/refreshConfigData";
 import { useToast } from "./ToastContext";
 
 export interface Activity {
@@ -53,6 +60,7 @@ type ServerEvent =
   | { type: "activity"; kind: string; message: string; timestampMs: number }
   | { type: "certState"; change: string; certificate: string; timestampMs: number }
   | { type: "tokenChanged"; change: "created" | "revoked"; token: string; timestampMs: number }
+  | { type: "samplingChanged"; change: "settings" | "override" | "cleared"; timestampMs: number }
   | {
       type: "maintenanceChanged";
       scope: "global" | "subsystem" | "route";
@@ -156,6 +164,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           void refreshConfigData(queryClientRef.current);
         } else if (event.type === "tokenChanged" || event.type === "maintenanceChanged") {
           void refreshConfigData(queryClientRef.current);
+        } else if (event.type === "samplingChanged") {
+          void refreshSampling(queryClientRef.current);
         } else if (event.type === "certState") {
           void refreshCertificates(queryClientRef.current);
         } else if (event.type === "endpointState") {

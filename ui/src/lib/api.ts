@@ -30,6 +30,14 @@ import type {
   VersionOnly,
   AuditFilters,
   AuditPage,
+  SampleDetail,
+  SampleFilters,
+  SamplePage,
+  SamplingOverride,
+  SamplingOverrideInput,
+  SamplingSettings,
+  SamplingSettingsInput,
+  SamplingView,
   CreatedToken,
   MaintenanceInput,
   MaintenanceScope,
@@ -67,6 +75,25 @@ function auditQuery(filters: AuditFilters, before: number | null): string {
   return params.toString();
 }
 
+function samplesQuery(filters: SampleFilters, before: number | null, limit?: number): string {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", String(limit));
+  if (before) params.set("before", String(before));
+  if (filters.trigger) params.set("trigger", filters.trigger);
+  if (filters.statusClass) params.set("statusClass", String(filters.statusClass));
+  for (const name of ["subsystem", "route", "instance", "client"] as const) {
+    if (filters[name]) params.set(name, filters[name]);
+  }
+  if (filters.minMs) params.set("minMs", String(filters.minMs));
+  if (filters.sinceMs) params.set("since", String(filters.sinceMs));
+  return params.toString();
+}
+
+/** The query string the export endpoint takes for `filters` (the same filters, no paging). */
+export function samplesExportQuery(filters: SampleFilters): string {
+  return samplesQuery(filters, null);
+}
+
 export const api = {
   /** Who the token (this tab's, or `token` when given) belongs to; a given token is not stored. */
   whoami: (token?: string) =>
@@ -89,6 +116,25 @@ export const api = {
     request<MaintenanceSet>(maintenancePath(target), send("PUT", input)),
   clearMaintenance: (target: MaintenanceTarget) =>
     request<VersionOnly>(maintenancePath(target), send("DELETE")),
+
+  // request sampling: the settings and overrides (a viewer may read them), and the
+  // sampled requests themselves (an admin only)
+  sampling: () => request<Envelope<SamplingView>>("/api/sampling"),
+  putSampling: (input: SamplingSettingsInput) =>
+    request<Envelope<SamplingSettings>>("/api/sampling", send("PUT", input)),
+  putSamplingOverride: (input: SamplingOverrideInput) =>
+    request<Envelope<SamplingOverride>>("/api/sampling/overrides", send("PUT", input)),
+  deleteSamplingOverride: (target: { subsystemId: number } | { routeId: number }) =>
+    request<VersionOnly>(
+      `/api/sampling/overrides?${new URLSearchParams(
+        Object.entries(target).map(([name, id]) => [name, String(id)]),
+      )}`,
+      send("DELETE"),
+    ),
+  samples: (filters: SampleFilters = {}, before: number | null = null) =>
+    request<SamplePage>(`/api/samples?${samplesQuery(filters, before, 50)}`),
+  sample: (id: number) => request<Envelope<SampleDetail>>(`/api/samples/${id}`),
+  clearSamples: () => request<{ deleted: number }>("/api/samples", send("DELETE")),
 
   // the audit log
   audit: (filters: AuditFilters = {}, before: number | null = null) =>

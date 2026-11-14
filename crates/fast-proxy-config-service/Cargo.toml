@@ -20,6 +20,7 @@ tokio-util = "0.7"
 tracing = { workspace = true }
 
 [dev-dependencies]
+fast-proxy-sampling = { path = "../fast-proxy-sampling" }
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 base64 = "0.22"
 tempfile = { workspace = true }

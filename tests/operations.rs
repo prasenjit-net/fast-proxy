@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use common::console::{printed, start_ok, token_in, Running};
+use common::console::{bootstrap_token, start_ok, Running};
 use common::flaky::FlakyBackend;
 use common::{http_with_headers, wait_until};
 use serde_json::{json, Value};
@@ -28,7 +28,7 @@ struct Ops {
 fn start() -> Ops {
     let dir = tempfile::tempdir().unwrap();
     let running = start_ok(dir.path(), &[]);
-    let bootstrap = token_in(&printed(&running)).expect("the bootstrap token is printed");
+    let bootstrap = bootstrap_token(&running).expect("the bootstrap token is printed");
     Ops {
         running,
         bootstrap,

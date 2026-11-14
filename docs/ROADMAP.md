@@ -332,8 +332,8 @@ interesting cases can be selected.
   reason, and optionally a size-capped body.
 - **Safety**: header and body redaction (Authorization, Cookie, configurable
   list), body capture off by default, per-route opt-in.
-- **Bounded cost**: in-memory ring buffer with a global rate limit, optional
-  spill to a rotating file. Sampling must never block or slow the request path.
+- **Bounded cost**: samples are stored in the shared database (so they work with
+  several instances), bounded by retention, with a per-instance rate limit. Sampling must never block or slow the request path.
 - Browsable and exportable from the admin UI and API.
 
 ## 5. Roadmap
@@ -451,10 +451,12 @@ Plan and outcome: [M5-PLAN.md](M5-PLAN.md).
 
 ### M6: Request sampling
 
-- [ ] Tail-based sampler with trigger rules and baseline sampling.
-- [ ] Redaction, size caps, per-route opt-in for bodies.
-- [ ] Bounded ring buffer + optional file spill; global rate limit.
-- [ ] Admin API and UI to browse, filter, and export samples.
+Detailed task plan: [M6-PLAN.md](M6-PLAN.md). Complete (pending the owner's manual check).
+
+- [x] Tail-based sampler with trigger rules and baseline sampling.
+- [x] Redaction, size caps, per-route opt-in for bodies.
+- [x] Samples stored in the shared database (bounded by retention in age, rows and bytes, written in batches off the request path, readable from every instance); per-instance rate limit. (Replaces the ring buffer and file spill; see [M6-PLAN.md](M6-PLAN.md).)
+- [x] Admin API and UI to browse, filter, and export samples.
 
 ### M7: Hardening and 1.0
 
@@ -545,3 +547,5 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | 2026-11-10 | M3 outcome: all F1-F29 held, with these differences. The `Forwarded` header was never added (the proxy only ever set `X-Forwarded-*`). Upstream HTTP/2 stays out (decision C4: pooled HTTP/1.1 upstream connections cost 1% to 3%, see [benchmarks.md](benchmarks.md) and [ADR 0013](adr/0013-upstream-tls.md)). A metric for upstream groups that do not verify certificates (`fastproxy_upstream_tls{verify="false"}`) was added during the security review because F16 required it and it was missing. Session resumption was not benchmarked separately (the load generator has no switch for it). |
 | 2026-11-10 | M5 design decisions H1-H19 **proposed** ([M5-PLAN.md](M5-PLAN.md) section 3, ADRs [0015](adr/0015-admin-authentication.md) to [0019](adr/0019-cli-and-reload.md)); pending owner confirmation. M4 (ACME) is skipped for now; M5 section 11 pins what it must leave room for. |
 | 2026-11-11 | M5 outcome: H1-H19 held as built (the owner's confirmation in #42 is still pending); see [M5-PLAN.md](M5-PLAN.md) section 12. Differences: the security review found and fixed the bypass secret header being forwarded to the upstream and a missing `nosniff` on the maintenance answer, and added the two admin metrics that exit criterion 9 asks for (`fastproxy_admin_requests_total`, `fastproxy_audit_entries_total`). Maintenance adds nothing measurable to a request it does not close (within 1.3% of M3) and answers 1.7 to 2.0 times faster than it proxies ([benchmarks.md](benchmarks.md)). Open: the browser click-through, the stack merge, the release, the M3 follow-ups, configuration import/export. |
+| 2026-11-11 | M6 design decisions J1-J19 **accepted by the owner** ([M6-PLAN.md](M6-PLAN.md) section 3, ADRs [0020](adr/0020-tail-based-sampler.md) to [0023](adr/0023-sampling-settings-and-access.md)); spike G2 (2026-11-12) confirmed J15 and J17 (request-head cost about 77 ns per request; sample writes do not slow configuration writes at 100 times the default rate). Tail-based sampling after the response; an upstream's own 5xx is not a trigger, a connectivity failure is; a per-key storm guard (burst 3, then 1 per 30 s) keeps an outage from flooding the samples; **samples are stored in the shared database** (cluster-wide, bounded by shared retention, written in batches by a sample service with no revision) instead of a ring buffer and spill file; redaction always on, bodies opt-in per route; sampling settings outside `Config` and samples readable by `admin` only. |
+| 2026-11-13 | M6 outcome: all exit criteria held in end-to-end tests against the real binary. The load test found a real bug (the token bucket refilled completely when a concurrent caller's clock reading was a few ms old; the storm guard and rate limiter leaked under load; fixed, with property tests); the security review found the database file created world-readable (now 0600) and `Referer`/`Location` queries stored unredacted (now redacted). Sampling costs +0.1% on healthy traffic and -4.6% when every request is a connectivity failure ([benchmarks.md](benchmarks.md)). See [security-review-m6.md](security-review-m6.md). |

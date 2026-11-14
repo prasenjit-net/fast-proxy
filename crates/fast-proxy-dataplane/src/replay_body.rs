@@ -10,7 +10,7 @@
 
 use std::error::Error;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 
@@ -20,9 +20,72 @@ use hyper::body::Incoming;
 
 type BodyError = Box<dyn Error + Send + Sync>;
 
+/// What to learn about the request body while it streams to the upstream
+/// (for the sampler): how many bytes were read, and optionally the first few.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyObservation {
+    /// How many bytes of the start of the body to keep; 0 only counts.
+    pub capture_cap: usize,
+}
+
+/// What was seen of a request body. Shared between the attempts and whoever
+/// reports the request afterwards; it holds no part of the connection, so
+/// keeping it alive after the response costs nothing.
+pub struct BodyStats {
+    bytes: AtomicU64,
+    tee: Option<Mutex<Tee>>,
+}
+
+struct Tee {
+    cap: usize,
+    captured: Vec<u8>,
+}
+
+impl BodyStats {
+    fn new(observation: BodyObservation) -> Self {
+        Self {
+            bytes: AtomicU64::new(0),
+            tee: (observation.capture_cap > 0).then(|| {
+                Mutex::new(Tee {
+                    cap: observation.capture_cap,
+                    captured: Vec::new(),
+                })
+            }),
+        }
+    }
+
+    /// Notes one frame of the body. The body is read once, by whichever attempt
+    /// sent it, so nothing is ever noted twice.
+    fn record(&self, data: &[u8]) {
+        self.bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+        let Some(tee) = &self.tee else {
+            return;
+        };
+        let mut tee = tee.lock().unwrap_or_else(PoisonError::into_inner);
+        let room = tee.cap.saturating_sub(tee.captured.len());
+        if room > 0 {
+            tee.captured
+                .extend_from_slice(&data[..room.min(data.len())]);
+        }
+    }
+
+    /// How many body bytes have been read so far.
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// The captured start of the body, and whether the body was longer.
+    pub fn captured(&self) -> Option<(Vec<u8>, bool)> {
+        let tee = self.tee.as_ref()?;
+        let tee = tee.lock().unwrap_or_else(PoisonError::into_inner);
+        Some((tee.captured.clone(), self.bytes_read() > tee.cap as u64))
+    }
+}
+
 struct Shared {
     body: Mutex<Incoming>,
     polled: AtomicBool,
+    stats: Option<Arc<BodyStats>>,
 }
 
 /// Owns a request body across attempts.
@@ -32,7 +95,8 @@ pub struct BodyOwner {
 }
 
 impl BodyOwner {
-    pub fn new(body: Incoming) -> Self {
+    /// `observation` asks to count (and perhaps capture) the body as it is read.
+    pub fn new(body: Incoming, observation: Option<BodyObservation>) -> Self {
         if body.is_end_stream() {
             return Self { shared: None };
         }
@@ -40,8 +104,15 @@ impl BodyOwner {
             shared: Some(Arc::new(Shared {
                 body: Mutex::new(body),
                 polled: AtomicBool::new(false),
+                stats: observation.map(|observation| Arc::new(BodyStats::new(observation))),
             })),
         }
+    }
+
+    /// What was seen of the body; `None` unless it was observed (and it has
+    /// one).
+    pub fn stats(&self) -> Option<Arc<BodyStats>> {
+        self.shared.as_ref().and_then(|shared| shared.stats.clone())
     }
 
     /// The body to send on the next attempt.
@@ -78,9 +149,13 @@ impl Body for ReplayBody {
         };
         shared.polled.store(true, Ordering::SeqCst);
         let mut body = shared.body.lock().unwrap_or_else(PoisonError::into_inner);
-        Pin::new(&mut *body)
-            .poll_frame(cx)
-            .map_err(|err| Box::new(err) as BodyError)
+        let polled = Pin::new(&mut *body).poll_frame(cx);
+        if let (Some(stats), Poll::Ready(Some(Ok(frame)))) = (&shared.stats, &polled) {
+            if let Some(data) = frame.data_ref() {
+                stats.record(data);
+            }
+        }
+        polled.map_err(|err| Box::new(err) as BodyError)
     }
 
     fn is_end_stream(&self) -> bool {
@@ -125,6 +200,7 @@ mod tests {
     async fn with_incoming<T: Send + 'static>(
         method: &str,
         body: &str,
+        observation: Option<BodyObservation>,
         scenario: impl Fn(BodyOwner) -> std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>
             + Send
             + Sync
@@ -139,7 +215,7 @@ mod tests {
             let service = service_fn(move |request: Request<Incoming>| {
                 let (tx, scenario) = (tx.clone(), scenario.clone());
                 async move {
-                    let owner = BodyOwner::new(request.into_body());
+                    let owner = BodyOwner::new(request.into_body(), observation);
                     let _ = tx.send(scenario(owner).await);
                     Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::new())))
                 }
@@ -183,7 +259,7 @@ mod tests {
     #[tokio::test]
     async fn a_connect_failure_never_polls_the_body_so_the_request_stays_replayable() {
         let refused = refused_addr().await;
-        let (failed, is_connect, replayable) = with_incoming("POST", "hello", move |owner| {
+        let (failed, is_connect, replayable) = with_incoming("POST", "hello", None, move |owner| {
             Box::pin(async move {
                 let result = client().request(post_to(refused, &owner)).await;
                 let err = result.unwrap_err();
@@ -213,7 +289,7 @@ mod tests {
                 .serve_connection(TokioIo::new(stream), service)
                 .await;
         });
-        let echoed = with_incoming("POST", "hello world", move |owner| {
+        let echoed = with_incoming("POST", "hello world", None, move |owner| {
             Box::pin(async move {
                 assert!(client().request(post_to(refused, &owner)).await.is_err());
                 assert!(owner.is_replayable());
@@ -245,7 +321,7 @@ mod tests {
                 let _ = stream.read(&mut buffer).await;
             }
         });
-        let (is_connect, replayable) = with_incoming("POST", "payload", move |owner| {
+        let (is_connect, replayable) = with_incoming("POST", "payload", None, move |owner| {
             Box::pin(async move {
                 let err = client()
                     .request(post_to(rude_addr, &owner))
@@ -276,7 +352,7 @@ mod tests {
                 let _ = stream.read(&mut buffer).await;
             }
         });
-        let replayable = with_incoming("GET", "", move |owner| {
+        let replayable = with_incoming("GET", "", None, move |owner| {
             Box::pin(async move {
                 let request = Request::get(format!("http://{rude_addr}/"))
                     .body(owner.attempt())
@@ -287,6 +363,106 @@ mod tests {
         })
         .await;
         assert!(replayable);
+    }
+
+    fn observed(cap: usize) -> Option<BodyObservation> {
+        Some(BodyObservation { capture_cap: cap })
+    }
+
+    /// Reads the whole body through one attempt's view and returns what the
+    /// observer saw.
+    async fn read_through(owner: &BodyOwner) -> Option<Arc<BodyStats>> {
+        let mut body = owner.attempt();
+        while let Some(frame) = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await
+        {
+            frame.unwrap();
+        }
+        owner.stats()
+    }
+
+    #[tokio::test]
+    async fn an_observed_body_is_counted_and_its_start_is_captured_up_to_the_cap() {
+        for (cap, body, expect, truncated) in [
+            (5usize, "hello world", "hello", true),
+            (11, "hello world", "hello world", false),
+            (12, "hello world", "hello world", false),
+            (10, "hello world", "hello worl", true),
+        ] {
+            let (bytes, captured) = with_incoming("POST", body, observed(cap), move |owner| {
+                Box::pin(async move {
+                    let stats = read_through(&owner).await.unwrap();
+                    (stats.bytes_read(), stats.captured().unwrap())
+                })
+            })
+            .await;
+            assert_eq!(bytes, body.len() as u64, "cap {cap}: every byte is counted");
+            assert_eq!(captured.0, expect.as_bytes(), "cap {cap}");
+            assert_eq!(captured.1, truncated, "cap {cap}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cap_of_zero_only_counts() {
+        let (bytes, captured) = with_incoming("POST", "hello world", observed(0), |owner| {
+            Box::pin(async move {
+                let stats = read_through(&owner).await.unwrap();
+                (stats.bytes_read(), stats.captured())
+            })
+        })
+        .await;
+        assert_eq!(bytes, 11);
+        assert!(captured.is_none(), "nothing is buffered when only counting");
+    }
+
+    #[tokio::test]
+    async fn a_body_nobody_asked_to_observe_has_no_stats() {
+        let stats = with_incoming("POST", "hello", None, |owner| {
+            Box::pin(async move { read_through(&owner).await.is_none() })
+        })
+        .await;
+        assert!(stats);
+    }
+
+    #[tokio::test]
+    async fn a_retried_request_is_counted_and_captured_once() {
+        let refused = refused_addr().await;
+        let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_addr = echo.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = echo.accept().await.unwrap();
+            let service = service_fn(move |request: Request<Incoming>| async move {
+                let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                Ok::<_, std::convert::Infallible>(Response::new(Full::new(bytes)))
+            });
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+        let (bytes, captured) = with_incoming("POST", "hello world", observed(64), move |owner| {
+            Box::pin(async move {
+                assert!(client().request(post_to(refused, &owner)).await.is_err());
+                let response = client().request(post_to(echo_addr, &owner)).await.unwrap();
+                let _ = response.into_body().collect().await.unwrap();
+                let stats = owner.stats().unwrap();
+                (stats.bytes_read(), stats.captured().unwrap().0)
+            })
+        })
+        .await;
+        assert_eq!(
+            bytes, 11,
+            "the failed attempt never read the body, the second read it once"
+        );
+        assert_eq!(captured, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn the_stats_outlive_the_body() {
+        let stats = with_incoming("POST", "hello", observed(8), |owner| {
+            Box::pin(async move { read_through(&owner).await.unwrap() })
+        })
+        .await;
+        assert_eq!(stats.bytes_read(), 5);
+        assert_eq!(stats.captured().unwrap().0, b"hello");
     }
 
     #[test]

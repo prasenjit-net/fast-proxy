@@ -8,10 +8,12 @@ use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 
 use fast_proxy_balancing::InFlightGuard;
+use fast_proxy_sampling::Sampler;
 use fast_proxy_telemetry::{
     AccessLog, AccessRecord, ActiveRequest, DataPlaneFields, Metrics, Plane,
 };
 
+use crate::sampling_tail::{Finished, SamplingTail};
 use crate::ResponseBody;
 
 /// The shared sinks every request reports to when it finishes.
@@ -19,6 +21,25 @@ use crate::ResponseBody;
 pub struct Observability {
     pub metrics: Arc<Metrics>,
     pub access_log: Arc<AccessLog>,
+    /// Where sampled requests go; `None` when sampling is off for the process.
+    pub sampler: Option<Arc<Sampler>>,
+}
+
+impl Observability {
+    /// Metrics and the access log, with no sampling.
+    pub fn new(metrics: Arc<Metrics>, access_log: Arc<AccessLog>) -> Self {
+        Self {
+            metrics,
+            access_log,
+            sampler: None,
+        }
+    }
+
+    /// Turns on sampling through `sampler`.
+    pub fn with_sampler(mut self, sampler: Arc<Sampler>) -> Self {
+        self.sampler = Some(sampler);
+        self
+    }
 }
 
 /// Everything known about a request once its response head is decided.
@@ -30,6 +51,8 @@ pub struct RequestSummary {
     pub version: String,
     pub status: u16,
     pub fields: DataPlaneFields,
+    /// What the sampling decision needs, when sampling is on for the request.
+    pub(crate) sampling: Option<SamplingTail>,
 }
 
 /// Counts the response bytes as they stream to the client, and reports the
@@ -82,6 +105,14 @@ impl Body for TrackedBody {
         if let Poll::Ready(Some(Ok(frame))) = &polled {
             if let Some(data) = frame.data_ref() {
                 self.bytes_out += data.len() as u64;
+                let tee = self
+                    .report
+                    .as_mut()
+                    .and_then(|report| report.summary.sampling.as_mut())
+                    .and_then(|tail| tail.response_tee.as_mut());
+                if let Some(tee) = tee {
+                    tee.record(data);
+                }
             }
         }
         polled
@@ -107,6 +138,7 @@ impl Drop for TrackedBody {
             ..
         } = report;
         let elapsed = summary.started.elapsed();
+        let sampling = summary.sampling.take();
         summary.fields.bytes_out = self.bytes_out;
         observability.metrics.observe_request(
             &summary.fields.subsystem,
@@ -125,5 +157,19 @@ impl Drop for TrackedBody {
             data_plane: Some(&summary.fields),
             actor: None,
         });
+        if let (Some(tail), Some(sampler)) = (sampling, observability.sampler.as_deref()) {
+            tail.finish(&Finished {
+                metrics: &observability.metrics,
+                sampler,
+                fields: &summary.fields,
+                method: &summary.method,
+                uri: &summary.uri,
+                client: summary.client,
+                status: summary.status,
+                elapsed,
+                bytes_out: self.bytes_out,
+                cancelled: false,
+            });
+        }
     }
 }

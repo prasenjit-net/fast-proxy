@@ -12,7 +12,9 @@ mod validate;
 
 use std::process::ExitCode;
 
-use crate::cli::{Cli, Command, ConfigAction, MaintenanceAction, RemoteArgs, TokenAction};
+use crate::cli::{
+    Cli, Command, ConfigAction, MaintenanceAction, RemoteArgs, SamplesAction, TokenAction,
+};
 use crate::config::AppConfig;
 use client::{AdminClient, Trust};
 use failure::{Failure, Outcome};
@@ -49,6 +51,14 @@ async fn execute(cli: &Cli, command: &Command) -> Outcome {
         Command::Reload(remote) => remote::reload(&connect(cli, remote)?, remote.json).await,
         Command::Status(remote) => remote::status(&connect(cli, remote)?, remote.json).await,
         Command::Audit(args) => remote::audit(&connect(cli, &args.remote)?, args).await,
+        Command::Samples { action } => match action {
+            SamplesAction::List(args) => {
+                remote::samples_list(&connect(cli, &args.remote)?, args, now_ms()).await
+            }
+            SamplesAction::Export(args) => {
+                remote::samples_export(&connect(cli, &args.remote)?, args, now_ms()).await
+            }
+        },
         Command::Config { action } => match action {
             ConfigAction::Validate(args) => validate::run(cli, args.check_database.as_ref()),
         },

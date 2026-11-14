@@ -586,6 +586,8 @@ dependencies = [
  "fast-proxy-health",
  "fast-proxy-model",
  "fast-proxy-routing",
+ "fast-proxy-sample-service",
+ "fast-proxy-sampling",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
@@ -620,6 +622,8 @@ dependencies = [
  "fast-proxy-config-service",
  "fast-proxy-model",
  "fast-proxy-routing",
+ "fast-proxy-sample-service",
+ "fast-proxy-sampling",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
@@ -632,6 +636,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-rustls",
@@ -669,6 +674,7 @@ dependencies = [
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
+ "fast-proxy-sampling",
  "fast-proxy-store",
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
@@ -690,6 +696,7 @@ dependencies = [
  "fast-proxy-balancing",
  "fast-proxy-model",
  "fast-proxy-routing",
+ "fast-proxy-sampling",
  "fast-proxy-telemetry",
  "fast-proxy-test-pki",
  "fast-proxy-tls",
@@ -742,6 +749,7 @@ dependencies = [
  "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-model",
+ "fast-proxy-sampling",
  "fast-proxy-test-pki",
  "fast-proxy-tls",
  "http",
@@ -749,6 +757,28 @@ dependencies = [
  "rustls",
  "thiserror 2.0.19",
  "tracing",
+]
+
+[[package]]
+name = "fast-proxy-sample-service"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "fast-proxy-sampling",
+ "fast-proxy-store",
+ "proptest",
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "fast-proxy-sampling"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

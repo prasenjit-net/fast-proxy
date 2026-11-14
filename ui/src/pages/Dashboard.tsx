@@ -5,7 +5,7 @@ import StatCard from "../components/StatCard";
 import UpstreamHealthCard from "../components/UpstreamHealthCard";
 import { Link } from "@tanstack/react-router";
 import { useLive } from "../context/LiveContext";
-import { IconActivity, IconAlertTriangle, IconServer, IconUsers } from "../icons";
+import { IconActivity, IconAlertTriangle, IconSearch, IconServer, IconUsers } from "../icons";
 import { formatNumber, formatPercent, formatRate } from "../lib/format";
 
 export default function DashboardPage() {
@@ -15,7 +15,7 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 min-[560px]:grid-cols-2 xl:grid-cols-5">
         <StatCard
           icon={<IconActivity size={18} />}
           label="Requests / s"
@@ -47,6 +47,16 @@ export default function DashboardPage() {
           label="In flight"
           value={traffic ? formatNumber(traffic.activeRequests) : "—"}
           sub="requests being handled"
+        />
+        <StatCard
+          icon={<IconSearch size={18} />}
+          label="Samples / s"
+          value={traffic ? formatRate(traffic.samples.capturedPerSec) : "—"}
+          sub={
+            traffic
+              ? `${formatNumber(traffic.samples.capturedTotal)} kept, ${formatRate(traffic.samples.droppedPerSec)}/s dropped`
+              : "waiting for data"
+          }
         />
       </div>
 

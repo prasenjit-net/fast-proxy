@@ -10,6 +10,8 @@ use axum::Router;
 use fast_proxy_auth::{GeneratedSecret, PlaintextToken};
 use fast_proxy_config_service::{ChangeContext, ConfigService, TlsSettings};
 use fast_proxy_model::{Role, TokenName};
+use fast_proxy_sample_service::{SampleReader, SampleWriter};
+use fast_proxy_sampling::{Sample, SampleSink};
 use fast_proxy_store::repository::tokens::{self, NewToken};
 use fast_proxy_store::Store;
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
@@ -37,6 +39,9 @@ pub struct TestApp {
     pub config: Arc<ConfigService>,
     pub metrics: Arc<Metrics>,
     pub state: SharedState,
+    /// A database file of its own for the samples (the configuration store is
+    /// in memory), kept alive with the app.
+    samples_dir: tempfile::TempDir,
     /// The bearer token sent with every request; `None` sends none.
     pub token: Option<String>,
     /// Every route the router registered, with the access it needs.
@@ -172,6 +177,8 @@ impl TestApp {
         );
         // No access-log path, so tests never touch disk.
         let access_log = Arc::new(AccessLog::open(None).await);
+        let samples_dir = tempfile::tempdir().unwrap();
+        let samples_db = samples_dir.path().join("samples.db");
         let state = Arc::new(AdminState::new(
             UiConfig::default(),
             "0.0.0-test",
@@ -184,10 +191,12 @@ impl TestApp {
                 }],
                 database_path: "/tmp/test.db".into(),
                 tls,
+                sampling_enabled: true,
             },
             metrics.clone(),
             EndpointEvents::new(),
             security,
+            Arc::new(SampleReader::open(&samples_db, std::time::Duration::from_secs(5)).unwrap()),
         ));
         let (router, specs) = crate::router::build(state.clone());
         Self {
@@ -196,8 +205,57 @@ impl TestApp {
             config,
             metrics,
             state,
+            samples_dir,
             token: Some(admin_token),
         }
+    }
+
+    /// The next event on `events`, or a failure after ten seconds rather than a
+    /// test that waits for ever.
+    pub async fn next_event(
+        events: &mut tokio::sync::broadcast::Receiver<crate::events::Event>,
+    ) -> crate::events::Event {
+        tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+            .await
+            .expect("an event within ten seconds")
+            .expect("the event channel is open")
+    }
+
+    /// A subsystem with a host, an upstream and one `/` route; returns the
+    /// subsystem's id and the route's.
+    pub async fn site(&self, name: &str, host: &str) -> (i64, i64) {
+        let (status, body) = self
+            .post("/api/subsystems", serde_json::json!({ "name": name }))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let id = body["data"]["id"].as_i64().unwrap();
+        self.post(
+            &format!("/api/subsystems/{id}/hosts"),
+            serde_json::json!({ "pattern": host }),
+        )
+        .await;
+        let (_, upstream) = self
+            .post(
+                &format!("/api/subsystems/{id}/upstreams"),
+                serde_json::json!({ "name": "backend", "endpoints": [{ "addr": "127.0.0.1:3000" }] }),
+            )
+            .await;
+        let (status, route) = self
+            .post(
+                &format!("/api/subsystems/{id}/routes"),
+                serde_json::json!({ "prefix": "/", "upstreamGroupId": upstream["data"]["id"] }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{route}");
+        (id, route["data"]["id"].as_i64().unwrap())
+    }
+
+    /// Stores `samples` in the samples database, as another instance's sampler
+    /// would, and returns once they are written.
+    pub fn store_samples(&self, samples: Vec<Sample>) {
+        let path = self.samples_dir.path().join("samples.db");
+        let mut writer = SampleWriter::open(&path, std::time::Duration::from_secs(5)).unwrap();
+        writer.write_batch(samples).unwrap();
     }
 
     /// A request to `uri` as a browser on the admin origin would send it: the

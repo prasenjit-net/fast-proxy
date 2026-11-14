@@ -11,7 +11,8 @@ use crate::config::{AdminAuth, AppConfig};
 
 pub use subcommands::{
     AuditArgs, Command, ConfigAction, MaintenanceAction, MaintenanceOff, MaintenanceOn, RemoteArgs,
-    ScopeArgs, TokenAction, TokenCreate,
+    SampleFilters, SamplesAction, SamplesExportArgs, SamplesListArgs, ScopeArgs, TokenAction,
+    TokenCreate,
 };
 
 /// Fast, realtime-configurable ingress server and reverse proxy with an embedded admin UI.
@@ -73,6 +74,14 @@ pub struct Cli {
     /// Override [data_plane.tls].listen, the HTTPS address (for example 0.0.0.0:443)
     #[arg(long)]
     pub https_listen: Option<SocketAddr>,
+
+    /// Turn request sampling on, overriding [sampling].enabled
+    #[arg(long, conflicts_with = "no_sampling")]
+    pub sampling: bool,
+
+    /// Turn request sampling off, overriding [sampling].enabled
+    #[arg(long)]
+    pub no_sampling: bool,
 }
 
 impl Cli {
@@ -107,6 +116,12 @@ impl Cli {
         }
         if self.no_tls {
             config.data_plane.tls.enabled = false;
+        }
+        if self.sampling {
+            config.sampling.enabled = true;
+        }
+        if self.no_sampling {
+            config.sampling.enabled = false;
         }
         if let Some(listen) = self.https_listen {
             config.data_plane.tls.listen = listen;
@@ -272,6 +287,19 @@ mod tests {
         assert_eq!(config.data_plane.state_dir, PathBuf::from("/tmp/state"));
         assert_eq!(config.logging.level, "debug");
         assert_eq!(config.logging.access_log, Some(PathBuf::from("/tmp/a.log")));
+    }
+
+    #[test]
+    fn the_sampling_flags_override_the_file_in_both_directions() {
+        let mut config = AppConfig::default();
+        assert!(config.sampling.enabled, "on by default");
+        parse(&["--no-sampling"]).apply(&mut config);
+        assert!(!config.sampling.enabled);
+        parse(&["--sampling"]).apply(&mut config);
+        assert!(config.sampling.enabled);
+        parse(&[]).apply(&mut config);
+        assert!(config.sampling.enabled, "no flag leaves the file's value");
+        assert!(Cli::try_parse_from(["fast-proxy", "--sampling", "--no-sampling"]).is_err());
     }
 
     #[test]

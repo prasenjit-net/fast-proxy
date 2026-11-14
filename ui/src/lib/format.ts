@@ -52,3 +52,16 @@ export function formatCountdown(secondsLeft: number): string {
   if (m > 0) return `${m}:${two(s)}`;
   return `${s}s`;
 }
+
+/** A size in bytes as a short label: 512 B, 4.0 KiB, 12 MiB. */
+export function formatBytes(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  if (unit === 0) return `${value} B`;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}

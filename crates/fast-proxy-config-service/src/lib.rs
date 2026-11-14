@@ -12,6 +12,7 @@ mod dev_certificates;
 mod error;
 mod maintenance;
 mod metric_series;
+mod sampling;
 mod service;
 mod tls_state;
 mod tokens;
@@ -28,6 +29,8 @@ pub use tokens::{Bootstrap, CreatedToken};
 
 #[cfg(test)]
 mod operations_tests;
+#[cfg(test)]
+mod sampling_tests;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]

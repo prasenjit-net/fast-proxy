@@ -22,6 +22,12 @@ export function refreshCertificates(client: QueryClient): Promise<void> {
   return client.invalidateQueries({ predicate: (query) => keys.has(String(query.queryKey[0])) });
 }
 
+/** Refetches what shows sampling: the settings and overrides, and the sample lists. */
+export function refreshSampling(client: QueryClient): Promise<void> {
+  const keys = new Set(["sampling", "samples"]);
+  return client.invalidateQueries({ predicate: (query) => keys.has(String(query.queryKey[0])) });
+}
+
 /** A function that refreshes everything derived from the configuration. */
 export function useRefreshConfigData(): () => Promise<void> {
   const client = useQueryClient();

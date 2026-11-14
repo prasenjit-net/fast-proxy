@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use fast_proxy_auth::TokenCache;
 use fast_proxy_balancing::RuntimeRegistry;
-use fast_proxy_routing::{compile_all, MaintenanceInputs, Snapshot, SnapshotHolder};
+use fast_proxy_routing::{
+    compile_full, MaintenanceInputs, SamplingInputs, SamplingRuntime, Snapshot, SnapshotHolder,
+};
 use fast_proxy_store::repository::{audit, certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
 use fast_proxy_telemetry::{AuditResult, Metrics, ReloadOutcome, SyncResult};
@@ -14,6 +16,7 @@ use crate::change_context::committed_entry;
 use crate::dev_certificates;
 use crate::maintenance::stored_inputs;
 use crate::metric_series::{live_endpoints, maintenance_readings};
+use crate::sampling::stored_inputs as stored_sampling;
 use crate::tls_state::{Prepared, TlsSettings, TlsState, VaultStatus};
 use crate::{Audited, ChangeContext, StartError};
 
@@ -77,7 +80,7 @@ impl ConfigService {
         settings: TlsSettings,
     ) -> Result<Self, StartError> {
         let tls_enabled = settings.enabled;
-        let (config, version, has_certificates, check, maintenance) = store
+        let (config, version, has_certificates, check, maintenance, sampling) = store
             .run(|db| {
                 db.read(|conn| {
                     Ok((
@@ -86,6 +89,7 @@ impl ConfigService {
                         !certificates::list(conn)?.is_empty(),
                         vault::get(conn)?,
                         stored_inputs(conn, now_ms())?,
+                        stored_sampling(conn, SamplingRuntime::new())?,
                     ))
                 })
             })
@@ -97,12 +101,13 @@ impl ConfigService {
                 move |db| db.read(|conn| tls.build(conn))
             })
             .await?;
-        let snapshot = compile_all(
+        let snapshot = compile_full(
             version,
             &config,
             &RuntimeRegistry::new(),
             &tls.inputs(&prepared, false),
             &maintenance,
+            &sampling,
         )?;
         metrics.set_maintenance_active(&maintenance_readings(&snapshot));
         let holder = Arc::new(SnapshotHolder::new());
@@ -157,7 +162,9 @@ impl ConfigService {
             .await?;
             return Ok(());
         }
-        let previous = self.holder.load().runtime_registry();
+        let live = self.holder.load();
+        let previous = live.runtime_registry();
+        let sampling_runtime = live.sampling_runtime();
         let prepared = self
             .store
             .run({
@@ -165,7 +172,7 @@ impl ConfigService {
                 move |db| db.read(|conn| tls.build(conn))
             })
             .await?;
-        let (config, version, maintenance) = self
+        let (config, version, maintenance, sampling) = self
             .store
             .run(|db| {
                 db.read(|conn| {
@@ -173,12 +180,20 @@ impl ConfigService {
                         load::load_all(conn)?,
                         revision::current_version(conn)?,
                         stored_inputs(conn, now_ms())?,
+                        stored_sampling(conn, sampling_runtime)?,
                     ))
                 })
             })
             .await?;
         let inputs = self.tls.inputs(&prepared, true);
-        let snapshot = compile_all(version, &config, &previous, &inputs, &maintenance)?;
+        let snapshot = compile_full(
+            version,
+            &config,
+            &previous,
+            &inputs,
+            &maintenance,
+            &sampling,
+        )?;
         self.metrics
             .set_maintenance_active(&maintenance_readings(&snapshot));
         self.holder.swap(snapshot);
@@ -224,9 +239,11 @@ impl ConfigService {
     /// Loads the stored state, compiles it against the live runtime state and
     /// swaps it in. The caller holds the writer lock.
     async fn reload_from_database(&self) -> Result<ConfigChanged, StartError> {
-        let previous = self.holder.load().runtime_registry();
+        let live = self.holder.load();
+        let previous = live.runtime_registry();
+        let sampling_runtime = live.sampling_runtime();
         let tls = self.tls.clone();
-        let (config, version, prepared, maintenance) = self
+        let (config, version, prepared, maintenance, sampling) = self
             .store
             .run(move |db| {
                 db.read(|conn| {
@@ -236,12 +253,20 @@ impl ConfigService {
                         revision::current_version(conn)?,
                         tls.build(conn)?,
                         stored_inputs(conn, now_ms())?,
+                        stored_sampling(conn, sampling_runtime)?,
                     ))
                 })
             })
             .await?;
         let inputs = self.tls.inputs(&prepared, self.tls.settings.enabled);
-        let snapshot = compile_all(version, &config, &previous, &inputs, &maintenance)?;
+        let snapshot = compile_full(
+            version,
+            &config,
+            &previous,
+            &inputs,
+            &maintenance,
+            &sampling,
+        )?;
         self.metrics
             .set_maintenance_active(&maintenance_readings(&snapshot));
         self.metrics
@@ -297,6 +322,12 @@ impl ConfigService {
     /// Whether stored private keys can be read.
     pub fn vault_status(&self) -> VaultStatus {
         self.tls.status()
+    }
+
+    /// The name of this process in audit entries and samples (its pid and
+    /// start time), so shared records say which instance wrote them.
+    pub fn instance_id(&self) -> &str {
+        &self.instance
     }
 
     /// The live snapshot holder, shared with the data plane.
@@ -363,7 +394,9 @@ impl ConfigService {
         // Endpoint runtime state (health, ejection, latency) is carried from
         // the live snapshot into the new one; the writer lock keeps the live
         // snapshot from changing under us.
-        let previous = self.holder.load().runtime_registry();
+        let live = self.holder.load();
+        let previous = live.runtime_registry();
+        let sampling_runtime = live.sampling_runtime();
         let tls = self.tls.clone();
         let context = context.clone();
         let instance = self.instance.clone();
@@ -385,7 +418,13 @@ impl ConfigService {
                     audit::append(conn, &entry)?;
                     Ok(mutation)
                 };
-                persist_and_compile(db, &actor, audited_mutate, &previous, &tls)
+                persist_and_compile(
+                    db,
+                    &actor,
+                    audited_mutate,
+                    (&previous, sampling_runtime),
+                    &tls,
+                )
             })
             .await?;
         let mut snapshot = compiled.ok_or_else(|| {
@@ -467,13 +506,14 @@ fn persist_and_compile<T>(
     db: &mut Database,
     actor: &str,
     mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
-    previous: &RuntimeRegistry,
+    (previous, sampling_runtime): (&RuntimeRegistry, SamplingRuntime),
     tls: &TlsState,
 ) -> Result<PersistOutcome<T>, StoreError> {
     let mut compiled = None;
     let mut summary = String::new();
     let prepared: RefCell<Option<Prepared>> = RefCell::new(None);
     let maintenance: RefCell<Option<MaintenanceInputs>> = RefCell::new(None);
+    let sampling: RefCell<Option<SamplingInputs>> = RefCell::new(None);
     let written = db.write_as(
         actor,
         |conn| {
@@ -483,6 +523,7 @@ fn persist_and_compile<T>(
             // Read after the mutation, so a scope cascaded away with its
             // subsystem or route is not compiled.
             *maintenance.borrow_mut() = Some(stored_inputs(conn, now_ms())?);
+            *sampling.borrow_mut() = Some(stored_sampling(conn, sampling_runtime)?);
             Ok(mutation)
         },
         |config| {
@@ -494,8 +535,12 @@ fn persist_and_compile<T>(
             let Some(scopes) = borrowed_maintenance.as_ref() else {
                 return Err("maintenance was not read".to_string());
             };
+            let borrowed_sampling = sampling.borrow();
+            let Some(sampling_inputs) = borrowed_sampling.as_ref() else {
+                return Err("sampling settings were not read".to_string());
+            };
             let inputs = tls.inputs(ready, tls.settings.enabled);
-            match compile_all(0, config, previous, &inputs, scopes) {
+            match compile_full(0, config, previous, &inputs, scopes, sampling_inputs) {
                 Ok(snapshot) => {
                     compiled = Some(snapshot);
                     Ok(())

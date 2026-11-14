@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import { useConfig } from "../context/ConfigContext";
 import { useSession } from "../context/SessionContext";
 import {
+  IconActivity,
   IconClock,
   IconDashboard,
   IconExternal,
@@ -30,6 +31,7 @@ interface NavItem {
     | "/resolver"
     | "/tokens"
     | "/audit"
+    | "/samples"
     | "/settings";
   label: string;
   icon: ReactElement;
@@ -46,6 +48,7 @@ const NAV: NavItem[] = [
   { to: "/revisions", label: "Revisions", icon: <IconClock size={20} /> },
   { to: "/resolver", label: "Resolver", icon: <IconSearch size={20} /> },
   { to: "/audit", label: "Audit log", icon: <IconList size={20} /> },
+  { to: "/samples", label: "Sampled requests", icon: <IconActivity size={20} />, adminOnly: true },
   { to: "/tokens", label: "Tokens", icon: <IconKey size={20} />, adminOnly: true },
   { to: "/settings", label: "Settings", icon: <IconSliders size={20} /> },
 ];

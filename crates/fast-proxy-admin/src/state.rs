@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fast_proxy_config_service::ConfigService;
+use fast_proxy_sample_service::SampleReader;
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
 use tokio::sync::{broadcast, RwLock};
 
@@ -35,6 +36,8 @@ pub struct AdminState {
     pub endpoint_events: EndpointEvents,
     /// Authentication, the `Host` allow-list, the throttle and WebSocket tickets.
     pub security: AdminSecurity,
+    /// Reads the sampled requests of every instance sharing the database.
+    pub samples: Arc<SampleReader>,
 }
 
 pub type SharedState = Arc<AdminState>;
@@ -60,6 +63,7 @@ impl AdminState {
         metrics: Arc<Metrics>,
         endpoint_events: EndpointEvents,
         security: AdminSecurity,
+        samples: Arc<SampleReader>,
     ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
@@ -76,7 +80,17 @@ impl AdminState {
             metrics,
             endpoint_events,
             security,
+            samples,
         }
+    }
+
+    /// Tells every client sampling changed: `settings`, `override` or
+    /// `cleared` (the stored samples were deleted).
+    pub fn sampling_changed(&self, change: &'static str) {
+        self.broadcast(Event::SamplingChanged {
+            change,
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        });
     }
 
     pub fn broadcast(&self, event: Event) {

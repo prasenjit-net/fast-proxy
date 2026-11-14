@@ -1,0 +1,16 @@
+[package]
+name = "fast-proxy-sample-service"
+version = "0.0.0"
+edition = "2021"
+description = "Stores sampled requests in the shared database: the batched writer, the retention pruner and the reader (ADR 0022)"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-sampling = { path = "../fast-proxy-sampling" }
+fast-proxy-store = { path = "../fast-proxy-store" }
+
+[dev-dependencies]
+proptest = "1"
+tempfile = { workspace = true }
+rusqlite = { version = "0.37", features = ["bundled"] }

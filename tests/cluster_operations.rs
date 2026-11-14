@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::console::{printed, start_ok_with_config, token_in, Running};
+use common::console::{bootstrap_token, printed, start_ok_with_config, token_in, Running};
 use common::{http, http_with_headers, start_backend};
 use serde_json::{json, Value};
 
@@ -68,7 +68,7 @@ fn tokens_maintenance_and_the_audit_log_are_shared_by_two_processes() {
     let shared = tempfile::tempdir().unwrap();
     let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let a = instance(dir_a.path(), shared.path(), KEY_ONE);
-    let token = token_in(&printed(&a)).expect("the first instance prints the bootstrap token");
+    let token = bootstrap_token(&a).expect("the first instance prints the bootstrap token");
     let b = instance(dir_b.path(), shared.path(), KEY_TWO);
     assert!(
         token_in(&printed(&b)).is_none(),

@@ -19,8 +19,8 @@ describe("DashboardPage", () => {
   it("shows placeholders until the first traffic sample arrives", async () => {
     renderPage(DashboardPage, { path: "/" });
     expect(await screen.findByText("Requests / s")).toBeInTheDocument();
-    expect(screen.getAllByText("—")).toHaveLength(4);
-    expect(screen.getByText("waiting for data")).toBeInTheDocument();
+    expect(screen.getAllByText("—")).toHaveLength(5);
+    expect(screen.getAllByText("waiting for data")).toHaveLength(2);
     expect(screen.getByText(/waiting for live data/i)).toBeInTheDocument();
   });
 
@@ -29,6 +29,7 @@ describe("DashboardPage", () => {
       total: { requestsTotal: 4200, requestsPerSec: 3.25, errorRate: 0.025 },
       activeConnections: 7,
       activeRequests: 2,
+      samples: { capturedTotal: 31, capturedPerSec: 1.5, droppedPerSec: 0.25 },
     });
     live.value = { status: "online", traffic: sample, history: [sample, sample], activities: [] };
     renderPage(DashboardPage, { path: "/" });
@@ -42,6 +43,8 @@ describe("DashboardPage", () => {
     expect(card("Error rate").getByText("2.5%")).toBeInTheDocument();
     expect(card("Connections").getByText("7")).toBeInTheDocument();
     expect(card("In flight").getByText("2")).toBeInTheDocument();
+    expect(card("Samples / s").getByText("1.5")).toBeInTheDocument();
+    expect(card("Samples / s").getByText("31 kept, 0.3/s dropped")).toBeInTheDocument();
   });
 
   it("lists server activity", async () => {

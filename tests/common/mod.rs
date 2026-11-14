@@ -48,7 +48,6 @@ pub fn answer(mut stream: TcpStream, name: &str) {
 }
 
 /// A backend that waits `delay` before answering.
-#[cfg(unix)]
 pub fn start_slow_backend(name: &'static str, delay: Duration) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();

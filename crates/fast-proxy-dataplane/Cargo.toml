@@ -9,6 +9,7 @@ publish = false
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
+fast-proxy-sampling = { path = "../fast-proxy-sampling" }
 fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
 fast-proxy-tls = { path = "../fast-proxy-tls" }
 bytes = "1"
