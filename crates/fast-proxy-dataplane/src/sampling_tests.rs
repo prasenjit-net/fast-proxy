@@ -679,7 +679,9 @@ async fn an_outage_keeps_a_burst_of_samples_counts_the_rest_and_reports_them_lat
     let other = TestUpstream::start(Behavior::Sleep(Duration::from_millis(250))).await;
     let mut settings = quiet();
     settings.storm_burst = 3;
-    settings.storm_interval_secs = 1;
+    // Long enough that a slow machine (a refused connection takes about 2 s on
+    // Windows) cannot let the interval pass while the burst is being sent.
+    settings.storm_interval_secs = 5;
     settings.slow_threshold_ms = 100;
     let down = shop_with(&[&backend], vec![route(1, "/")]);
     let mut shop = down;
@@ -702,8 +704,12 @@ async fn an_outage_keeps_a_burst_of_samples_counts_the_rest_and_reports_them_lat
     shop.routes.push(slow_route);
     let proxy = start(shop, Setup::new(settings)).await;
 
-    for _ in 0..30 {
-        assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 502);
+    let addr = proxy.addr;
+    let requests: Vec<_> = (0..30)
+        .map(|_| tokio::spawn(async move { get(addr, HOST, "/", "").await.status }))
+        .collect();
+    for request in requests {
+        assert_eq!(request.await.unwrap(), 502);
     }
     proxy.settle().await;
     let kept = proxy.shop().len();
@@ -723,7 +729,7 @@ async fn an_outage_keeps_a_burst_of_samples_counts_the_rest_and_reports_them_lat
         .await;
 
     // After the interval the next failure is kept and says how many were lost.
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    tokio::time::sleep(Duration::from_millis(5_100)).await;
     get(proxy.addr, HOST, "/", "").await;
     proxy
         .wait_for("the sample that reports the outage", |s| {
