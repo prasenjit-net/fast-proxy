@@ -134,7 +134,7 @@ export default function ResolverPage() {
   }
 
   return (
-    <div className="flex max-w-[720px] flex-col gap-4">
+    <div className="flex max-w-[960px] flex-col gap-4">
       <section className="card">
         <div className="card-head">
           <h2>Try a request</h2>

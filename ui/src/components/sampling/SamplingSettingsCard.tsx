@@ -24,6 +24,12 @@ import Toggle from "../Toggle";
 
 type TextField = Exclude<keyof SamplingValues, "enabled" | "triggers">;
 
+function storedText(table: SamplingView["status"]["table"]): string {
+  if (!table) return "unknown";
+  const rows = `${formatNumber(table.rows)} ${table.rows === 1 ? "row" : "rows"}`;
+  return `${rows}, ${formatBytes(table.bytes)}`;
+}
+
 function Status({ view }: { view: SamplingView }) {
   const { status } = view;
   return (
@@ -44,11 +50,7 @@ function Status({ view }: { view: SamplingView }) {
       </div>
       <div>
         <dt className="text-ink-faint">Stored</dt>
-        <dd className="m-0 font-medium">
-          {status.table
-            ? `${formatNumber(status.table.rows)} rows, ${formatBytes(status.table.bytes)}`
-            : "unknown"}
-        </dd>
+        <dd className="m-0 font-medium">{storedText(status.table)}</dd>
       </div>
     </dl>
   );
@@ -143,6 +145,7 @@ function Form({ view }: { view: SamplingView }) {
 
       <fieldset className="flex flex-col gap-2" disabled={readOnly}>
         <legend className="mb-1 text-[0.82rem] font-medium">What gets sampled</legend>
+        <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
         {TRIGGERS.map((trigger) => (
           <label key={trigger.value} className="flex items-start gap-2 text-[0.86rem]">
             <input
@@ -157,10 +160,11 @@ function Form({ view }: { view: SamplingView }) {
             </span>
           </label>
         ))}
+        </div>
         {error("triggers") ? <p role="alert" className="text-[0.78rem] text-err">{error("triggers")}</p> : null}
       </fieldset>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {text("slowThresholdMs", "slowThresholdMs", "Slow after", undefined, "ms")}
         {text("slowP99Factor", "slowP99FactorX10", "Slower than usual by", "A multiple of the route's p99, such as 3.", "times")}
         {text("slowP99FloorMs", "slowP99FloorMs", "…but at least", "Ignores routes that are always quick.", "ms")}
@@ -177,7 +181,7 @@ function Form({ view }: { view: SamplingView }) {
       </div>
 
       <h3 className="mt-2 text-[0.9rem] font-semibold">Limits during an incident</h3>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {text("ratePerSec", "ratePerSec", "At most", "Samples stored per second by one instance.", "per second")}
         {text("rateBurst", "rateBurst", "Burst", undefined, "samples")}
         {text("stormBurst", "stormBurst", "Same problem: first", "Samples kept of one kind (route, trigger, endpoint) before slowing down.", "samples")}
@@ -196,7 +200,7 @@ function Form({ view }: { view: SamplingView }) {
         Bodies are off everywhere until a route turns them on (on its page). Only text types are
         kept, cut at these sizes, after redaction.
       </p>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {text("bodyRequestKiB", "bodyRequestCap", "Request body up to", undefined, "KiB")}
         {text("bodyResponseKiB", "bodyResponseCap", "Response body up to", undefined, "KiB")}
       </div>

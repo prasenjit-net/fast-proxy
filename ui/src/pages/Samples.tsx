@@ -6,6 +6,7 @@ import { Fragment, useState, type FormEvent } from "react";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
+import FilterActions from "../components/FilterActions";
 import FormField from "../components/FormField";
 import SampleDetailView from "../components/sampling/SampleDetailView";
 import { useSession } from "../context/SessionContext";
@@ -163,7 +164,7 @@ function SamplesList() {
     body = (
       <>
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-[0.86rem]">
+          <table className="w-full min-w-[46rem] text-left text-[0.86rem]">
             <thead>
               <tr className="border-b border-line text-[0.74rem] tracking-wide text-ink-faint uppercase">
                 <th className="py-2 pr-4 font-medium">When</th>
@@ -183,7 +184,7 @@ function SamplesList() {
                       {timeAgo(sample.atMs)}
                     </td>
                     <td className="py-2.5 pr-4">
-                      <Badge tone="accent">{label(sample.primary)}</Badge>
+                      <span className="whitespace-nowrap"><Badge tone="accent">{label(sample.primary)}</Badge></span>
                       {sample.triggers.length > 1 ? (
                         <span className="ml-1 text-[0.74rem] text-ink-faint">+{sample.triggers.length - 1}</span>
                       ) : null}
@@ -240,7 +241,7 @@ function SamplesList() {
       <div className="card-head">
         <h2>Sampled requests</h2>
         <span className="card-hint">the unusual ones, from every instance</span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 text-[0.82rem]">
             <input type="checkbox" checked={live} onChange={(event) => setLive(event.target.checked)} /> Live
           </label>
@@ -252,7 +253,7 @@ function SamplesList() {
           </button>
         </div>
       </div>
-      <form onSubmit={apply} className="mb-4 flex flex-wrap items-end gap-3">
+      <form onSubmit={apply} className="filter-bar mb-4">
         <FormField label="Why" htmlFor="samples-trigger">
           <select
             id="samples-trigger"
@@ -302,21 +303,13 @@ function SamplesList() {
             ))}
           </select>
         </FormField>
-        <button type="submit" className="btn btn-primary">
-          Apply
-        </button>
-        {filtered ? (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => {
-              setDraft(NO_FILTERS);
-              setApplied(NO_FILTERS);
-            }}
-          >
-            Clear
-          </button>
-        ) : null}
+        <FilterActions
+          filtered={filtered}
+          onClear={() => {
+            setDraft(NO_FILTERS);
+            setApplied(NO_FILTERS);
+          }}
+        />
       </form>
       {body}
       {confirmingClear ? (

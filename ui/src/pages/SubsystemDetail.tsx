@@ -85,17 +85,23 @@ export default function SubsystemDetailPage() {
         </WriteOnly>
       </div>
 
-      <SubsystemSettings subsystem={subsystem} />
-      <MaintenanceSection subsystem={subsystem} />
-      <section className="card">
-        <div className="card-head">
-          <h2>Request sampling</h2>
-          <span className="card-hint">routes can differ; they inherit from here</span>
+      <div className="card-grid">
+        <SubsystemSettings subsystem={subsystem} />
+        <div className="flex flex-col gap-4">
+          <MaintenanceSection subsystem={subsystem} />
+          <section className="card">
+            <div className="card-head">
+              <h2>Request sampling</h2>
+              <span className="card-hint">routes can differ; they inherit from here</span>
+            </div>
+            <SamplingControl target={{ subsystemId: subsystem.id }} label={subsystem.name} />
+          </section>
         </div>
-        <SamplingControl target={{ subsystemId: subsystem.id }} label={subsystem.name} />
-      </section>
-      <HostsSection subsystem={subsystem} />
-      <HttpsSection subsystem={subsystem} />
+      </div>
+      <div className="card-grid">
+        <HostsSection subsystem={subsystem} />
+        <HttpsSection subsystem={subsystem} />
+      </div>
       <UpstreamsSection subsystem={subsystem} />
       <RoutesSection subsystem={subsystem} />
 

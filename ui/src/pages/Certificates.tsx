@@ -74,6 +74,7 @@ export default function CertificatesPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="card-grid">
       <section className="card">
         <div className="card-head">
           <h2>TLS</h2>
@@ -158,6 +159,7 @@ export default function CertificatesPage() {
           certificate before using this in production.
         </p>
       ) : null}
+      </div>
 
       <section className="card">
         <div className="card-head">
