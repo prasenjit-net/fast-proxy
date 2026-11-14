@@ -173,7 +173,7 @@ export default function SamplingControl({ target, label }: { target: Target; lab
       <Badge tone={current ? "accent" : "neutral"}>sampling: {overrideSummary(current)}</Badge>
       {canWrite ? (
         <button
-          className="btn btn-ghost btn-sm"
+          className="btn btn-secondary btn-sm"
           aria-label={`Edit sampling for ${label}`}
           onClick={() => setEditing(true)}
         >

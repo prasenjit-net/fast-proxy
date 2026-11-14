@@ -44,6 +44,7 @@
 
   --scrim: rgba(43, 41, 56, 0.45);
   --grid-line: rgba(16, 185, 129, 0.05);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235d5a70' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
@@ -79,6 +80,7 @@
 
   --scrim: rgba(0, 0, 0, 0.6);
   --grid-line: rgba(40, 233, 159, 0.045);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a5a1b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 
 /* Register the tokens as Tailwind colors (bg-surface, text-ink, …).
@@ -122,6 +124,23 @@
 
   code {
     @apply rounded-[5px] bg-surface-2 px-[0.4em] py-[0.1em] font-mono text-[0.85em];
+  }
+
+  /* Checkboxes and radios take the accent color instead of the platform blue. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--accent);
+  }
+
+  /* Tables stay readable on a phone: they scroll sideways inside their card
+     instead of squeezing every column. */
+  .overflow-x-auto > table {
+    min-width: 34rem;
+  }
+
+  select option {
+    background: var(--surface);
+    color: var(--ink);
   }
 
   ::selection {
@@ -186,7 +205,37 @@
   }
 
   .input {
-    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-[0.9rem] text-ink transition-colors placeholder:text-ink-faint focus:border-accent focus:ring-[3px] focus:ring-accent-soft focus:outline-none;
+    @apply min-h-[2.4rem] w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-[0.9rem] leading-normal text-ink transition-colors placeholder:text-ink-faint focus:border-accent focus:ring-[3px] focus:ring-accent-soft focus:outline-none disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  /* A select looks like the text boxes beside it: the same height, border and
+     radius, and our own chevron instead of the platform's. */
+  select.input {
+    @apply cursor-pointer appearance-none bg-no-repeat pr-9;
+    background-image: var(--chevron);
+    background-position: right 0.7rem center;
+    background-size: 0.9rem;
+  }
+
+  textarea.input {
+    @apply resize-y;
+  }
+
+  /* A read-only text box (a viewer's form) is dimmed; a select is never "read-only". */
+  input.input:read-only,
+  textarea.input:read-only {
+    background-color: var(--surface-2);
+  }
+
+  /* Filter rows: equal columns that wrap by available width, controls aligned
+     on their bottom edge, so the row looks the same with two filters or eight. */
+  .filter-bar {
+    @apply grid grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] items-end gap-3;
+  }
+
+  /* Two cards or sections side by side from a wide viewport. */
+  .card-grid {
+    @apply grid grid-cols-1 items-start gap-4 xl:grid-cols-2;
   }
 
   .card {
@@ -194,7 +243,7 @@
   }
 
   .card-head {
-    @apply mb-4 flex items-baseline gap-3;
+    @apply mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1;
   }
 
   .card-head h2 {

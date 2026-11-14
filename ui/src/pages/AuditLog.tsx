@@ -196,7 +196,7 @@ export default function AuditLogPage() {
           </button>
         ) : null}
       </div>
-      <form onSubmit={apply} className="mb-4 flex flex-wrap items-end gap-3">
+      <form onSubmit={apply} className="filter-bar mb-4">
         <FormField label="Who" htmlFor="audit-actor">
           <input
             id="audit-actor"
@@ -242,21 +242,23 @@ export default function AuditLogPage() {
             ))}
           </select>
         </FormField>
-        <button type="submit" className="btn btn-primary">
-          Apply
-        </button>
-        {filtered ? (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => {
-              setDraft(NO_FILTERS);
-              setApplied(NO_FILTERS);
-            }}
-          >
-            Clear
+        <div className="flex gap-2">
+          <button type="submit" className="btn btn-primary">
+            Apply
           </button>
-        ) : null}
+          {filtered ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setDraft(NO_FILTERS);
+                setApplied(NO_FILTERS);
+              }}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
       </form>
       {body}
     </section>
