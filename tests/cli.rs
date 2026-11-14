@@ -7,7 +7,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use common::console::{printed, start_ok_with_args, start_ok_with_config, token_in, Running};
+use common::console::{bootstrap_token, start_ok_with_args, start_ok_with_config, Running};
 use common::*;
 use serde_json::json;
 
@@ -357,7 +357,7 @@ fn a_viewer_token_is_refused_the_samples_and_an_admin_token_is_not() {
     let dir = tempfile::tempdir().unwrap();
     // A short sync interval, so the proxy sees the token created offline soon.
     let proxy = start_ok_with_config(dir.path(), "config_poll_interval = \"200ms\"", &[], &[]);
-    let bootstrap = token_in(&printed(&proxy)).unwrap();
+    let bootstrap = bootstrap_token(&proxy).unwrap();
     let url = format!("http://{}", proxy.admin);
     let created = cli(
         dir.path(),
@@ -400,7 +400,7 @@ fn a_viewer_token_is_refused_the_samples_and_an_admin_token_is_not() {
 
 fn running_with_token(dir: &Path) -> (Running, String) {
     let proxy = start_ok_with_args(dir, &[], &[]);
-    let token = token_in(&printed(&proxy)).expect("a bootstrap token");
+    let token = bootstrap_token(&proxy).expect("a bootstrap token");
     (proxy, token)
 }
 
@@ -520,7 +520,7 @@ async fn an_admin_plane_over_tls_needs_a_ca_file_or_insecure() {
     use fast_proxy_test_pki::{request, ClientHello, LeafSpec, TestCa};
     let dir = tempfile::tempdir().unwrap();
     let proxy = start_ok_with_args(dir.path(), &[], &["--admin-tls"]);
-    let token = token_in(&printed(&proxy)).unwrap();
+    let token = bootstrap_token(&proxy).unwrap();
     let url = format!("https://localhost:{}", proxy.admin.port());
 
     // The generated certificate is self-signed: the system roots refuse it.
@@ -753,7 +753,7 @@ fn the_stored_configuration_is_compiled_read_only_and_a_broken_one_is_reported()
 fn a_token_created_offline_works_on_the_running_proxy_within_the_sync_interval() {
     let dir = tempfile::tempdir().unwrap();
     let proxy = start_ok_with_config(dir.path(), "config_poll_interval = \"200ms\"", &[], &[]);
-    let bootstrap = token_in(&printed(&proxy)).unwrap();
+    let bootstrap = bootstrap_token(&proxy).unwrap();
     let url = format!("http://{}", proxy.admin);
 
     let created = cli(

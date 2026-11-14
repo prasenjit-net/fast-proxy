@@ -114,6 +114,24 @@ pub fn printed(running: &Running) -> Vec<String> {
     running.lines.try_iter().collect()
 }
 
+/// The bootstrap token a freshly started proxy prints, waiting for the line to
+/// arrive (a slow machine can take longer than any fixed pause); `None` if none
+/// is printed within ten seconds.
+pub fn bootstrap_token(running: &Running) -> Option<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match running.lines.recv_timeout(left) {
+            Ok(line) => {
+                if let Some(token) = line.strip_prefix(TOKEN_MARKER) {
+                    return Some(token.to_string());
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 pub fn token_in(lines: &[String]) -> Option<String> {
     lines
         .iter()

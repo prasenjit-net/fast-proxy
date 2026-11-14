@@ -7,7 +7,7 @@ mod common;
 use std::io::Read;
 use std::process::{Command, Stdio};
 
-use common::console::{printed, start_ok, token_in, Running};
+use common::console::{bootstrap_token, printed, start_ok, token_in, Running};
 use common::{free_port, http_with_headers, write_config};
 use serde_json::{json, Value};
 
@@ -38,7 +38,7 @@ fn call(
 fn a_fresh_install_prints_a_bootstrap_token_once_and_is_closed_without_it() {
     let dir = tempfile::tempdir().unwrap();
     let first = start_ok(dir.path(), &[]);
-    let token = token_in(&printed(&first)).expect("the bootstrap token is printed");
+    let token = bootstrap_token(&first).expect("the bootstrap token is printed");
     assert!(token.starts_with("fp_"));
 
     assert_eq!(call(&first, "GET", "/api/status", None, None).0, 401);
@@ -71,7 +71,7 @@ fn a_fresh_install_prints_a_bootstrap_token_once_and_is_closed_without_it() {
 fn the_bootstrap_secret_is_in_no_api_response_or_metric() {
     let dir = tempfile::tempdir().unwrap();
     let running = start_ok(dir.path(), &[]);
-    let token = token_in(&printed(&running)).unwrap();
+    let token = bootstrap_token(&running).unwrap();
     let secret = token.rsplit('.').next().unwrap();
     let (_, list) = call(&running, "GET", "/api/tokens", Some(&token), None);
     assert!(!list.to_string().contains(secret));
@@ -133,7 +133,7 @@ fn a_weak_seed_stops_startup_with_a_message() {
 fn a_viewer_token_reads_but_cannot_write_or_manage_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let running = start_ok(dir.path(), &[]);
-    let admin = token_in(&printed(&running)).unwrap();
+    let admin = bootstrap_token(&running).unwrap();
     let (status, created) = call(
         &running,
         "POST",

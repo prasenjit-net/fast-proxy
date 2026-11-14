@@ -9,7 +9,7 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::console::{printed, start_ok_with_config, token_in, Running};
+use common::console::{bootstrap_token, start_ok_with_config, Running};
 use common::{free_port, http, http_with_headers, start_backend};
 use serde_json::{json, Value};
 
@@ -77,7 +77,7 @@ struct Cluster {
 fn cluster(live_backend: bool) -> Cluster {
     let dirs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
     let a = instance(dirs[0].path(), dirs[2].path(), KEY_ONE);
-    let token = token_in(&printed(&a)).expect("the first instance prints the bootstrap token");
+    let token = bootstrap_token(&a).expect("the first instance prints the bootstrap token");
     let b = instance(dirs[1].path(), dirs[2].path(), KEY_TWO);
     let backend = if live_backend {
         start_backend("ok")

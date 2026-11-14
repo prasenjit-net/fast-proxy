@@ -7,7 +7,7 @@ mod common;
 use std::net::SocketAddr;
 use std::process::{Command, Stdio};
 
-use common::console::{printed, start_ok_with_args, token_in, Running};
+use common::console::{bootstrap_token, start_ok_with_args, Running};
 use common::{free_port, write_config};
 use fast_proxy_test_pki::{handshake, request, ClientHello};
 
@@ -44,7 +44,7 @@ fn body_of(answer: &str) -> serde_json::Value {
 async fn the_admin_plane_serves_a_generated_stored_certificate_over_https() {
     let dir = tempfile::tempdir().unwrap();
     let running = start_ok_with_args(dir.path(), &[], &["--admin-tls"]);
-    let token = token_in(&printed(&running)).expect("a bootstrap token");
+    let token = bootstrap_token(&running).expect("a bootstrap token");
 
     let health = get(&running, "/api/health", None).await;
     assert!(health.starts_with("HTTP/1.1 200"), "{health}");
