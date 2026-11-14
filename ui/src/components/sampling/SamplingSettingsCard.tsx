@@ -24,6 +24,12 @@ import Toggle from "../Toggle";
 
 type TextField = Exclude<keyof SamplingValues, "enabled" | "triggers">;
 
+function storedText(table: SamplingView["status"]["table"]): string {
+  if (!table) return "unknown";
+  const rows = `${formatNumber(table.rows)} ${table.rows === 1 ? "row" : "rows"}`;
+  return `${rows}, ${formatBytes(table.bytes)}`;
+}
+
 function Status({ view }: { view: SamplingView }) {
   const { status } = view;
   return (
@@ -44,11 +50,7 @@ function Status({ view }: { view: SamplingView }) {
       </div>
       <div>
         <dt className="text-ink-faint">Stored</dt>
-        <dd className="m-0 font-medium">
-          {status.table
-            ? `${formatNumber(status.table.rows)} ${status.table.rows === 1 ? "row" : "rows"}, ${formatBytes(status.table.bytes)}`
-            : "unknown"}
-        </dd>
+        <dd className="m-0 font-medium">{storedText(status.table)}</dd>
       </div>
     </dl>
   );

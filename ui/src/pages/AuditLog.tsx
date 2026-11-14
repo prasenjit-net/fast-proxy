@@ -2,6 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Fragment, useState, type FormEvent } from "react";
 import Badge from "../components/Badge";
 import EmptyState from "../components/EmptyState";
+import FilterActions from "../components/FilterActions";
 import FormField from "../components/FormField";
 import { useSession } from "../context/SessionContext";
 import { useToast } from "../context/ToastContext";
@@ -242,23 +243,13 @@ export default function AuditLogPage() {
             ))}
           </select>
         </FormField>
-        <div className="flex gap-2">
-          <button type="submit" className="btn btn-primary">
-            Apply
-          </button>
-          {filtered ? (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => {
-                setDraft(NO_FILTERS);
-                setApplied(NO_FILTERS);
-              }}
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
+        <FilterActions
+          filtered={filtered}
+          onClear={() => {
+            setDraft(NO_FILTERS);
+            setApplied(NO_FILTERS);
+          }}
+        />
       </form>
       {body}
     </section>

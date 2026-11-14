@@ -6,6 +6,7 @@ import { Fragment, useState, type FormEvent } from "react";
 import Badge from "../components/Badge";
 import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
+import FilterActions from "../components/FilterActions";
 import FormField from "../components/FormField";
 import SampleDetailView from "../components/sampling/SampleDetailView";
 import { useSession } from "../context/SessionContext";
@@ -302,23 +303,13 @@ function SamplesList() {
             ))}
           </select>
         </FormField>
-        <div className="flex gap-2">
-          <button type="submit" className="btn btn-primary">
-            Apply
-          </button>
-          {filtered ? (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => {
-                setDraft(NO_FILTERS);
-                setApplied(NO_FILTERS);
-              }}
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
+        <FilterActions
+          filtered={filtered}
+          onClear={() => {
+            setDraft(NO_FILTERS);
+            setApplied(NO_FILTERS);
+          }}
+        />
       </form>
       {body}
       {confirmingClear ? (
