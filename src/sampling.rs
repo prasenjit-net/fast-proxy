@@ -431,13 +431,14 @@ mod tests {
 
         // The metrics are refreshed on their own tick.
         let started = std::time::Instant::now();
-        while !metrics
-            .render()
-            .contains("fastproxy_samples_written_total 1")
-            && !metrics
-                .render()
-                .contains("fastproxy_samples_written_total 2")
-        {
+        // (The loop above may have stored more than two samples on a slow machine.)
+        let written = |text: &str| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("fastproxy_samples_written_total "))
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        while written(&metrics.render()) == 0 {
             assert!(
                 started.elapsed() < Duration::from_secs(20),
                 "{}",

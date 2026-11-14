@@ -23,12 +23,14 @@ A=http://127.0.0.1:19000/api
 WORK=$(mktemp -d)
 
 report() { # label result
-  rps=$(echo "$2" | awk '/Requests\/sec/ {printf "%d", $2}')
-  p50=$(echo "$2" | awk '/50.00% in/ {print $3*1000}')
-  p99=$(echo "$2" | awk '/99.00% in/ {print $3*1000}')
-  echo "$1 | rps=$rps | p50_us=$p50 | p99_us=$p99" | tee -a "$OUT"
+  local label=$1 result=$2
+  rps=$(echo "$result" | awk '/Requests\/sec/ {printf "%d", $2}')
+  p50=$(echo "$result" | awk '/50.00% in/ {print $3*1000}')
+  p99=$(echo "$result" | awk '/99.00% in/ {print $3*1000}')
+  echo "$label | rps=$rps | p50_us=$p50 | p99_us=$p99" | tee -a "$OUT"
 }
 run() { # label backend-addr extra-proxy-args [override-json]
+  local label=$1 backend=$2 proxy_args=$3 override=${4:-}
   cat > "$WORK/bench.toml" <<TOML
 [data_plane]
 state_dir = "$WORK/state-$$-$RANDOM"
@@ -39,18 +41,18 @@ listen = "127.0.0.1:18000"
 listen = "127.0.0.1:19000"
 auth = "off"
 TOML
-  $PROXY --config "$WORK/bench.toml" --log-level "info,access=off" $3 >/dev/null 2>&1 &
+  $PROXY --config "$WORK/bench.toml" --log-level "info,access=off" $proxy_args >/dev/null 2>&1 &
   PID=$!
   for i in $(seq 1 100); do curl -s $A/health >/dev/null 2>&1 && break; sleep 0.1; done
   curl -s -H "$J" -d '{"name":"bench"}' $A/subsystems >/dev/null
   curl -s -H "$J" -d '{"pattern":"bench.example.com"}' $A/subsystems/1/hosts >/dev/null
-  curl -s -H "$J" -d "{\"name\":\"backend\",\"endpoints\":[{\"addr\":\"$2\"}]}" $A/subsystems/1/upstreams >/dev/null
+  curl -s -H "$J" -d "{\"name\":\"backend\",\"endpoints\":[{\"addr\":\"$backend\"}]}" $A/subsystems/1/upstreams >/dev/null
   curl -s -H "$J" -d '{"prefix":"/","upstreamGroupId":1}' $A/subsystems/1/routes >/dev/null
-  if [ -n "${4:-}" ]; then
-    curl -s -X PUT -H "$J" -d "$4" $A/sampling/overrides >/dev/null
+  if [[ -n "$override" ]]; then
+    curl -s -X PUT -H "$J" -d "$override" $A/sampling/overrides >/dev/null
   fi
   oha -z 2s -c 64 --no-tui -H "Host: bench.example.com" http://127.0.0.1:18000/ >/dev/null 2>&1
-  report "$1" "$(oha -z 6s -c 64 --no-tui -H "Host: bench.example.com" http://127.0.0.1:18000/ 2>&1)"
+  report "$label" "$(oha -z 6s -c 64 --no-tui -H "Host: bench.example.com" http://127.0.0.1:18000/ 2>&1)"
   kill $PID 2>/dev/null; wait $PID 2>/dev/null
 }
 
