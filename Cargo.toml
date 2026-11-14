@@ -1,6 +1,6 @@
 [package]
 name = "fast-proxy"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Fast, realtime-configurable ingress server and reverse proxy: host/prefix routing, TLS + ACME, load balancing, health checks, and live diagnostics"
 
