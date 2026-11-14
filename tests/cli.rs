@@ -307,7 +307,8 @@ fn samples_list_shows_the_failure_and_the_filters_narrow_it() {
     };
     assert!(matching(&["--trigger", "upstream_failure"]).contains("upstream_failure"));
     assert!(matching(&["--status-class", "5", "--subsystem", "shop"]).contains("502"));
-    assert_eq!(matching(&["--trigger", "slow"]), "no samples");
+    // Not `slow`: a refused connection takes about 2 s on Windows, the default threshold.
+    assert_eq!(matching(&["--trigger", "oversized_request"]), "no samples");
     assert_eq!(matching(&["--status-class", "4"]), "no samples");
     assert_eq!(matching(&["--subsystem", "blog"]), "no samples");
     assert_eq!(matching(&["--min-ms", "3600000"]), "no samples");
@@ -344,7 +345,7 @@ fn samples_export_prints_whole_samples_as_json_lines_with_no_secret() {
 
     let none = cli(
         dir.path(),
-        &["samples", "export", "--trigger", "slow"],
+        &["samples", "export", "--trigger", "oversized_request"],
         None,
     );
     assert_eq!(none.code, 0);

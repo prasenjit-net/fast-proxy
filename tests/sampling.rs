@@ -331,7 +331,7 @@ fn the_rate_limit_caps_what_a_flood_stores_and_counts_what_it_drops() {
 }
 
 #[test]
-fn the_storm_guard_keeps_a_few_of_a_thousand_failures_and_counts_the_rest() {
+fn the_storm_guard_keeps_a_few_of_a_flood_of_failures_and_counts_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     let proxy = start_proxy(dir.path());
     create_site(&proxy, "down", SHOP, free_port());
@@ -348,10 +348,27 @@ fn the_storm_guard_keeps_a_few_of_a_thousand_failures_and_counts_the_rest() {
         settings["stormIntervalSecs"] = json!(2);
     });
 
-    let mut client = KeepAliveClient::new(proxy.data, SHOP);
-    for _ in 0..1000 {
-        assert_eq!(client.get("/x").map(|(status, _)| status), Ok(502));
+    // A refused connection takes about 2 s to be reported on Windows, so the flood
+    // there is smaller; the property (a few kept, the rest counted) is the same.
+    let (threads, each) = if cfg!(windows) { (8, 4) } else { (8, 125) };
+    let total = threads * each;
+    let started = std::time::Instant::now();
+    let clients: Vec<_> = (0..threads)
+        .map(|_| {
+            let addr = proxy.data;
+            std::thread::spawn(move || {
+                let mut client = KeepAliveClient::new(addr, SHOP);
+                for _ in 0..each {
+                    assert_eq!(client.get("/x").map(|(status, _)| status), Ok(502));
+                }
+            })
+        })
+        .collect();
+    for client in clients {
+        client.join().unwrap();
     }
+    let flood_secs = started.elapsed().as_secs() as usize;
+    let mut client = KeepAliveClient::new(proxy.data, SHOP);
     // A request of another kind, during the outage, is still kept.
     assert_eq!(through_proxy(&proxy, OTHER, "/").0, 200);
     assert!(wait_until(|| samples(&proxy)
@@ -364,17 +381,22 @@ fn the_storm_guard_keeps_a_few_of_a_thousand_failures_and_counts_the_rest() {
             .collect::<Vec<_>>()
     };
     assert!(wait_until(|| failures(&proxy).len() >= 3));
-    // 3 for the burst; one more if the 2 s interval elapsed while the flood ran.
+    // 3 for the burst, and one more for each 2 s interval that elapsed during the flood.
     let kept = failures(&proxy).len();
-    assert!(kept <= 5, "{kept} of 1000 failures were kept");
+    let allowed = 3 + flood_secs / 2 + 2;
+    assert!(
+        kept <= allowed,
+        "{kept} of {total} failures were kept, at most {allowed} allowed"
+    );
 
     // After the interval the next failure is kept and says how many it stands for.
     std::thread::sleep(Duration::from_millis(2200));
     assert_eq!(client.get("/after").map(|(status, _)| status), Ok(502));
+    let stands_for = if cfg!(windows) { 1 } else { total as i64 - 10 };
     assert!(wait_until(|| failures(&proxy).iter().any(|sample| {
         detail(&proxy, sample)["suppressed"]["count"]
             .as_i64()
             .unwrap_or(0)
-            >= 900
+            >= stands_for
     })));
 }

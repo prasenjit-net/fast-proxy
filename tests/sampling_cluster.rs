@@ -179,20 +179,19 @@ fn either_instance_lists_the_samples_of_both_and_names_the_writer() {
     let cluster = cluster(false);
     assert_eq!(http(cluster.a.data, "GET", "/from-a", HOST, None).0, 502);
     assert_eq!(http(cluster.b.data, "GET", "/from-b", HOST, None).0, 502);
-    for viewer in [&cluster.a, &cluster.b] {
-        eventually("both samples are listed", || {
-            cluster.samples(viewer).len() >= 2
-        });
-        let kept = cluster.samples(viewer);
-        let instances: std::collections::BTreeSet<_> = kept
+    let writers = |viewer: &Running| -> std::collections::BTreeSet<String> {
+        cluster
+            .samples(viewer)
             .iter()
-            .map(|s| s["instance"].as_str().unwrap().to_string())
-            .collect();
-        assert_eq!(
-            instances.len(),
-            2,
-            "each sample names the instance that wrote it: {kept:?}"
-        );
+            .map(|sample| sample["instance"].as_str().unwrap().to_string())
+            .collect()
+    };
+    for viewer in [&cluster.a, &cluster.b] {
+        // (B's data plane may have sampled probes while the site propagated, so wait
+        // for both writers rather than for two samples.)
+        eventually("samples of both instances are listed", || {
+            writers(viewer).len() == 2
+        });
     }
 }
 
