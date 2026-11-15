@@ -1,7 +1,7 @@
 # M4 Plan: ACME automatic certificates
 
-Status: **draft v0.3 (2026-11-15), proposed; PR1 (`m4/pr1-foundations`, #68) and PR2 (`m4/pr2-challenges`) written,
-awaiting the owner's review.**
+Status: **draft v0.4 (2026-11-15), proposed; PR1 (#68), PR2 (#69) and PR3 (`m4/pr3-runner`) written, awaiting the
+owner's review.**
 The owner asked to start the work, so PR1 builds on the recommendations as written; the ADRs (0024 to 0027) stay
 *proposed* until the owner confirms the **(confirm)** items, and anything changed at review is reworked there.
 
@@ -275,12 +275,17 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
   *Done when:* the ADRs are merged and no **(confirm)** item is open.
   *Status:* ADRs 0024 to 0027 written as **proposed** in PR1; ADR 0014 points at them; the ROADMAP log has the row.
   Open: the owner's confirmation.
-- [ ] **G2 (M) Spike: `instant-acme`.** On a throwaway branch: build with the `ring` feature on macOS, Linux and
+- [x] **G2 (M) Spike: `instant-acme`.** On a throwaway branch: build with the `ring` feature on macOS, Linux and
   Windows; `cargo tree -d` for duplicate `hyper`/`rustls`/`aws-lc-rs`; register, order and finalize against Pebble
   with a challenge served by a tiny axum handler; serialise and restore the account credentials; check `Retry-After`
   and the problem document are reachable from errors; check a custom root for the directory (`directory_ca`).
   *Done when:* K1 is confirmed or the fallback chosen, with findings in ADR 0024.
-- [x] **G3 (S) Defaults table.** K3, K6, K7 and K8 as one documented table (the source for validation, the UI
+  *Result (2026-11-15):* K1 confirmed (`instant-acme` 0.8.5, `ring` + `hyper-rustls`, no `aws-lc-rs`, no duplicate
+  `hyper`/`rustls`/`ring`/`http`; credentials serialise with serde; a custom root through `builder_with_root`). Two
+  findings: the library's HTTP client is HTTPS-only, so the directory must be `https` everywhere (config changed); a
+  problem document carries no `Retry-After`, so a rate-limited order waits the 1-hour default. Run against the
+  in-process test CA on every platform; the Pebble run is written (`crates/fast-proxy-acme/tests/pebble.rs`, ignored)
+  but was not executed here (running downloaded binaries was not permitted in this session): it is TA2/Q4's job. (S) Defaults table.** K3, K6, K7 and K8 as one documented table (the source for validation, the UI
   and the docs).
   *As built:* the `Defaults` tables of ADRs 0026 (renewal, backoff, cap, lease) and the `[data_plane.acme]` section
   of `config.toml` (process settings); `RenewalPolicy::default()` and `AcmeConfig::default()` hold the values.
@@ -340,19 +345,25 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
 - [x] **AC3 (M) `RenewalPolicy`** (K6, K7): `due_at(not_before, not_after, subsystem)`, the stable jitter, the
   backoff ladder, `Retry-After`, the hourly cap, the permanent-error wait; `now_ms` is a parameter; property tests
   (never earlier than the previous attempt plus the minimum backoff, never past `not_after - 1 day` while healthy).
-- [ ] **AC4 (M) `AcmeClient` trait and the `instant-acme` adapter**: account create/restore, new order, the
+- [x] **AC4 (M) `AcmeClient` trait and the `instant-acme` adapter**: account create/restore, new order, the
   HTTP-01 challenges with their key authorizations, set ready, poll with `Retry-After`, finalize with a CSR, download
   the chain; errors mapped to a small `AcmeProblem` enum (`RateLimited { retry_after }`, `Permanent`, `Transient`,
   `Unauthorized`) with a sanitized, capped detail.
+  *As built:* `acme/src/client.rs`, a concrete `AcmeClient` / `AcmeSession` / `PendingOrder` (no trait: the in-process
+  test CA makes the real adapter cheap to test, and a swap still touches one file); errors are `AcmeError { kind:
+  FailureKind, detail }` through `classify_problem`; a failed validation reports the challenge's own problem.
 - [x] **AC5 (S) `OrderStep` state machine** (published, propagating, self-checked, validating, finalizing, done,
   failed) so the runner's order logic is a pure transition function with unit tests.
 
 ### Workstream TA: Test CA (new, dev-only `fast-proxy-test-acme`)
 
-- [ ] **TA1 (L) The in-process ACME server** of K16: directory, nonces, accounts, orders, authorizations, HTTP-01
+- [x] **TA1 (L) The in-process ACME server** of K16: directory, nonces, accounts, orders, authorizations, HTTP-01
   validation by real fetch, finalize, certificate download, issued from `fast-proxy-test-pki`'s CA; switches for
   failure, `rateLimited` with `Retry-After`, slow validation, lifetime; a log of what it fetched and issued for
   assertions. Used only from `dev-dependencies`.
+  *As built:* `crates/fast-proxy-test-acme` over HTTPS on loopback (its root is the `directory_ca`), round-robin
+  challenge targets for cluster tests, `set_rate_limited`, `set_lifetime_days`, counters and a validation log. It
+  trusts JWS signatures (Pebble checks those).
 - [ ] **TA2 (S) Pebble harness** for the opt-in CI job (download, start, its CA for `directory_ca`, cleanup).
 
 ### Workstream CS: Config service
@@ -403,20 +414,29 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
 
 ### Workstream RN: The runner (new, `fast-proxy-acme-service`)
 
-- [ ] **RN1 (M) Lease loop**: take, renew at `lease_ttl/3`, stop placing orders when lost, release on shutdown;
+- [x] **RN1 (M) Lease loop**: take, renew at `lease_ttl/3`, stop placing orders when lost, release on shutdown;
   `fastproxy_acme_lease_held`.
-- [ ] **RN2 (L) Scheduler**: on `renew_check_interval`, on `ConfigChanged` (debounced 30 s) and on a forced request,
+- [x] **RN2 (L) Scheduler**: on `renew_check_interval`, on `ConfigChanged` (debounced 30 s) and on a forced request,
   read the subsystems with ACME on and their status, compute the work with `RenewalPolicy` and `eligible_names`,
   run one order at a time (a queue, the forced one first), update the status.
-- [ ] **RN3 (L) One order** (4.1), driven by `OrderStep`: account, order, publish, propagation wait, self-check,
+  *As built:* `AcmeRunner::run` and `run_once(forced)` (the tests drive passes with a clock they move); forced
+  requests through `AcmeControl::request_renewal`; a status for a subsystem that left ACME is dropped.
+- [x] **RN3 (L) One order** (4.1), driven by `OrderStep`: account, order, publish, propagation wait, self-check,
   ready, poll, key and CSR, finalize, validate, store; every failure path clears the challenges and records the
   status and audit; a timeout on the whole order (10 min).
-- [ ] **RN4 (S) Self-check client**: fetch `http://<name>/.well-known/acme-challenge/<token>` with a short timeout,
+  *As built:* `acme-service/src/order.rs`; the account is registered on the first order and kept; the whole order
+  times out after twice the CA timeout plus the propagation wait plus a minute.
+- [x] **RN4 (S) Self-check client**: fetch `http://<name>/.well-known/acme-challenge/<token>` with a short timeout,
   a few attempts; the error names the name and what was received (status code, not the body).
-- [ ] **RN5 (S) Wiring in `src/startup.rs`**: start the runner when ACME is enabled, stop it on shutdown before the
+- [x] **RN5 (S) Wiring in `src/startup.rs`**: start the runner when ACME is enabled, stop it on shutdown before the
   store; the `acme_status` events.
-- [ ] **RN6 (S) Metrics** in `fast-proxy-telemetry` (5.3), labels from config names and fixed enums only, removed
+  *As built:* `src/acme.rs` builds the settings (propagation wait twice the poll plus 2 s) and the task; shutdown
+  waits up to 5 s for the lease to be released. The `acme_status` WebSocket event moves to A2 (PR4) with the API.
+  `[data_plane.acme] self_check` (default on) was added.
+- [x] **RN6 (S) Metrics** in `fast-proxy-telemetry` (5.3), labels from config names and fixed enums only, removed
   series for deleted subsystems.
+  *As built:* `fastproxy_acme_orders_total{subsystem,outcome}` and `fastproxy_acme_lease_held`. The next-attempt gauge
+  was dropped: the status API (PR4) shows it, and a per-subsystem gauge would need its own series cleanup.
 
 ### Workstream A: Admin API
 
@@ -447,6 +467,9 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
   handshake (1), a host added and the skipped names (2), renewal, failure, backoff and rate limit with short-lived
   certificates (3), the challenge under redirect, maintenance and a disabled subsystem, and an unknown token reaching
   the backend (4), restart without re-ordering (6).
+  *Partly done in PR3:* `tests/acme_issuance.rs` covers 1, 2, 3 and 6 in-process (the real runner, data plane and
+  config service, a moved clock); PR2's `tests/acme_challenges.rs` covers 4. Left for PR4: the same against the real
+  binary, which needs the API.
 - [ ] **Q2 (M) Cluster test** `tests/acme_cluster.rs`: two processes, one database; one lease holder; the CA's
   fetches answered by both (the test CA alternates between them); the certificate served by both; kill the holder
   mid-order, the other finishes after the lease expires (5).

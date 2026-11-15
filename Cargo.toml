@@ -22,6 +22,8 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 
 [dependencies]
+fast-proxy-acme = { path = "crates/fast-proxy-acme" }
+fast-proxy-acme-service = { path = "crates/fast-proxy-acme-service" }
 fast-proxy-admin = { path = "crates/fast-proxy-admin" }
 fast-proxy-auth = { path = "crates/fast-proxy-auth" }
 fast-proxy-balancing = { path = "crates/fast-proxy-balancing" }
@@ -53,6 +55,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12"] }
 
 [dev-dependencies]
+fast-proxy-test-acme = { path = "crates/fast-proxy-test-acme" }
 fast-proxy-test-pki = { path = "crates/fast-proxy-test-pki" }
 hyper = { version = "1", features = ["client", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

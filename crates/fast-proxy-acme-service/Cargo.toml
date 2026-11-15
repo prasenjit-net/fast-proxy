@@ -1,0 +1,17 @@
+[package]
+name = "fast-proxy-acme-service"
+version = "0.0.0"
+edition = "2021"
+description = "The ACME runner: holds the renewal lease, decides what to order, drives orders against the CA and writes every result through the config service"
+publish = false
+
+[dependencies]
+fast-proxy-acme = { path = "../fast-proxy-acme" }
+fast-proxy-config-service = { path = "../fast-proxy-config-service" }
+fast-proxy-model = { path = "../fast-proxy-model" }
+fast-proxy-store = { path = "../fast-proxy-store" }
+fast-proxy-telemetry = { path = "../fast-proxy-telemetry" }
+fast-proxy-tls = { path = "../fast-proxy-tls" }
+tokio = { workspace = true }
+tokio-util = "0.7"
+tracing = { workspace = true }

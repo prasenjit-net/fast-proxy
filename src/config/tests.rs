@@ -267,6 +267,7 @@ fn the_acme_section_defaults_to_off_on_staging_and_parses() {
         renew_check_interval = "30m"
         propagation_wait = "0s"
         lease_ttl = "2m"
+        self_check = false
         "#,
     )
     .unwrap();
@@ -280,6 +281,8 @@ fn the_acme_section_defaults_to_off_on_staging_and_parses() {
     assert_eq!(acme.renew_check_interval, Duration::from_secs(1800));
     assert_eq!(acme.propagation_wait, Some(Duration::ZERO));
     assert_eq!(acme.lease_ttl, Duration::from_secs(120));
+    assert!(!acme.self_check);
+    assert!(defaults.self_check);
 }
 
 #[test]

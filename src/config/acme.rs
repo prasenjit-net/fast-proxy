@@ -42,6 +42,9 @@ pub struct AcmeConfig {
     /// How long the renewal lease lasts without being renewed.
     #[serde(deserialize_with = "deserialize_duration")]
     pub lease_ttl: Duration,
+    /// Before the CA is asked to validate, fetch each challenge through its
+    /// public name, so a DNS or firewall problem costs no CA attempt.
+    pub self_check: bool,
 }
 
 impl Default for AcmeConfig {
@@ -56,6 +59,7 @@ impl Default for AcmeConfig {
             renew_check_interval: Duration::from_secs(3600),
             propagation_wait: None,
             lease_ttl: Duration::from_secs(600),
+            self_check: true,
         }
     }
 }

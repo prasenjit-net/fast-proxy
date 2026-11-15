@@ -72,33 +72,19 @@ pub fn warnings(config: &AppConfig) -> Vec<String> {
     warnings
 }
 
-/// The directory must be an absolute `https` URL, or `http` on loopback (a
-/// local test CA).
+/// The directory must be an absolute `https` URL: the account key signs every
+/// request, but the CA's answers (and the issued chain) need an authenticated
+/// channel. A private or test CA is trusted through `directory_ca`.
 fn check_directory(directory: &str) -> Result<(), ConfigError> {
-    let bad = || {
-        invalid(format!(
-            "data_plane.acme.directory {directory:?} must be an https URL (http only on loopback)"
-        ))
-    };
-    let Ok(uri) = directory.parse::<Uri>() else {
-        return bad();
-    };
-    let Some(host) = uri.host() else {
-        return bad();
-    };
-    match uri.scheme_str() {
-        Some("https") => Ok(()),
-        Some("http") if is_loopback(host) => Ok(()),
-        _ => bad(),
+    let usable = directory
+        .parse::<Uri>()
+        .is_ok_and(|uri| uri.scheme_str() == Some("https") && uri.host().is_some());
+    if usable {
+        return Ok(());
     }
-}
-
-fn is_loopback(host: &str) -> bool {
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    host.eq_ignore_ascii_case("localhost")
-        || bare
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
+    invalid(format!(
+        "data_plane.acme.directory {directory:?} must be an https URL"
+    ))
 }
 
 /// An optional contact: `local@domain`, no spaces, at most 254 characters.
@@ -197,12 +183,11 @@ mod tests {
     }
 
     #[test]
-    fn the_directory_must_be_https_except_on_loopback() {
+    fn the_directory_must_be_https() {
         for good in [
             "https://acme-v02.api.letsencrypt.org/directory",
-            "http://127.0.0.1:14000/dir",
-            "http://localhost:14000/dir",
-            "http://[::1]:14000/dir",
+            "https://localhost:14000/dir",
+            "https://127.0.0.1:14000/dir",
         ] {
             let mut config = AppConfig::default();
             config.data_plane.acme.directory = good.into();
@@ -213,6 +198,7 @@ mod tests {
             "not a url",
             "/dir",
             "http://ca.example/dir",
+            "http://127.0.0.1:14000/dir",
             "ftp://ca.example/dir",
         ] {
             let mut config = AppConfig::default();

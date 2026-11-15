@@ -1,0 +1,19 @@
+[package]
+name = "fast-proxy-test-acme"
+version = "0.0.0"
+edition = "2021"
+description = "Test-only: an in-process ACME server that validates HTTP-01 by really fetching the challenge and signs CSRs with the test PKI"
+publish = false
+
+[dependencies]
+fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
+axum = { workspace = true }
+base64 = "0.22"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["service", "tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

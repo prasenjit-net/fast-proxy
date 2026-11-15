@@ -1,8 +1,7 @@
 # ADR 0024: the ACME client and the crates that hold ACME
 
-Status: proposed (2026-11-15); PR1 builds the pure half on it, pending the owner's review. The
-client library is confirmed or replaced by spike G2 at the start of PR3. Plan reference: M4 K1,
-K2, K16.
+Status: proposed (2026-11-15), pending the owner's review; the library choice confirmed by spike
+G2 (see the result below). Plan reference: M4 K1, K2, K16.
 
 ## Context
 
@@ -38,3 +37,18 @@ store and of any network client other than its upstream pool.
 - Swapping the client touches one adapter file.
 - The policy is unit- and property-tested without a CA or a network.
 - One more dependency tree (`instant-acme`) to keep current; the Pebble job catches drift.
+
+## Result of spike G2 (2026-11-15)
+
+- `instant-acme` 0.8.5 with `default-features = false, features = ["ring", "hyper-rustls"]`
+  builds without `aws-lc-rs` and adds no duplicate `hyper`, `rustls`, `ring` or `http`.
+- Account credentials serialise with serde; they are sealed whole.
+- Its HTTP client is HTTPS-only, so `[data_plane.acme] directory` must be `https` everywhere (a
+  private or test CA is trusted through `directory_ca`, which maps to `builder_with_root`).
+- A problem document does not carry the response's `Retry-After`, so a `rateLimited` order waits
+  the 1-hour default of ADR 0026.
+- The adapter is a concrete type (`AcmeClient`, `AcmeSession`, `PendingOrder`) rather than a
+  trait: the in-process test CA makes the real adapter cheap to test, and a library swap still
+  touches one file.
+- Run end to end against the in-process test CA on every platform. The Pebble run is written
+  (`crates/fast-proxy-acme/tests/pebble.rs`, ignored by default) and becomes the CI job of PR4.

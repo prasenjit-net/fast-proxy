@@ -75,6 +75,8 @@ renew_check_interval = "1h"
 # Default: twice config_poll_interval plus 2s.
 # propagation_wait = "12s"
 lease_ttl = "10m"
+# Fetch each challenge through its public name before the CA checks it.
+self_check = true
 
 [admin]
 # The admin plane (UI, REST API, /metrics) has no authentication yet.

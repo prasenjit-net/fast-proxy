@@ -11,7 +11,8 @@ K5, K12, K13, K17. Realizes ADR 0014.
   out), optional `email`, `allowed_domains` (required when enabled), `key_type`
   (`ecdsa-p256` default, `ecdsa-p384`; `ring` cannot generate RSA), `directory_ca` (roots for a
   private CA or Pebble), `renew_check_interval`, `propagation_wait`, `lease_ttl`. The directory
-  must be `https` (or `http` on loopback). ACME on needs `[data_plane.tls] enabled`. Startup warns
+  must be `https`, always (spike G2: the client library's HTTP client is HTTPS-only, and Pebble and private
+  CAs serve HTTPS anyway). `self_check` (default on) fetches each challenge before the CA is asked. ACME on needs `[data_plane.tls] enabled`. Startup warns
   for the staging directory and when no plain listener is on port 80. External Account Binding is
   not supported yet (its keys are rejected as unknown).
 - **Allowlist:** `example.com` allows exactly that name; `*.example.com` allows any name below

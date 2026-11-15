@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::acme_metrics::{AcmeChallengeOutcome, AcmeMetrics};
+use crate::acme_metrics::{AcmeChallengeOutcome, AcmeMetrics, AcmeOrderOutcome};
 use crate::admin_metrics::{AdminMetrics, AdminResult, AuditResult};
 use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
 use crate::sampling_metrics::{SampleDropReason, SamplerReading, SamplingMetrics};
@@ -231,6 +231,16 @@ impl Metrics {
     /// Counts a request on the ACME HTTP-01 challenge path by what happened to it.
     pub fn acme_challenge_request(&self, outcome: AcmeChallengeOutcome) {
         self.acme.challenge_request(outcome);
+    }
+
+    /// Counts a finished ACME order for `subsystem` (a configuration name).
+    pub fn acme_order(&self, subsystem: &str, outcome: AcmeOrderOutcome) {
+        self.acme.order(subsystem, outcome);
+    }
+
+    /// Whether this instance holds the ACME renewal lease.
+    pub fn set_acme_lease_held(&self, held: bool) {
+        self.acme.set_lease_held(held);
     }
 
     /// Counts a request that passed through a maintenance scope by a bypass rule.
@@ -732,6 +742,32 @@ mod tests {
         assert!(
             text.contains(r#"fastproxy_acme_challenge_requests_total{outcome="not_answered"} 1"#)
         );
+    }
+
+    #[test]
+    fn acme_orders_and_the_lease_are_reported() {
+        let metrics = Metrics::new();
+        metrics.acme_order("shop", AcmeOrderOutcome::Issued);
+        metrics.acme_order("shop", AcmeOrderOutcome::Renewed);
+        metrics.acme_order("shop", AcmeOrderOutcome::RateLimited);
+        metrics.acme_order("shop", AcmeOrderOutcome::SelfCheckFailed);
+        metrics.acme_order("shop", AcmeOrderOutcome::Failed);
+        metrics.set_acme_lease_held(true);
+        let text = metrics.render();
+        for outcome in [
+            "issued",
+            "renewed",
+            "rate_limited",
+            "self_check_failed",
+            "failed",
+        ] {
+            let line =
+                format!(r#"fastproxy_acme_orders_total{{outcome="{outcome}",subsystem="shop"}} 1"#);
+            assert!(text.contains(&line), "{line}");
+        }
+        assert!(text.contains("fastproxy_acme_lease_held 1"));
+        metrics.set_acme_lease_held(false);
+        assert!(metrics.render().contains("fastproxy_acme_lease_held 0"));
     }
 
     #[test]

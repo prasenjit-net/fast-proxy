@@ -1,4 +1,5 @@
-//! ACME for fast-proxy (M4). This crate decides; it does no I/O:
+//! ACME for fast-proxy (M4). Apart from the protocol client ([`AcmeClient`],
+//! a thin adapter over `instant-acme`), this crate decides and does no I/O:
 //!
 //! - [`eligible_names`] chooses which hosts of a subsystem go into its
 //!   certificate and why the others do not (K5).
@@ -11,11 +12,13 @@
 //! Time is always a parameter (`now_ms`, wall clock milliseconds), so tests
 //! drive every rule with a fake clock.
 
+mod client;
 mod eligibility;
 mod order_step;
 mod problem;
 mod renewal;
 
+pub use client::{AcmeClient, AcmeError, AcmeSession, HttpChallenge, PendingOrder};
 pub use eligibility::{eligible_names, Eligibility};
 pub use order_step::{OrderEvent, OrderStep, TransitionError};
 pub use problem::{classify_problem, FailureKind};

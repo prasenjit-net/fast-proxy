@@ -26,6 +26,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use crate::acme::AcmeTask;
 use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
 use crate::sampling::{Sampling, SamplingError};
 
@@ -65,12 +66,15 @@ pub enum StartupError {
     AdminServe(std::io::Error),
     #[error(transparent)]
     Sampling(#[from] SamplingError),
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
 }
 
 /// Starts everything and serves until Ctrl-C. Every listener is bound
 /// before any traffic is served, so a bind failure aborts startup cleanly.
 pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let acme_warnings = config.acme_warnings();
+    let acme_settings = crate::acme::runner_settings(&config)?;
     let data_plane = &config.data_plane;
     let trusted_proxies = TrustedProxies::parse(&data_plane.trusted_proxies)?;
 
@@ -201,6 +205,16 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         metrics.clone(),
         data_stop.clone(),
     ));
+    // Certificates through ACME, when on: only the instance holding the lease
+    // talks to the CA. It stops with the data plane.
+    let acme = acme_settings.map(|settings| {
+        AcmeTask::start(
+            settings,
+            config_service.clone(),
+            metrics.clone(),
+            data_stop.clone(),
+        )
+    });
 
     // Request sampling: its thread, the pruner and the periodic upkeep. Off
     // costs nothing; on, the data plane only holds the handle.
@@ -303,6 +317,10 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
                 report.forced_connections
             );
         }
+    }
+    // Give the renewal lease up, so another instance can take over at once.
+    if let Some(acme) = acme {
+        acme.stopped().await;
     }
     // Every request has finished, so every sample has been handed over: write
     // what is queued and stop the sampler and the pruner.

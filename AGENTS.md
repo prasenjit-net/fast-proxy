@@ -88,7 +88,11 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `store/src/repository/acme/`; none of it is `Config`. The config service writes it (`acme_*.rs`): challenges and
   issued certificates as revisions, lease, status and account without one. Challenges are compiled into the snapshot
   (`AcmeChallenges`) and answered by the data plane first in `resolve` (`acme_challenge.rs`), before the redirect,
-  the 421 rule and maintenance; an answer is never forwarded or sampled.
+  the 421 rule and maintenance; an answer is never forwarded or sampled. `fast-proxy-acme` also holds the
+  protocol client (`client.rs`, over `instant-acme`). `crates/fast-proxy-acme-service/` is the runner: it holds the
+  renewal lease, decides with `RenewalPolicy`, drives orders (`order.rs`) and self-checks; `src/acme.rs` starts it.
+  `crates/fast-proxy-test-acme/` is a test-only ACME CA over HTTPS that validates HTTP-01 by really fetching;
+  `tests/acme_issuance.rs` drives the runner against it with a clock the test moves.
 - `crates/fast-proxy-tls/` is everything about certificates and keys, with no HTTP
   knowledge: PEM parsing and validation, the `Vault` (AES-256-GCM under the master
   key), the self-signed generator, `CertCache` (parsed keys, unchanged entries
