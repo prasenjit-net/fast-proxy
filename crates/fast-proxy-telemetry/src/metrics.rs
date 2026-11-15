@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::acme_metrics::{AcmeChallengeOutcome, AcmeMetrics};
 use crate::admin_metrics::{AdminMetrics, AdminResult, AuditResult};
 use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
 use crate::sampling_metrics::{SampleDropReason, SamplerReading, SamplingMetrics};
@@ -105,6 +106,7 @@ pub struct Metrics {
     maintenance: MaintenanceMetrics,
     sampling: SamplingMetrics,
     admin: AdminMetrics,
+    acme: AcmeMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -146,7 +148,9 @@ impl Metrics {
         let maintenance = MaintenanceMetrics::new(&registry);
         let sampling = SamplingMetrics::new(&registry);
         let admin = AdminMetrics::new(&registry);
+        let acme = AcmeMetrics::new(&registry);
         Self {
+            acme,
             upstream,
             tls,
             maintenance,
@@ -222,6 +226,11 @@ impl Metrics {
     /// route not yet matched).
     pub fn maintenance_response(&self, scope: &str, subsystem: &str, route: &str) {
         self.maintenance.response(scope, subsystem, route);
+    }
+
+    /// Counts a request on the ACME HTTP-01 challenge path by what happened to it.
+    pub fn acme_challenge_request(&self, outcome: AcmeChallengeOutcome) {
+        self.acme.challenge_request(outcome);
     }
 
     /// Counts a request that passed through a maintenance scope by a bypass rule.
@@ -710,6 +719,19 @@ mod tests {
             metrics.maintenance_response("subsystem", "shop", "_none");
         }
         assert_eq!(metrics.traffic_totals().overall().errors, 0);
+    }
+
+    #[test]
+    fn acme_challenge_requests_are_counted_by_outcome_only() {
+        let metrics = Metrics::new();
+        metrics.acme_challenge_request(AcmeChallengeOutcome::Answered);
+        metrics.acme_challenge_request(AcmeChallengeOutcome::Answered);
+        metrics.acme_challenge_request(AcmeChallengeOutcome::NotAnswered);
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_acme_challenge_requests_total{outcome="answered"} 2"#));
+        assert!(
+            text.contains(r#"fastproxy_acme_challenge_requests_total{outcome="not_answered"} 1"#)
+        );
     }
 
     #[test]

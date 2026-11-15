@@ -4,7 +4,8 @@ use std::sync::Arc;
 use fast_proxy_auth::TokenCache;
 use fast_proxy_balancing::RuntimeRegistry;
 use fast_proxy_routing::{
-    compile_full, MaintenanceInputs, SamplingInputs, SamplingRuntime, Snapshot, SnapshotHolder,
+    compile_full, AcmeInputs, MaintenanceInputs, SamplingInputs, SamplingRuntime, Snapshot,
+    SnapshotHolder,
 };
 use fast_proxy_store::repository::{audit, certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
@@ -12,6 +13,7 @@ use fast_proxy_telemetry::{AuditResult, Metrics, ReloadOutcome, SyncResult};
 use fast_proxy_tls::certificate_readings;
 use tokio::sync::{broadcast, Mutex};
 
+use crate::acme_challenges::stored_inputs as stored_acme;
 use crate::change_context::committed_entry;
 use crate::dev_certificates;
 use crate::maintenance::stored_inputs;
@@ -80,7 +82,7 @@ impl ConfigService {
         settings: TlsSettings,
     ) -> Result<Self, StartError> {
         let tls_enabled = settings.enabled;
-        let (config, version, has_certificates, check, maintenance, sampling) = store
+        let (config, version, has_certificates, check, (maintenance, sampling, acme)) = store
             .run(|db| {
                 db.read(|conn| {
                     Ok((
@@ -88,8 +90,11 @@ impl ConfigService {
                         revision::current_version(conn)?,
                         !certificates::list(conn)?.is_empty(),
                         vault::get(conn)?,
-                        stored_inputs(conn, now_ms())?,
-                        stored_sampling(conn, SamplingRuntime::new())?,
+                        (
+                            stored_inputs(conn, now_ms())?,
+                            stored_sampling(conn, SamplingRuntime::new())?,
+                            stored_acme(conn, now_ms())?,
+                        ),
                     ))
                 })
             })
@@ -108,6 +113,7 @@ impl ConfigService {
             &tls.inputs(&prepared, false),
             &maintenance,
             &sampling,
+            &acme,
         )?;
         metrics.set_maintenance_active(&maintenance_readings(&snapshot));
         let holder = Arc::new(SnapshotHolder::new());
@@ -172,7 +178,7 @@ impl ConfigService {
                 move |db| db.read(|conn| tls.build(conn))
             })
             .await?;
-        let (config, version, maintenance, sampling) = self
+        let (config, version, maintenance, sampling, acme) = self
             .store
             .run(|db| {
                 db.read(|conn| {
@@ -181,6 +187,7 @@ impl ConfigService {
                         revision::current_version(conn)?,
                         stored_inputs(conn, now_ms())?,
                         stored_sampling(conn, sampling_runtime)?,
+                        stored_acme(conn, now_ms())?,
                     ))
                 })
             })
@@ -193,6 +200,7 @@ impl ConfigService {
             &inputs,
             &maintenance,
             &sampling,
+            &acme,
         )?;
         self.metrics
             .set_maintenance_active(&maintenance_readings(&snapshot));
@@ -243,7 +251,7 @@ impl ConfigService {
         let previous = live.runtime_registry();
         let sampling_runtime = live.sampling_runtime();
         let tls = self.tls.clone();
-        let (config, version, prepared, maintenance, sampling) = self
+        let (config, version, prepared, (maintenance, sampling, acme)) = self
             .store
             .run(move |db| {
                 db.read(|conn| {
@@ -252,8 +260,11 @@ impl ConfigService {
                         load::load_all(conn)?,
                         revision::current_version(conn)?,
                         tls.build(conn)?,
-                        stored_inputs(conn, now_ms())?,
-                        stored_sampling(conn, sampling_runtime)?,
+                        (
+                            stored_inputs(conn, now_ms())?,
+                            stored_sampling(conn, sampling_runtime)?,
+                            stored_acme(conn, now_ms())?,
+                        ),
                     ))
                 })
             })
@@ -266,6 +277,7 @@ impl ConfigService {
             &inputs,
             &maintenance,
             &sampling,
+            &acme,
         )?;
         self.metrics
             .set_maintenance_active(&maintenance_readings(&snapshot));
@@ -514,6 +526,7 @@ fn persist_and_compile<T>(
     let prepared: RefCell<Option<Prepared>> = RefCell::new(None);
     let maintenance: RefCell<Option<MaintenanceInputs>> = RefCell::new(None);
     let sampling: RefCell<Option<SamplingInputs>> = RefCell::new(None);
+    let acme: RefCell<Option<AcmeInputs>> = RefCell::new(None);
     let written = db.write_as(
         actor,
         |conn| {
@@ -524,6 +537,7 @@ fn persist_and_compile<T>(
             // subsystem or route is not compiled.
             *maintenance.borrow_mut() = Some(stored_inputs(conn, now_ms())?);
             *sampling.borrow_mut() = Some(stored_sampling(conn, sampling_runtime)?);
+            *acme.borrow_mut() = Some(stored_acme(conn, now_ms())?);
             Ok(mutation)
         },
         |config| {
@@ -539,8 +553,20 @@ fn persist_and_compile<T>(
             let Some(sampling_inputs) = borrowed_sampling.as_ref() else {
                 return Err("sampling settings were not read".to_string());
             };
+            let borrowed_acme = acme.borrow();
+            let Some(acme_inputs) = borrowed_acme.as_ref() else {
+                return Err("acme challenges were not read".to_string());
+            };
             let inputs = tls.inputs(ready, tls.settings.enabled);
-            match compile_full(0, config, previous, &inputs, scopes, sampling_inputs) {
+            match compile_full(
+                0,
+                config,
+                previous,
+                &inputs,
+                scopes,
+                sampling_inputs,
+                acme_inputs,
+            ) {
                 Ok(snapshot) => {
                     compiled = Some(snapshot);
                     Ok(())

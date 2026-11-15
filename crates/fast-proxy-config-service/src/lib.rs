@@ -3,6 +3,10 @@
 //! rules, persists it with a revision, and swaps the live snapshot, in that
 //! order and under one writer lock. The data plane only ever sees the holder.
 
+mod acme_certificates;
+mod acme_challenges;
+mod acme_rules;
+mod acme_state;
 mod audit_events;
 mod audit_retention;
 mod ca_bundles;
@@ -17,6 +21,8 @@ mod service;
 mod tls_state;
 mod tokens;
 
+pub use acme_certificates::{IssuedCertificate, StoredAcmeCertificate};
+pub use acme_state::{AcmeAccount, AcmeAccountCredentials};
 pub use audit_events::AuditEvent;
 pub use audit_retention::AuditRetention;
 pub use ca_bundles::CaBundleSummary;
@@ -27,6 +33,8 @@ pub use service::{Applied, ConfigChanged, ConfigService};
 pub use tls_state::{TlsSettings, VaultStatus};
 pub use tokens::{Bootstrap, CreatedToken};
 
+#[cfg(test)]
+mod acme_tests;
 #[cfg(test)]
 mod operations_tests;
 #[cfg(test)]

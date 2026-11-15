@@ -10,8 +10,8 @@ use fast_proxy_model::{
 use fast_proxy_sampling::SamplingPolicy;
 
 use crate::{
-    CompiledHttps, CompiledMaintenance, CompiledSampling, CompiledUpstream, HostTable, RouteTable,
-    SamplingRuntime,
+    AcmeChallenges, CompiledHttps, CompiledMaintenance, CompiledSampling, CompiledUpstream,
+    HostTable, RouteTable, SamplingRuntime,
 };
 
 /// A route with its upstream group resolved. The endpoint is chosen per
@@ -71,6 +71,8 @@ pub struct Snapshot {
     pub unmatched_sampling: Arc<SamplingPolicy>,
     /// The process-wide sampling state and every route's rolling latency.
     pub sampling: SamplingRuntime,
+    /// The pending ACME HTTP-01 challenges, answered ahead of routing.
+    pub acme_challenges: Arc<AcmeChallenges>,
 }
 
 impl Snapshot {

@@ -326,11 +326,12 @@ fn redirect_port(tls: &TlsConfig, https: Option<&TlsPlane>) -> u16 {
 /// The name of the HTTPS listener in logs, metrics and the admin runtime view.
 const HTTPS_LISTENER: &str = "https";
 
-/// What the config service needs to know about TLS: the switch, and where the
+/// What the config service needs to know about TLS: the switches (TLS, ACME), and where the
 /// master key comes from (`FAST_PROXY_MASTER_KEY` wins over the file).
 fn tls_settings(config: &AppConfig) -> TlsSettings {
     TlsSettings {
         enabled: config.data_plane.tls.enabled,
+        acme_enabled: config.data_plane.acme.enabled,
         master_key_file: Some(config.data_plane.master_key_path()),
         env_master_key: std::env::var("FAST_PROXY_MASTER_KEY").ok(),
     }

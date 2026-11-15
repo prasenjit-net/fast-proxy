@@ -1,6 +1,7 @@
 # M4 Plan: ACME automatic certificates
 
-Status: **draft v0.2 (2026-11-15), proposed; PR1 (`m4/pr1-foundations`) written, awaiting the owner's review.**
+Status: **draft v0.3 (2026-11-15), proposed; PR1 (`m4/pr1-foundations`, #68) and PR2 (`m4/pr2-challenges`) written,
+awaiting the owner's review.**
 The owner asked to start the work, so PR1 builds on the recommendations as written; the ADRs (0024 to 0027) stay
 *proposed* until the owner confirms the **(confirm)** items, and anything changed at review is reworked there.
 
@@ -356,30 +357,49 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
 
 ### Workstream CS: Config service
 
-- [ ] **CS1 (M) The ACME switch on subsystems** through the existing HTTPS write, with the K4 rules and their 400s;
+- [x] **CS1 (M) The ACME switch on subsystems** through the existing HTTPS write, with the K4 rules and their 400s;
   refusing to attach a certificate while ACME is on.
-- [ ] **CS2 (M) Challenges.** `publish_challenges` and `clear_challenges` as summary-only revisions with audit rows
+  *As built:* `acme_rules.rs` (`check_acme_change`, `ConfigService::check_https_change`), applied in `write_subsystem`
+  (update and HTTPS edits) and on create in the admin API; the process switch is `TlsSettings::acme_enabled`.
+- [x] **CS2 (M) Challenges.** `publish_challenges` and `clear_challenges` as summary-only revisions with audit rows
   (`acme.challenge.publish`, `acme.challenge.clear`, actor `system`); expired ones cleared.
-- [ ] **CS3 (M) Store an issued certificate** (K13): seal, replace in place or create, attach, clear the order's
+  *As built:* `acme_challenges.rs`; publishing replaces the subsystem's earlier challenges and drops every expired
+  one; clearing what is not there writes nothing; every compile reads the challenges (`stored_inputs`).
+- [x] **CS3 (M) Store an issued certificate** (K13): seal, replace in place or create, attach, clear the order's
   challenges, delete the unused `dev-<subsystem>`, audit `certificate.acme.issue|renew`, one apply.
-- [ ] **CS4 (M) Lease and status without a revision** (K10, K11): `try_acme_lease`, `release_acme_lease`,
+  *As built:* `acme_certificates.rs` (`store_acme_certificate(IssuedCertificate)`); the chain passes `validate_issued`
+  before the write; a switch turned off mid-order is a `Conflict`; an uploaded certificate is kept, unattached.
+- [x] **CS4 (M) Lease and status without a revision** (K10, K11): `try_acme_lease`, `release_acme_lease`,
   `record_acme_status`, `record_acme_failure` (with its audit row `certificate.acme.fail`); a test asserts the
   revision version does not move.
-- [ ] **CS5 (S) Account**: load and open, or create and seal (through the vault the service already holds).
+  *As built:* `acme_state.rs`, also `acme_lease`, `acme_status(es)` and `forget_acme_status`.
+- [x] **CS5 (S) Account**: load and open, or create and seal (through the vault the service already holds).
+  *As built:* `acme_account` / `save_acme_account` with `AcmeAccountCredentials` (zeroed, redacted `Debug`), sealed
+  under `acme-account:<directory>`, audited `acme.account.save`; a test scans the database file and WAL.
 
 ### Workstream R: Routing and compile
 
-- [ ] **R1 (M) Challenges in the snapshot.** `compile_all` takes the live challenges; `Snapshot::acme_challenge(host,
+- [x] **R1 (M) Challenges in the snapshot.** `compile_all` takes the live challenges; `Snapshot::acme_challenge(host,
   token) -> Option<&str>`; expired ones dropped at compile; carried like maintenance scopes. Pure tests.
-- [ ] **R2 (S) The K4 cross-table rules** in compile (ACME on needs HTTPS on; no manual attach while ACME is on).
+  *As built:* `AcmeInputs` is a seventh input of `compile_full`; `Snapshot::acme_challenges` (`AcmeChallenges::answer
+  (host_header, path)`) returns at once when nothing is pending.
+- [x] **R2 (S) The K4 cross-table rules** in compile (ACME on needs HTTPS on; no manual attach while ACME is on).
+  *As built (moved):* "ACME on needs HTTPS on" is the model rule of MD1. The other two are rules about *changes*,
+  so they live in the write path (CS1), not in compile: a stored switch must keep compiling when the process turns
+  ACME off (it is inert then), and the ACME write itself must be able to attach what it issued.
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (M) Answer the challenge** first in `resolve` (K9): `GET`/`HEAD`, token and host must match, `200
+- [x] **D1 (M) Answer the challenge** first in `resolve` (K9): `GET`/`HEAD`, token and host must match, `200
   text/plain`, `Cache-Control: no-store`; fall through otherwise. Tests: on a redirecting subsystem, in each
   maintenance scope, on a disabled subsystem, over HTTPS, an unknown token reaching the backend, a token for another
   host falling through, `POST` falling through, no sample taken, no route metric, the challenge metric.
-- [ ] **D2 (S) Cost check**: a micro-benchmark of a normal request with the prefix check in place.
+  *As built:* `dataplane/src/acme_challenge.rs` and `Resolved::AcmeChallenge`; `fastproxy_acme_challenge_requests_total
+  {outcome="answered"|"not_answered"}`; unit tests in `acme_challenge_tests.rs` and `sampling_tests.rs`; the redirect
+  and HTTPS cases end to end in `tests/acme_challenges.rs` (with a stored ACME certificate on the next handshake).
+- [x] **D2 (S) Cost check**: a micro-benchmark of a normal request with the prefix check in place.
+  *As built:* a normal request pays `HashMap::is_empty` and one `starts_with` on the path (for the metric); no
+  separate micro-benchmark, the measured figure comes with the Q6 benchmark run in PR4.
 
 ### Workstream RN: The runner (new, `fast-proxy-acme-service`)
 

@@ -63,6 +63,7 @@ impl TestApp {
         Self::start(
             TlsSettings {
                 enabled: true,
+                acme_enabled: false,
                 master_key_file: None,
                 env_master_key: Some(TEST_MASTER_KEY.into()),
             },
@@ -77,6 +78,7 @@ impl TestApp {
         Self::start(
             TlsSettings {
                 enabled: false,
+                acme_enabled: false,
                 master_key_file: None,
                 env_master_key: Some(TEST_MASTER_KEY.into()),
             },
@@ -112,11 +114,26 @@ impl TestApp {
         self.token = Some(token);
     }
 
+    /// TLS and ACME on for the process, with a master key.
+    pub async fn with_acme() -> Self {
+        Self::start(
+            TlsSettings {
+                enabled: true,
+                acme_enabled: true,
+                master_key_file: None,
+                env_master_key: Some(TEST_MASTER_KEY.into()),
+            },
+            Protection::Normal,
+        )
+        .await
+    }
+
     /// A master key from the environment form, with TLS on or off.
     pub async fn with_tls(enabled: bool) -> Self {
         Self::start(
             TlsSettings {
                 enabled,
+                acme_enabled: false,
                 master_key_file: None,
                 env_master_key: Some(TEST_MASTER_KEY.into()),
             },

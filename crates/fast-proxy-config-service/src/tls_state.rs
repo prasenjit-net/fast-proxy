@@ -22,6 +22,9 @@ use crate::dev_certificates;
 pub struct TlsSettings {
     /// TLS is on for the process (the HTTPS listener runs).
     pub enabled: bool,
+    /// ACME is on for the process (`[data_plane.acme] enabled`): subsystems
+    /// may turn their ACME switch on.
+    pub acme_enabled: bool,
     /// Where the master key file lives; `None` means no file may be created,
     /// so sealing a key fails unless `env_master_key` is set.
     pub master_key_file: Option<PathBuf>,

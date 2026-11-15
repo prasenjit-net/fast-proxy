@@ -85,7 +85,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-acme/` is ACME policy with no I/O (M4, in progress): which hosts get a certificate
   (`eligible_names`), when to renew and how to back off (`RenewalPolicy`, time as a parameter), the CA problem
   classifier and the `OrderStep` state machine of one order. ACME state (account, challenges, lease, status) is in
-  `store/src/repository/acme/`; none of it is `Config`.
+  `store/src/repository/acme/`; none of it is `Config`. The config service writes it (`acme_*.rs`): challenges and
+  issued certificates as revisions, lease, status and account without one. Challenges are compiled into the snapshot
+  (`AcmeChallenges`) and answered by the data plane first in `resolve` (`acme_challenge.rs`), before the redirect,
+  the 421 rule and maintenance; an answer is never forwarded or sampled.
 - `crates/fast-proxy-tls/` is everything about certificates and keys, with no HTTP
   knowledge: PEM parsing and validation, the `Vault` (AES-256-GCM under the master
   key), the self-signed generator, `CertCache` (parsed keys, unchanged entries
