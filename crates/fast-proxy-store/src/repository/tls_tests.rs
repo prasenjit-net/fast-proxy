@@ -60,6 +60,7 @@ fn https_on(certificate: Option<CertificateId>) -> HttpsPolicy {
             max_age_secs: 600,
             include_subdomains: true,
         },
+        acme_enabled: true,
     }
 }
 

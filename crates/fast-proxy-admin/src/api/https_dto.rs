@@ -18,6 +18,8 @@ pub struct HttpsRequest {
     certificate_id: Option<i64>,
     redirect: Option<String>,
     hsts: Option<HstsRequest>,
+    #[serde(default)]
+    acme_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +51,7 @@ impl HttpsRequest {
             certificate_id: self.certificate_id.map(CertificateId),
             redirect: redirect?,
             hsts,
+            acme_enabled: self.acme_enabled,
         };
         errors.check(policy.validate().map(|()| policy))
     }
@@ -80,6 +83,7 @@ pub struct HttpsDto {
     certificate_id: Option<i64>,
     redirect: &'static str,
     hsts: HstsDto,
+    acme_enabled: bool,
     /// Whether the settings take effect: HTTPS is enabled here and TLS is on
     /// for the process. Stored settings are inert while TLS is off.
     effective: bool,
@@ -109,6 +113,7 @@ impl HttpsDto {
                 max_age_secs: policy.hsts.max_age_secs,
                 include_subdomains: policy.hsts.include_subdomains,
             },
+            acme_enabled: policy.acme_enabled,
             effective: tls_enabled && policy.enabled,
             certificate: certificate.map(|cert| AttachedCertificateDto {
                 uncovered_hosts: hosts

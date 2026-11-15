@@ -71,6 +71,7 @@ async fn configure(stack: &Stack, shop: &Shop, redirect: RedirectMode, hsts: Hst
         certificate_id: Some(shop.certificate),
         redirect,
         hsts,
+        acme_enabled: false,
     };
     stack
         .service

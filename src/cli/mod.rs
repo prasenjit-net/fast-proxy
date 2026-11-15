@@ -75,6 +75,14 @@ pub struct Cli {
     #[arg(long)]
     pub https_listen: Option<SocketAddr>,
 
+    /// Turn ACME on, overriding [data_plane.acme].enabled
+    #[arg(long, conflicts_with = "no_acme")]
+    pub acme: bool,
+
+    /// Turn ACME off, overriding [data_plane.acme].enabled
+    #[arg(long)]
+    pub no_acme: bool,
+
     /// Turn request sampling on, overriding [sampling].enabled
     #[arg(long, conflicts_with = "no_sampling")]
     pub sampling: bool,
@@ -116,6 +124,12 @@ impl Cli {
         }
         if self.no_tls {
             config.data_plane.tls.enabled = false;
+        }
+        if self.acme {
+            config.data_plane.acme.enabled = true;
+        }
+        if self.no_acme {
+            config.data_plane.acme.enabled = false;
         }
         if self.sampling {
             config.sampling.enabled = true;
@@ -300,6 +314,22 @@ mod tests {
         parse(&[]).apply(&mut config);
         assert!(config.sampling.enabled, "no flag leaves the file's value");
         assert!(Cli::try_parse_from(["fast-proxy", "--sampling", "--no-sampling"]).is_err());
+    }
+
+    #[test]
+    fn the_acme_flags_override_the_file_in_both_directions() {
+        let mut config = AppConfig::default();
+        assert!(!config.data_plane.acme.enabled, "off by default");
+        parse(&["--acme"]).apply(&mut config);
+        assert!(config.data_plane.acme.enabled);
+        parse(&[]).apply(&mut config);
+        assert!(
+            config.data_plane.acme.enabled,
+            "no flag leaves the file's value"
+        );
+        parse(&["--no-acme"]).apply(&mut config);
+        assert!(!config.data_plane.acme.enabled);
+        assert!(Cli::try_parse_from(["fast-proxy", "--acme", "--no-acme"]).is_err());
     }
 
     #[test]

@@ -53,6 +53,29 @@ http2_max_header_list_size = 65536
 http2_keep_alive_interval = "30s"
 http2_keep_alive_timeout = "20s"
 
+# Automatic certificates through ACME (needs [data_plane.tls] enabled). Each
+# subsystem then opts in (https.acmeEnabled in the admin UI or API). The CA
+# checks HTTP-01 challenges on port 80, so a plain listener must be reachable
+# there. --acme / --no-acme override `enabled`.
+[data_plane.acme]
+enabled = false
+# Let's Encrypt staging by default (untrusted certificates, generous limits).
+# Production: "https://acme-v02.api.letsencrypt.org/directory"
+directory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+# email = "ops@example.com"
+# The names ACME may issue for; required when enabled. "*.example.com" allows
+# any name below example.com.
+allowed_domains = []
+# "ecdsa-p256" or "ecdsa-p384".
+key_type = "ecdsa-p256"
+# Roots to trust for the directory (a private CA or Pebble).
+# directory_ca = "/etc/fast-proxy/acme-ca.pem"
+renew_check_interval = "1h"
+# How long other instances get to see a challenge before the CA checks it.
+# Default: twice config_poll_interval plus 2s.
+# propagation_wait = "12s"
+lease_ttl = "10m"
+
 [admin]
 # The admin plane (UI, REST API, /metrics) has no authentication yet.
 # Keep it on loopback.

@@ -70,6 +70,7 @@ pub enum StartupError {
 /// Starts everything and serves until Ctrl-C. Every listener is bound
 /// before any traffic is served, so a bind failure aborts startup cleanly.
 pub async fn run(config: AppConfig) -> Result<(), StartupError> {
+    let acme_warnings = config.acme_warnings();
     let data_plane = &config.data_plane;
     let trusted_proxies = TrustedProxies::parse(&data_plane.trusted_proxies)?;
 
@@ -253,7 +254,10 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         database.display(),
         config_service.snapshot_holder().load().version
     );
-    for warning in admin_warnings(&config.admin) {
+    for warning in admin_warnings(&config.admin)
+        .into_iter()
+        .chain(acme_warnings)
+    {
         tracing::warn!("{warning}");
     }
 

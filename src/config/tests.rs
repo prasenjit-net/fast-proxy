@@ -246,6 +246,59 @@ fn unknown_tls_keys_and_certificate_entries_are_rejected() {
 }
 
 #[test]
+fn the_acme_section_defaults_to_off_on_staging_and_parses() {
+    let defaults = parse("").unwrap().data_plane.acme;
+    assert!(!defaults.enabled);
+    assert!(defaults.directory.contains("acme-staging-v02"));
+    assert_eq!(defaults.key_type, fast_proxy_model::AcmeKeyType::EcdsaP256);
+    assert_eq!(defaults.renew_check_interval, Duration::from_secs(3600));
+    assert_eq!(defaults.lease_ttl, Duration::from_secs(600));
+    assert_eq!(defaults.propagation_wait, None);
+
+    let config = parse(
+        r#"
+        [data_plane.acme]
+        enabled = true
+        directory = "https://ca.example/dir"
+        email = "ops@example.com"
+        allowed_domains = ["*.example.com", "example.org"]
+        key_type = "ecdsa-p384"
+        directory_ca = "/etc/ca.pem"
+        renew_check_interval = "30m"
+        propagation_wait = "0s"
+        lease_ttl = "2m"
+        "#,
+    )
+    .unwrap();
+    let acme = config.data_plane.acme;
+    assert!(acme.enabled);
+    assert_eq!(acme.directory, "https://ca.example/dir");
+    assert_eq!(acme.email, "ops@example.com");
+    assert_eq!(acme.allowed_domains, ["*.example.com", "example.org"]);
+    assert_eq!(acme.key_type, fast_proxy_model::AcmeKeyType::EcdsaP384);
+    assert_eq!(acme.directory_ca, Some(PathBuf::from("/etc/ca.pem")));
+    assert_eq!(acme.renew_check_interval, Duration::from_secs(1800));
+    assert_eq!(acme.propagation_wait, Some(Duration::ZERO));
+    assert_eq!(acme.lease_ttl, Duration::from_secs(120));
+}
+
+#[test]
+fn unknown_acme_keys_and_bad_values_are_rejected() {
+    for toml in [
+        "[data_plane.acme]
+eab_key_id = \"x\"",
+        "[data_plane.acme]
+key_type = \"rsa-2048\"",
+        "[data_plane.acme]
+lease_ttl = \"later\"",
+        "[data_plane.acme]
+propagation_wait = \"soon\"",
+    ] {
+        assert!(parse(toml).is_err(), "{toml}");
+    }
+}
+
+#[test]
 fn the_repository_config_file_parses_and_is_valid() {
     let config = AppConfig::load(Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),

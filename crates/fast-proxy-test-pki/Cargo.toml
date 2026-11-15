@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
-rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "x509-parser"] }
 time = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio = { workspace = true }

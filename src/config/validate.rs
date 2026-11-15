@@ -54,6 +54,7 @@ pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
 
     validate_admin(config)?;
     validate_tls(config)?;
+    super::validate_acme::check(config)?;
     validate_sampling(&config.sampling)
 }
 

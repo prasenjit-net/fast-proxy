@@ -2,7 +2,8 @@
 //! field (`certPem`, `keyPem`) and never contain PEM text.
 
 use fast_proxy_model::{
-    validate_san, CertificateMetadata, FieldError, MAX_CHAIN_LENGTH, MAX_PEM_BYTES,
+    covers, validate_san, CertificateMetadata, FieldError, HostPattern, MAX_CHAIN_LENGTH,
+    MAX_PEM_BYTES,
 };
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -97,6 +98,34 @@ pub fn validate_with_key(
         metadata,
         warnings,
     })
+}
+
+/// Checks a chain an ACME CA issued for `key`: everything
+/// [`validate_with_key`] checks, plus that it covers every ordered name, so a
+/// CA answer that would leave a host uncovered is a failed order, never a
+/// stored certificate. Issuance and upload share the checks so they cannot
+/// disagree.
+pub fn validate_issued(
+    chain_pem: &str,
+    key: KeyMaterial,
+    names: &[String],
+    now_ms: i64,
+) -> Result<ValidatedCertificate, FieldError> {
+    let validated = validate_with_key(chain_pem, key, now_ms)?;
+    let missing = names.iter().find(|name| {
+        !validated
+            .metadata
+            .names
+            .iter()
+            .any(|san| covers(san, &HostPattern::Exact(name.to_ascii_lowercase())))
+    });
+    match missing {
+        Some(name) => Err(FieldError::new(
+            "certPem",
+            format!("does not cover the ordered name {name}"),
+        )),
+        None => Ok(validated),
+    }
 }
 
 /// Parses a PEM certificate chain, leaf first.
@@ -444,6 +473,65 @@ mod tests {
             assert!(!err.to_string().contains("SECRET"));
         }
         assert!(parse_ca_bundle(&"x".repeat(MAX_PEM_BYTES + 1)).is_err());
+    }
+
+    mod issued {
+        use fast_proxy_model::AcmeKeyType;
+        use fast_proxy_test_pki::{LeafSpec, TestCa};
+
+        use super::now_ms;
+        use crate::{generate_order_key, validate_issued};
+
+        fn names(list: &[&str]) -> Vec<String> {
+            list.iter().map(ToString::to_string).collect()
+        }
+
+        #[test]
+        fn a_chain_signed_for_the_order_key_and_names_passes() {
+            let ca = TestCa::new("acme ca");
+            let ordered = names(&["shop.example.com", "www.shop.example.com"]);
+            let order = generate_order_key(&ordered, AcmeKeyType::EcdsaP256).unwrap();
+            let chain = ca
+                .sign_csr(&order.csr_der, &LeafSpec::new(&["ignored.example"]))
+                .unwrap();
+            let valid = validate_issued(&chain, order.key, &ordered, now_ms()).unwrap();
+            assert_eq!(valid.metadata.names, ordered);
+            assert_eq!(valid.chain.len(), 2);
+        }
+
+        #[test]
+        fn a_chain_missing_an_ordered_name_is_refused_naming_it() {
+            let ca = TestCa::new("acme ca");
+            let order =
+                generate_order_key(&names(&["shop.example.com"]), AcmeKeyType::EcdsaP256).unwrap();
+            let chain = ca.sign_csr(&order.csr_der, &LeafSpec::new(&[])).unwrap();
+            let err = validate_issued(
+                &chain,
+                order.key,
+                &names(&["shop.example.com", "new.example.com"]),
+                now_ms(),
+            )
+            .unwrap_err();
+            assert_eq!(err.field, "certPem");
+            assert!(err.message.contains("new.example.com"), "{}", err.message);
+        }
+
+        #[test]
+        fn a_chain_for_another_key_is_refused() {
+            let ca = TestCa::new("acme ca");
+            let ordered = names(&["shop.example.com"]);
+            let signed = generate_order_key(&ordered, AcmeKeyType::EcdsaP256).unwrap();
+            let other = generate_order_key(&ordered, AcmeKeyType::EcdsaP256).unwrap();
+            let chain = ca.sign_csr(&signed.csr_der, &LeafSpec::new(&[])).unwrap();
+            assert!(validate_issued(&chain, other.key, &ordered, now_ms()).is_err());
+        }
+
+        #[test]
+        fn a_garbage_csr_is_not_signed() {
+            assert!(TestCa::new("ca")
+                .sign_csr(b"nope", &LeafSpec::new(&[]))
+                .is_err());
+        }
     }
 
     #[test]

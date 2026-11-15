@@ -1,0 +1,12 @@
+[package]
+name = "fast-proxy-acme"
+version = "0.0.0"
+edition = "2021"
+description = "ACME for fast-proxy: which names to certify, when to renew and back off, and the steps of one order (pure; the protocol client arrives with the runner)"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+
+[dev-dependencies]
+proptest = "1"

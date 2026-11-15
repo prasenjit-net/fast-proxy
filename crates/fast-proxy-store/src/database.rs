@@ -7,7 +7,7 @@ use crate::repository::load;
 use crate::{revision, StoreError};
 
 /// Bump together with `schema.sql`. Stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 /// The actor recorded for changes nobody asked for by name (the sweeper, tests).
 /// The WAL is truncated to this size after a checkpoint.
 const WAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;

@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::duration::deserialize_duration;
-use super::TlsConfig;
+use super::{AcmeConfig, TlsConfig};
 
 /// The `[data_plane]` section: listeners and process-level proxy settings.
 /// Subsystems, hosts, and routes are not here; they live in the database.
@@ -32,6 +32,8 @@ pub struct DataPlaneConfig {
     pub config_poll_interval: Duration,
     /// TLS termination.
     pub tls: TlsConfig,
+    /// Automatic certificates through ACME.
+    pub acme: AcmeConfig,
 }
 
 /// One `[[data_plane.listener]]` entry.
@@ -71,6 +73,7 @@ impl Default for DataPlaneConfig {
             master_key_file: None,
             config_poll_interval: Duration::from_secs(5),
             tls: TlsConfig::default(),
+            acme: AcmeConfig::default(),
         }
     }
 }

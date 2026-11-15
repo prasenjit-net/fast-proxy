@@ -1,7 +1,7 @@
 # ADR 0014: ACME constraints recorded for M4
 
-Status: accepted (design constraints only; nothing is built in M3). Plan
-reference: M3 F29.
+Status: accepted (design constraints only; nothing is built in M3). Realized by ADRs 0024 to
+0027 (M4). Plan reference: M3 F29.
 
 ## Decision
 

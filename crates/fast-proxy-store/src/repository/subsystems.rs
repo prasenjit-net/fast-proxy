@@ -26,8 +26,8 @@ pub(crate) fn insert(
         "INSERT INTO subsystem (id, name, enabled, description, https_enabled,
                                 https_certificate_id, https_redirect, hsts_enabled,
                                 hsts_max_age_secs, hsts_include_subdomains,
-                                created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                                https_acme_enabled, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
         params![
             id.map(|id| id.0),
             fields.name.as_str(),
@@ -39,6 +39,7 @@ pub(crate) fn insert(
             https.hsts_enabled,
             https.hsts_max_age_secs,
             https.hsts_include_subdomains,
+            https.acme_enabled,
             now
         ],
     )?;
@@ -55,8 +56,9 @@ pub fn update(
     let changed = conn.execute(
         "UPDATE subsystem SET name = ?1, enabled = ?2, description = ?3, https_enabled = ?4,
                 https_certificate_id = ?5, https_redirect = ?6, hsts_enabled = ?7,
-                hsts_max_age_secs = ?8, hsts_include_subdomains = ?9, updated_at = ?10
-         WHERE id = ?11",
+                hsts_max_age_secs = ?8, hsts_include_subdomains = ?9,
+                https_acme_enabled = ?10, updated_at = ?11
+         WHERE id = ?12",
         params![
             fields.name.as_str(),
             fields.enabled,
@@ -67,6 +69,7 @@ pub fn update(
             https.hsts_enabled,
             https.hsts_max_age_secs,
             https.hsts_include_subdomains,
+            https.acme_enabled,
             now_ms(),
             id.0
         ],

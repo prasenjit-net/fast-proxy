@@ -611,6 +611,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-acme"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "proptest",
+]
+
+[[package]]
 name = "fast-proxy-admin"
 version = "0.0.0"
 dependencies = [

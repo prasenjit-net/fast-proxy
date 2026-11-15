@@ -323,6 +323,7 @@ mod tls_revisions {
                         enabled: true,
                         certificate_id: id,
                         redirect: RedirectMode::Permanent308,
+                        acme_enabled: true,
                         ..HttpsPolicy::default()
                     },
                     ..subsystem_fields("shop")

@@ -2,6 +2,7 @@
 //! `&Connection` (a `Transaction` derefs to one), so the same code serves
 //! reads and the transactional write path.
 
+pub mod acme;
 pub mod audit;
 pub mod ca_bundles;
 pub mod certificates;

@@ -82,6 +82,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `SampleReader` (what the admin plane reads; every instance's samples). Samples are telemetry, not configuration: they
   never go through `ConfigService::apply` and never make another instance reload. Sampling *settings* do, like every
   other write.
+- `crates/fast-proxy-acme/` is ACME policy with no I/O (M4, in progress): which hosts get a certificate
+  (`eligible_names`), when to renew and how to back off (`RenewalPolicy`, time as a parameter), the CA problem
+  classifier and the `OrderStep` state machine of one order. ACME state (account, challenges, lease, status) is in
+  `store/src/repository/acme/`; none of it is `Config`.
 - `crates/fast-proxy-tls/` is everything about certificates and keys, with no HTTP
   knowledge: PEM parsing and validation, the `Vault` (AES-256-GCM under the master
   key), the self-signed generator, `CertCache` (parsed keys, unchanged entries
