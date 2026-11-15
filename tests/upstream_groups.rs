@@ -180,7 +180,10 @@ fn killing_one_of_three_backends_under_load_causes_no_client_errors_and_it_leave
     let dir = tempfile::tempdir().unwrap();
     let proxy = start_proxy(dir.path());
     let backends = three_backends();
-    let (sub, up) = site(&proxy, &backends, json!({}));
+    // A long ejection: refused connections are slow to be reported on Windows, and
+    // the default 10 s could expire mid-test and eject the victim a second time.
+    let policy = json!({ "passive": { "baseEjectionMs": 60_000, "maxEjectionMs": 60_000 } });
+    let (sub, up) = site(&proxy, &backends, policy);
     let victim = &backends[1];
 
     let stop = Arc::new(AtomicBool::new(false));
