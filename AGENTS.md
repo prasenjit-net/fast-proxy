@@ -79,7 +79,15 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 - `crates/fast-proxy-sampling/` is request sampling with no HTTP and no database (M6): the decision
   (`decide`), `LatencyWindow`, `ClientErrors`, `StormGuard`, `RateLimiter`, the `Redactor`, the `Sample`
   encoding and `SampleQuery`, the `Batcher`, and the `Sampler` handle with its worker thread and the `SampleSink`
-  trait. The data plane depends on it; it depends on `model` only. Its token bucket (`bucket.rs`) ignores a clock reading slightly older than the stored one, so concurrent callers cannot refill it.
+  trait. The data plane depends on it; it depends on `model` and `limits` only. Its token bucket lives in
+  `fast-proxy-limits` (`bucket.rs`) and ignores a clock reading slightly older than the stored one, so concurrent
+  callers cannot refill it.
+- `crates/fast-proxy-limits/` is request limits with no I/O and no HTTP (M7, ADRs 0029 to 0031): `Gcra` (rate
+  limiting from one stored time per key, nanoseconds from `monotonic_ns()`), `KeyTable` (sharded, bounded by a
+  `KeyBudget` every table shares; a full table admits and reports `TableFull`), `KeyHasher` (seeded; IPv6 cut to the
+  policy's prefix), `RateLimitRuntime` (tables by `PolicyIdentity`, carried across snapshot swaps like endpoint
+  state) and the token `bucket` the sampler uses. Rate-limit policies are `Config` (a rollback restores them);
+  routing compiles each route's effective policy (its own, else its subsystem's) into `CompiledRateLimit`.
 - `crates/fast-proxy-sample-service/` stores samples in the shared database (M6): `SampleWriter` (the sampler's sink,
   on its own connection, no revision), `Pruner` (retention by age, rows and bytes; every instance runs one) and
   `SampleReader` (what the admin plane reads; every instance's samples). Samples are telemetry, not configuration: they
@@ -164,7 +172,10 @@ These invariants hold across the codebase; do not break them without an ADR in `
   everything else only for idempotent ones; never after a body byte was read
   (`BodyOwner::is_replayable`), never for upgrades, always within the group's
   retry budget and away from the endpoint that just failed.
-- **Draining and disabled endpoints are never selected**, not even in panic mode.
+- **Draining and disabled endpoints are never selected**, not even in panic mode, and neither is an
+  endpoint at its group's `max_requests` cap (`EndpointRuntime::try_track` counts against the cap atomically).
+- **Rate limits are per instance** (ADR 0030): the tables are process state, never in the database; the
+  configuration says only what the policy is.
 - **The URL rewrite lives in `fast-proxy-routing`** (`build_upstream_uri`) so the
   proxy and the admin resolver cannot disagree.
 - **API errors never leak paths or storage detail**; the detail goes to the log.
