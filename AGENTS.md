@@ -138,6 +138,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 
 These invariants hold across the codebase; do not break them without an ADR in `docs/adr/`.
 
+- **No `unsafe` code.** The workspace lint `unsafe_code = "forbid"` applies to every crate
+  (`[lints] workspace = true` in each manifest; `tests/workspace_lints.rs` checks a new crate opts
+  in). A dependency's license, source and advisories pass `cargo deny` (`deny.toml`), and
+  `rusqlite` is one workspace dependency because SQLite is linked once.
 - **The data plane never touches the database.** It only reads the compiled
   `Snapshot` through `SnapshotHolder`. `fast-proxy-dataplane` must not depend on
   `fast-proxy-store`.
@@ -298,6 +302,7 @@ Backend:
 cargo test
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
+cargo deny check      # advisories, licenses, bans, sources (deny.toml); needs cargo-deny
 cargo run
 ```
 
@@ -343,7 +348,7 @@ Development servers:
 
 ## Testing Expectations
 
-- For backend changes, run at least `cargo test`; also run `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` when practical.
+- For backend changes, run at least `cargo test`; also run `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` when practical. After changing dependencies, run `cargo deny check` (CI does on every pull request).
 - For frontend changes, run `cd ui && npm test`; run `cd ui && npm run build` for type-checking and production bundle verification.
 - For changes spanning backend and frontend contracts, test both sides.
 - Report test coverage (see Development Rules) when finishing a task.
