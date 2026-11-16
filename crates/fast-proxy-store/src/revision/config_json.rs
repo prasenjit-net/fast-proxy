@@ -43,6 +43,9 @@ struct HttpsJson {
     hsts_enabled: bool,
     hsts_max_age_secs: u32,
     hsts_include_subdomains: bool,
+    /// Added in schema 6: revisions written before it have no such field and
+    /// still restore (off). Every field added later needs the same default.
+    #[serde(default)]
     acme_enabled: bool,
 }
 
