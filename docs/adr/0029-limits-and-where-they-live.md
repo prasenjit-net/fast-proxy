@@ -71,3 +71,21 @@ between keep-alive requests, and whether `http1().max_headers` covers the header
 Every refusal is a fixed response with a reason in the access log, a counter and a sample (the
 sampler sees them as 4xx). The defaults are generous, and the body cap is off, so an upgrade does
 not refuse traffic it used to forward.
+
+## As built (M7 PR3) and spike G2
+
+- **What hyper 1.11 already bounds** (measured with `header_read_timeout` at 1 s): a keep-alive connection idle
+  between requests is closed after the header timeout, so there is no separate `idle_timeout`. It does **not**
+  close a connection that never sends a byte, a body that stalls, or a client that never reads: PR4 adds a
+  first-byte deadline, a per-chunk body timeout and a send-stall timeout for those.
+- **Header limits:** hyper answers `431` for more than `max_headers` fields (default 100) and for a head larger than
+  its buffer. Another `max_headers` value moves its header buffer to the heap (about 5% per request), so it is set
+  only when it differs from 100. hyper panics for a buffer under 8 KiB, so `max_header_bytes` is at least that.
+  Over a too-large head hyper may reset the connection before the client reads the `431`.
+- **Framing:** hyper refuses a non-chunked `Transfer-Encoding`, `Transfer-Encoding` on HTTP/1.0 and conflicting
+  `Content-Length`s with `400`, and drops `Content-Length` (and keep-alive) when `Transfer-Encoding` is present, so
+  the forwarded request never carries both (tested).
+- **Connection caps:** `ConnectionCounter` in `fast-proxy-limits`, per peer address (not a prefix: the cap is about
+  one host's sockets), with its permit held by the connection's guard so a tunnel keeps its place.
+- **Body caps:** a declared length over the cap is refused before an endpoint is chosen; a streamed body is cut by
+  `ReplayBody` with `BodyCapExceeded`, answered `413`, never counted as an upstream failure and never retried.

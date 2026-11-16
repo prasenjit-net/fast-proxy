@@ -72,7 +72,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   (fixed 404/503/502/504), `selection` (pick an endpoint per request),
   `upstream_client` (pooled forwarding, the retry loop, passive outcomes),
   `retry_policy` (pure retry rules), `replay_body` (a request body shared across
-  attempts), `pending_request` (reports a request cancelled by its client as
+  attempts, counted against its `BodyCap`), `limits` (`ServerLimits`, `RequestLimits`), `request_size` (the
+  target and declared-length checks), `pending_request` (reports a request cancelled by its client as
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
@@ -168,6 +169,9 @@ These invariants hold across the codebase; do not break them without an ADR in `
   snapshot swaps by endpoint id and address (`compile(.., &registry)`); never
   keep it in config or in a global map. Endpoint ids are stable and rollback
   preserves them.
+- **Process limits are checked before upstream work** (ADR 0029): connection caps when a connection is
+  accepted (before TLS), the head limits in hyper, the target and declared body length before an endpoint is
+  chosen. A body cut at its cap is the client's doing: `413`, never an upstream failure, never retried.
 - **Retries are conservative:** a connect failure may be retried for any method,
   everything else only for idempotent ones; never after a body byte was read
   (`BodyOwner::is_replayable`), never for upgrades, always within the group's

@@ -296,10 +296,18 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   [0031](adr/0031-endpoint-connection-caps.md), [0032](adr/0032-fuzzing-and-the-supply-chain-gate.md),
   [0033](adr/0033-packaging-and-release.md) and [0034](adr/0034-the-1.0-stability-promise.md) are written as
   written in PR0 with the other documents, and **accepted** by the owner (L1 to L17 as recommended) on 2026-11-16.
-- [ ] **G2 (S) Spike: slow-client handling in hyper.** (a) Which of idle keep-alive, slow body and slow reader
+- [x] **G2 (S) Spike: slow-client handling in hyper.** (a) Which of idle keep-alive, slow body and slow reader
   hyper 1.11 already bounds with `header_read_timeout`, and what it does with an h2 connection that stops reading.
   (b) The cost of a `ProgressIo` wrapper on the M6 benchmark (budget: within 1%). (c) Whether hyper's
   `http1().max_headers` covers L10's header count. Record the results in ADR 0029.
+  *Result (2026-11-16, hyper 1.11, `header_read_timeout` 1 s):* (a) a keep-alive connection idle between requests
+  **is** closed after `header_read_timeout`; a connection that never sends a byte, a body that stalls after its head,
+  and a client that never reads a large response are **never** closed. So `idle_timeout` is dropped (the header
+  timeout already bounds keep-alive idle) and PR4 adds a first-byte deadline, a per-chunk body timeout and a
+  send-stall timeout. (c) `max_headers` answers 431 (default 100); setting another value moves hyper's header buffer
+  to the heap (about 5% per request), so it is set only when it differs. hyper also refuses a non-chunked
+  `Transfer-Encoding`, `Transfer-Encoding` on HTTP/1.0 and two different `Content-Length`s with 400, and drops
+  `Content-Length` when `Transfer-Encoding` is present. (b) is measured with PR4's wrapper.
 - [x] **G3 (S) Spike: the key table under contention.** GCRA over the sharded table on 16 threads with 1, 1,000
   and 1,000,000 distinct keys. Record the per-request cost and the eviction behavior when full, and compare a
   `DashMap` against the hand-sharded table. Budget: under 100 ns per check at 1,000 keys. Record in ADR 0030.
@@ -321,9 +329,10 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   1 and at most 10,000, a header name that is a valid token and not a hop-by-hop or pseudo header, `ipv6_prefix` 48
   to 128), `RateLimitKey`, and `max_body_bytes` and `max_requests` on route and group, all in `Config`.
   *Built in PR2.* A subsystem's own policy is `SubsystemConfig::rate_limit`, a route's `RouteConfig::rate_limit`.
-- [ ] **LM3 (S) The `[limits]` section** in `src/config/` with validation, CLI override, and `config.toml` comments.
-  *Started in PR2:* the section with `rate_limit_keys` (validated, documented, passed to the config service). The
-  connection, timeout and size keys and `--max-connections` come in PR3 with the code that reads them.
+- [x] **LM3 (S) The `[limits]` section** in `src/config/` with validation, CLI override, and `config.toml` comments.
+  *Started in PR2* (`rate_limit_keys`), *finished in PR3* (`m7/pr3-connections`): the connection caps,
+  `header_read_timeout`, the header, target and default body limits, and `--max-connections`. `max_header_bytes` is
+  at least 8 KiB (hyper panics below). The slow-client timeouts come with PR4's code.
 
 ### Workstream S: Store
 
@@ -354,16 +363,25 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
 
 ### Workstream D: Data plane
 
-- [ ] **D1 (M) Accept-time caps (L7).** In `server.rs` and the TLS accept loop: global and per-peer counters checked
+- [x] **D1 (M) Accept-time caps (L7).** In `server.rs` and the TLS accept loop: global and per-peer counters checked
   before `serve_connection` and before the handshake, the guard released on close, the accept back-off at the
   global cap, and the metric `fastproxy_connections_refused_total{reason}`.
-- [ ] **D2 (M) Timeouts (L9).** The `[limits]` timeouts replace the constants. `ProgressIo` for body and send
+  *Built in PR3.* `ConnectionCounter` (limits crate) by total and by peer address; `ConnectionTracker::admit` holds
+  its permit in the `ConnectionGuard`, so an upgraded tunnel keeps its place. `DataPlane::start_with_limits`.
+- [ ] **D2 (M) Timeouts (L9).** *Moved to PR4, reshaped by G2* (no `idle_timeout`; a first-byte deadline instead).
+  The `[limits]` timeouts replace the constants. `ProgressIo` for body and send
   progress (shaped by G2), the idle timeout, and the tunnel idle timeout in `protocol_switch.rs`. Each expiry is
   counted (`fastproxy_client_timeouts_total{kind}`), and a body timeout before the response is a fixed `408`.
-- [ ] **D3 (M) Size limits and framing (L10, L11).** `431`, `414`, `400` (framing) and `413`, both from
+- [x] **D3 (M) Size limits and framing (L10, L11).** `431`, `414`, `400` (framing) and `413`, both from
   `Content-Length` and streamed (the counter on `BodyOwner`, which aborts the upstream request), as fixed responses
   in `responses.rs`. The checks are pure functions in `headers.rs` (fuzzed by F1). The streamed cut must not break
   the replay rule (ADR 0008): a cut body is not replayable.
+  *Built in PR3.* `431` is hyper's (`max_headers`, the head buffer); `414` and a declared `413` come from
+  `request_size::check` before an endpoint is chosen; a streamed body counts against `BodyCap` in `ReplayBody` and
+  fails with `BodyCapExceeded`, which the forwarder answers with `413` without blaming the endpoint or retrying.
+  Framing is hyper's (see G2); a test proves a forwarded request never carries both framing headers. The M6
+  unusual-header thresholds stay lower than these limits on purpose: a request is sampled as unusual well before
+  it is refused.
 - [ ] **D4 (M) Rate limiting (L6).** The lookup in the pipeline at the place 4.1 gives, the `429` with `Retry-After`,
   the key from the effective client address or the hashed header (L5), and the header added to the redaction list.
   Metrics `fastproxy_rate_limited_total{subsystem,route}` and `fastproxy_rate_limit_table_full_total`, with labels
@@ -544,8 +562,8 @@ stack stays short:
 2. **PR1** F4 and F5, which need no decisions and harden everything after them. G2 and G3 as throwaway branches;
    the defaults table goes with LM1.
 3. **PR2** LM1 to LM3, S1, R1, B1: the limits crate, model, schema 7 with its migration, compile. No behavior yet.
-4. **PR3** D1 to D3: connection caps, timeouts, size limits and framing.
-5. **PR4** D4, D5: rate limiting and refusal reasons.
+4. **PR3** LM3 (rest), D1, D3: connection caps, size limits and framing (built; split from the timeouts after G2).
+5. **PR4** D2, D4, D5: the slow-client timeouts, rate limiting, refusal reasons.
 6. **PR5** A1 to A4, U1 to U4: API, CLI, UI.
 7. **PR6** F1 to F3: fuzzing.
 8. **PR7** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
