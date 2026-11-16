@@ -110,6 +110,7 @@ export function httpsSettings(overrides: Partial<HttpsSettings> = {}): HttpsSett
     hsts: { enabled: false, maxAgeSecs: 31_536_000, includeSubdomains: false },
     effective: false,
     certificate: null,
+    acmeEnabled: false,
     ...overrides,
   };
 }

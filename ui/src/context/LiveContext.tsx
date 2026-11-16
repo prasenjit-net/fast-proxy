@@ -14,6 +14,8 @@
 // the sampling view, the sample lists and the status card.
 // A certState event (a certificate was uploaded, replaced, deleted or generated)
 // refetches the certificate list, the TLS state and the status card.
+// An acmeStatus event (an ACME order started, succeeded or failed on this
+// instance) refetches the ACME overview and the subsystem's ACME status.
 // The socket cannot carry an Authorization header, so each connection first
 // trades the signed-in token for a single-use ticket (`POST /api/ws-ticket`)
 // and opens `/ws?ticket=…`; a reconnect gets a fresh ticket.
@@ -31,6 +33,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type Traffic } from "../lib/api";
 import {
+  refreshAcme,
   refreshCertificates,
   refreshConfigData,
   refreshEndpointStatus,
@@ -61,6 +64,7 @@ type ServerEvent =
   | { type: "certState"; change: string; certificate: string; timestampMs: number }
   | { type: "tokenChanged"; change: "created" | "revoked"; token: string; timestampMs: number }
   | { type: "samplingChanged"; change: "settings" | "override" | "cleared"; timestampMs: number }
+  | { type: "acmeStatus"; subsystemId: number; state: string; timestampMs: number }
   | {
       type: "maintenanceChanged";
       scope: "global" | "subsystem" | "route";
@@ -166,6 +170,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           void refreshConfigData(queryClientRef.current);
         } else if (event.type === "samplingChanged") {
           void refreshSampling(queryClientRef.current);
+        } else if (event.type === "acmeStatus") {
+          void refreshAcme(queryClientRef.current);
         } else if (event.type === "certState") {
           void refreshCertificates(queryClientRef.current);
         } else if (event.type === "endpointState") {

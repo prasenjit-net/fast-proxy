@@ -1,5 +1,6 @@
 //! The `fast-proxy` binary: CLI parsing, configuration, logging, and server startup.
 
+mod acme;
 mod cli;
 mod commands;
 mod config;

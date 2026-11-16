@@ -10,11 +10,12 @@ name is a **subsystem** with its own upstreams and routes. Changes apply to live
 traffic immediately, without a restart and without dropping a request, and every
 change is recorded so it can be rolled back.
 
-> **Status: milestones 1 and 2 are feature-complete.** It is a working HTTP
-> reverse proxy with live configuration, load balancing across several endpoints
-> per upstream, active and passive health checking, and safe retries. TLS, ACME
-> and maintenance mode are the next milestones; see the [roadmap](docs/ROADMAP.md). The admin plane needs a
-> bearer token (see [Security notes](#security-notes)).
+> **Status: milestones 1 to 6 are feature-complete.** It is a working reverse
+> proxy with live configuration, load balancing, health checking, safe retries,
+> TLS termination with certificates issued and renewed through ACME, maintenance
+> mode and request sampling. Rate limits and hardening for 1.0 are next; see the
+> [roadmap](docs/ROADMAP.md). The admin plane needs a bearer token (see
+> [Security notes](#security-notes)).
 
 ## What it does today
 
@@ -182,7 +183,7 @@ and the decision records in [docs/adr/](docs/adr/).
 | Upstream groups with several endpoints, five load-balancing algorithms | Done | M2 |
 | Active and passive health checking, safe retries, drain and disable | Done | M2 |
 | TLS termination (rustls, SNI, live certificates, HTTP/2), TLS to upstreams, redirect and HSTS | Done | M3 |
-| ACME automatic certificates | Planned | M4 |
+| ACME automatic certificates (HTTP-01, renewal, one renewing instance in a cluster) | Done | M4 |
 | Admin authentication, admin TLS, maintenance mode, audit log, CLI, UI pages | Done | M5 |
 | Request sampling of unusual requests (redacted, stored in the shared database) | Done | M6 |
 | Rate and connection limits, hardening, 1.0 | Planned | M7 |
@@ -230,12 +231,15 @@ fast-proxy maintenance off --subsystem shop
 fast-proxy reload                                    # re-read the database now
 fast-proxy status                                    # version, listeners, admin protection
 fast-proxy audit --limit 20 --actor ci               # the audit tail, oldest first
+fast-proxy acme status                               # the CA, the account, each certificate
+fast-proxy acme renew shop                           # order now, skipping the backoff
 ```
 
 | Command | Works on | Does |
 |---|---|---|
 | `maintenance on\|off\|status` | a running proxy | `--subsystem <name\|id>`, `--route <prefix>` choose the scope (default: the whole proxy); `on` takes `--ttl`, `--message`, `--retry-after`, `--bypass-cidr` (repeatable), `--bypass-header` and `--bypass-secret` |
 | `reload`, `status`, `audit` | a running proxy | as above |
+| `acme status`, `acme renew <subsystem>` | a running proxy | what ACME is doing (the directory, the account, which instance renews, each subsystem's names, state, expiry, next attempt and last error); `renew` needs an admin token and is refused while an order runs or the hourly failure cap is spent |
 | `samples list\|export` | a running proxy (admin token) | the sampled requests, newest first; filters `--trigger` (repeatable), `--status-class`, `--subsystem`, `--route`, `--instance`, `--client`, `--min-ms`, `--since 30m`; `list` takes `--limit`, `export` writes NDJSON to stdout |
 | `config validate [--check-database [PATH]]` | files only | parses and checks the config file with the command-line overrides applied, **creating nothing**; with `--check-database` it also opens the database **read-only** and compiles the stored configuration (certificates stay sealed, so HTTPS settings are not checked against them, and the output says so) |
 | `token create\|list\|revoke` | the database file | the way back in when every token is lost: it works directly on the file (also while the proxy runs, which picks the change up at its next sync), prints a new token **once**, never lists a secret, writes an audit entry as `cli`, and keeps the last admin token from being revoked |
@@ -478,6 +482,68 @@ subsystem, in the admin UI or API:
 
 Walkthrough: [docs/getting-started.md](docs/getting-started.md) section 16.
 
+## Automatic certificates (ACME)
+
+With ACME on, a subsystem gets a publicly trusted certificate for its host names,
+issued and renewed by the proxy through an ACME CA (Let's Encrypt by default),
+with no restart. It is **off by default**, and needs TLS on:
+
+```toml
+[data_plane.acme]
+enabled = true                       # or --acme
+# Staging is the default: its certificates are NOT trusted by browsers. Production:
+directory = "https://acme-v02.api.letsencrypt.org/directory"
+email = "ops@example.com"            # optional
+allowed_domains = ["*.example.com", "example.org"]   # required: the names ACME may issue for
+```
+
+Then turn it on for a subsystem: the **Automatic certificate (ACME)** switch in its
+HTTPS section, or `"https": {"enabled": true, "acmeEnabled": true}` in the API.
+
+- **Which names.** The subsystem's exact host names inside `allowed_domains`, up to
+  100. Wildcard hosts need DNS-01, which is not supported; a single-label name or one
+  outside the allowlist is skipped too. The UI and `GET /api/subsystems/{id}/acme`
+  show what an order would cover and why the rest is left out.
+- **The challenge.** HTTP-01: the CA fetches
+  `http://<name>/.well-known/acme-challenge/<token>` on **port 80**, so a plain
+  listener must be reachable there (directly, or through a NAT or load balancer).
+  The proxy answers it before anything else, even for a subsystem that redirects to
+  HTTPS, is in maintenance or is disabled; any other request on that path is routed
+  as usual. Before asking the CA, the proxy fetches each challenge itself through
+  the public name (`self_check`, on by default; turn it off where the proxy cannot
+  reach its own public address).
+- **Until the first certificate** the development certificate serves. The ACME one
+  then replaces it (the development certificate is deleted; an uploaded one is kept,
+  unattached). While ACME is on, the certificate is ACME's: attaching another is
+  refused. Turning ACME off keeps the last certificate attached.
+- **Renewal** happens at about two thirds of the lifetime (day 60 of 90), spread over
+  a few days per subsystem. A failure backs off (1 min, 5 min, 30 min, 2 h, then 6 h;
+  6 h at once for a refusal that cannot succeed, such as DNS or CAA; as told for a
+  rate limit) and never more than 5 failed orders per subsystem per hour, even when
+  forced. The current certificate keeps serving throughout. Restarts never re-order a
+  valid certificate.
+- **Several instances.** Only the instance holding the renewal lease talks to the CA;
+  every instance answers challenges (they travel through the database and the sync
+  poll), serves the result and shows the same status. If the holder stops, another
+  takes over when the lease expires (`lease_ttl`, 10 min).
+- **Watching it.** The certificates page and each subsystem page show the state,
+  names, expiry, next attempt and last error; `fast-proxy acme status` prints the
+  same; `fastproxy_acme_orders_total{subsystem,outcome}`,
+  `fastproxy_acme_lease_held` and `fastproxy_tls_cert_expiry_seconds{source="acme"}`
+  are the metrics. Every issuance, renewal and failure is in the audit log as
+  `system`.
+- **Staging to production.** Change `directory` and restart: the proxy registers a new
+  account with the production CA on the next order. Existing staging certificates
+  stay until they are due, so force a renewal per subsystem (`fast-proxy acme renew
+  <name>`) to get trusted ones at once.
+- **Rate limits.** Let's Encrypt limits certificates per registered domain and failed
+  validations per hour; the backoff and the hourly cap keep a broken setup from
+  spending them. Try a new setup against staging first.
+
+Walkthrough: [docs/getting-started.md](docs/getting-started.md) section 21. Design and
+the security review: [ADRs 0024 to 0027](docs/adr/) and
+[security-review-m4.md](docs/security-review-m4.md).
+
 ### Running several instances
 
 Several instances can share one database (a local SQLite file; a network database
@@ -598,6 +664,9 @@ read, and never serves the ones it cannot.
 │   ├── fast-proxy-routing/   Config -> Snapshot compiler (carries runtime state), matchers (no I/O)
 │   ├── fast-proxy-tls/       certificates: PEM validation, the key vault (AES-256-GCM), self-signed generator, certificate cache, rustls configurations
 │   ├── fast-proxy-test-pki/  test support only: an in-memory CA and TLS test clients
+│   ├── fast-proxy-acme/      ACME policy (which names, when to renew, backoff, order steps; no I/O) and the protocol client
+│   ├── fast-proxy-acme-service/  the ACME runner: renewal lease, orders, self-check
+│   ├── fast-proxy-test-acme/ test support only: an in-process ACME CA that validates HTTP-01 by fetching
 │   ├── fast-proxy-store/     SQLite storage (certificates are opaque ciphertext here), transactional writes, revisions, rollback
 │   ├── fast-proxy-config-service/  the only writer: validate, persist, swap snapshot
 │   ├── fast-proxy-dataplane/ hyper listeners, request pipeline, endpoint selection, retries
@@ -685,6 +754,14 @@ cargo llvm-cov --workspace --summary-only   # coverage (needs cargo-llvm-cov)
   `tests/sampling_hygiene.rs` sends secrets in headers, query and bodies and scans the API,
   export, metrics and the database files; `tests/sampling_under_load.rs` floods one route with
   connectivity failures; `tests/sampling_cluster.rs` runs two processes on one database.
+- ACME (M4): `tests/acme_challenges.rs` answers challenges on the TLS stack (through a
+  redirect, over HTTPS); `tests/acme_issuance.rs` drives the real runner against the
+  in-process test CA with a clock the test moves (issuance, renewal, host changes,
+  backoff, rate limits, the cap, the lease); `tests/acme_binary.rs` issues through the
+  real binary, checks the CLI and scans every file for keys; `tests/acme_cluster.rs` runs
+  two processes on one database and kills the lease holder. The protocol client also
+  runs against [Pebble](https://github.com/letsencrypt/pebble) in CI
+  (`crates/fast-proxy-acme/tests/pebble.rs`, ignored unless a Pebble is running).
   `docs/security-review-m6.md` records the review.
 - Timing measurements are `#[ignore]`d tests, run in release mode (see
   [docs/benchmarks.md](docs/benchmarks.md)).

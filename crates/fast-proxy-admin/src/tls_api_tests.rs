@@ -472,6 +472,15 @@ async fn https_settings_are_validated_with_nested_field_names() {
             json!({ "enabled": true, "hsts": { "enabled": true, "maxAgeSecs": 99_999_999 } }),
             "https.hsts.maxAgeSecs",
         ),
+        (
+            json!({ "enabled": false, "acmeEnabled": true }),
+            "https.acmeEnabled",
+        ),
+        // ACME is off for this process.
+        (
+            json!({ "enabled": true, "acmeEnabled": true }),
+            "https.acmeEnabled",
+        ),
     ];
     for (https, field) in cases {
         let (status, body) = app
@@ -533,6 +542,29 @@ async fn enabling_https_generates_a_dev_certificate_and_reports_effectiveness() 
         "omitting https keeps the settings"
     );
     assert_eq!(kept["data"]["https"]["hsts"]["maxAgeSecs"], 600);
+}
+
+#[tokio::test]
+async fn with_acme_on_for_the_process_a_subsystem_turns_its_switch_on_and_off() {
+    let app = TestApp::with_acme().await;
+    let id = site(&app, "shop", "shop.example.com").await;
+    let (status, body) = app
+        .put(
+            &format!("/api/subsystems/{id}"),
+            json!({ "name": "shop", "https": { "enabled": true, "acmeEnabled": true } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["https"]["acmeEnabled"], true);
+    assert_eq!(body["data"]["https"]["certificate"]["name"], "dev-shop");
+    let (status, body) = app
+        .put(
+            &format!("/api/subsystems/{id}"),
+            json!({ "name": "shop", "https": { "enabled": true } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["https"]["acmeEnabled"], false);
 }
 
 #[tokio::test]

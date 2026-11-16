@@ -3,6 +3,7 @@
 //! Every type that wraps user input is constructed through a `parse` function
 //! that validates and normalizes it, so a value of that type is always valid.
 
+mod acme;
 mod bounds;
 mod certificate;
 mod cidr;
@@ -28,6 +29,11 @@ mod timeout;
 mod trigger;
 mod upstream_tls;
 
+pub use acme::{
+    sanitize_error_detail, AcmeChallenge, AcmeKeyType, AcmeLease, AcmeState, AcmeStatus, AcmeToken,
+    DomainAllowlist, SkipReason, SkippedName, MAX_ALLOWED_DOMAINS, MAX_ERROR_DETAIL_CHARS,
+    MAX_KEY_AUTHORIZATION_LEN, MAX_NAMES_PER_CERTIFICATE, MAX_TOKEN_LEN,
+};
 pub use certificate::{
     covers, validate_san, CertificateId, CertificateMetadata, CertificateName, CertificateSource,
     MAX_CA_BUNDLES, MAX_CERTIFICATES, MAX_CHAIN_LENGTH, MAX_PEM_BYTES,

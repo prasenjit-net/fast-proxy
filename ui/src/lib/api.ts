@@ -2,6 +2,8 @@
 // (see http.ts); types live in types.ts and are re-exported from here.
 import { request, send } from "./http";
 import type {
+  AcmeOverview,
+  SubsystemAcme,
   CaBundle,
   Certificate,
   CertificateChange,
@@ -190,6 +192,11 @@ export const api = {
     request<Envelope<Route>>(`${subsystem(id)}/routes/${routeId}`, send("PUT", input)),
   deleteRoute: (id: number, routeId: number) =>
     request<VersionOnly>(`${subsystem(id)}/routes/${routeId}`, send("DELETE")),
+
+  // ACME: statuses are read-only; a renewal is a request to the runner
+  acme: () => request<Envelope<AcmeOverview>>("/api/acme"),
+  subsystemAcme: (id: number) => request<Envelope<SubsystemAcme>>(`${subsystem(id)}/acme`),
+  renewAcme: (id: number) => request<void>(`${subsystem(id)}/acme/renew`, send("POST", {})),
 
   // certificates (private keys are write-only: no response carries one)
   certificates: () => request<Envelope<Certificate[]>>("/api/certificates"),

@@ -21,6 +21,7 @@ use fast_proxy_tls::{
     CertificateState, KeyMaterial,
 };
 
+use crate::acme_rules::check_acme_change;
 use crate::service::now_ms;
 use crate::{Applied, Audited, ChangeContext, ConfigService};
 
@@ -301,13 +302,14 @@ impl ConfigService {
         if let Some(https) = &edit.https {
             https.validate()?;
         }
+        let acme_available = self.acme_available();
         self.apply(
             context,
             Audited::new("subsystem.update", format!("subsystem:{}", id.0)),
             move |conn| {
                 let current = subsystems::get(conn, id)?;
                 let summary = format!("subsystem updated: {}", edit.name.as_str());
-                let uncovered = write_subsystem(conn, id, &current, edit)?;
+                let uncovered = write_subsystem(conn, id, &current, edit, acme_available)?;
                 Ok(Mutation {
                     value: uncovered,
                     summary,
@@ -325,6 +327,7 @@ impl ConfigService {
         https: HttpsPolicy,
     ) -> Result<Applied<Vec<String>>, StoreError> {
         https.validate()?;
+        let acme_available = self.acme_available();
         self.apply(
             context,
             Audited::new("subsystem.https", format!("subsystem:{}", id.0)),
@@ -337,7 +340,7 @@ impl ConfigService {
                     description: current.description.clone(),
                     https: Some(https),
                 };
-                let uncovered = write_subsystem(conn, id, &current, edit)?;
+                let uncovered = write_subsystem(conn, id, &current, edit, acme_available)?;
                 Ok(Mutation {
                     value: uncovered,
                     summary,
@@ -407,15 +410,19 @@ impl ConfigService {
     }
 }
 
-/// Writes a subsystem edit inside the transaction, enforcing the coverage rule
-/// for an attached certificate. Returns the hosts the certificate does not cover.
+/// Writes a subsystem edit inside the transaction, enforcing the ACME switch
+/// rules (against the stored settings, read in the same transaction) and the
+/// coverage rule for an attached certificate. Returns the hosts the
+/// certificate does not cover.
 fn write_subsystem(
     conn: &Connection,
     id: SubsystemId,
     current: &fast_proxy_model::SubsystemConfig,
     edit: SubsystemEdit,
+    acme_available: bool,
 ) -> Result<Vec<String>, StoreError> {
     let https = edit.https.unwrap_or(current.https);
+    check_acme_change(acme_available, Some(&current.https), &https)?;
     let mut uncovered = Vec::new();
     if let Some(certificate_id) = https.certificate_id {
         let metadata = certificates::get(conn, certificate_id)

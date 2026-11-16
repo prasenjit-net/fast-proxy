@@ -8,7 +8,7 @@ use crate::StoreError;
 
 /// Column names in the order [`read`] expects them.
 pub const SELECT_LIST: &str = "https_enabled, https_certificate_id, https_redirect, \
-     hsts_enabled, hsts_max_age_secs, hsts_include_subdomains";
+     hsts_enabled, hsts_max_age_secs, hsts_include_subdomains, https_acme_enabled";
 
 /// A policy flattened into the values bound to the HTTPS columns.
 pub struct Bound {
@@ -18,6 +18,7 @@ pub struct Bound {
     pub hsts_enabled: bool,
     pub hsts_max_age_secs: u32,
     pub hsts_include_subdomains: bool,
+    pub acme_enabled: bool,
 }
 
 impl Bound {
@@ -31,6 +32,7 @@ impl Bound {
             hsts_enabled: policy.hsts.enabled,
             hsts_max_age_secs: policy.hsts.max_age_secs,
             hsts_include_subdomains: policy.hsts.include_subdomains,
+            acme_enabled: policy.acme_enabled,
         })
     }
 }
@@ -44,6 +46,7 @@ pub fn read(row: &Row<'_>, first: usize) -> rusqlite::Result<Result<HttpsPolicy,
     let hsts_enabled: bool = row.get(first + 3)?;
     let hsts_max_age_secs: i64 = row.get(first + 4)?;
     let include_subdomains: bool = row.get(first + 5)?;
+    let acme_enabled: bool = row.get(first + 6)?;
     let build = || -> Result<HttpsPolicy, fast_proxy_model::FieldError> {
         let policy = HttpsPolicy {
             enabled,
@@ -54,6 +57,7 @@ pub fn read(row: &Row<'_>, first: usize) -> rusqlite::Result<Result<HttpsPolicy,
                 max_age_secs: u32::try_from(hsts_max_age_secs).unwrap_or(u32::MAX),
                 include_subdomains,
             },
+            acme_enabled,
         };
         policy.validate()?;
         Ok(policy)

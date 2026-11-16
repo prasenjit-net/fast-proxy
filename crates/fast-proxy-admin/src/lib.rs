@@ -1,6 +1,7 @@
 //! The admin plane: REST API, WebSocket push, and the embedded single-page UI.
 
 mod access_middleware;
+mod acme_bridge;
 mod api;
 mod clock;
 mod config_bridge;
@@ -24,6 +25,8 @@ mod traffic;
 mod ui_config;
 mod ws;
 
+#[cfg(test)]
+mod acme_api_tests;
 #[cfg(test)]
 mod api_tests;
 #[cfg(test)]
@@ -55,7 +58,7 @@ pub use error::{AppError, AppResult};
 pub use router::router;
 pub use runtime_info::{ListenerInfo, RuntimeInfo, TlsInfo};
 pub use security::{AdminSecurity, SecuritySettings};
-pub use state::{AdminState, SharedState};
+pub use state::{AcmeAdmin, AdminState, SharedState};
 pub use tls_server::{serve_tls, StoredCertificate};
 pub use ui_config::UiConfig;
 
@@ -64,5 +67,6 @@ pub use ui_config::UiConfig;
 pub fn spawn_background_tasks(state: SharedState) {
     traffic::spawn_sampler(state.clone());
     config_bridge::spawn_config_bridge(state.clone());
+    acme_bridge::spawn_acme_bridge(state.clone());
     endpoint_bridge::spawn_endpoint_bridge(state);
 }

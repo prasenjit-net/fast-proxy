@@ -4,6 +4,8 @@
 //! [`Snapshot`] with [`compile`]; the data plane only ever reads snapshots
 //! through a [`SnapshotHolder`] and never touches storage.
 
+mod acme_challenges;
+mod acme_inputs;
 mod compile;
 mod compile_error;
 mod compiled_https;
@@ -22,6 +24,8 @@ mod snapshot;
 mod tls_inputs;
 mod upstream_uri;
 
+pub use acme_challenges::{AcmeChallenges, ACME_CHALLENGE_PREFIX};
+pub use acme_inputs::AcmeInputs;
 pub use compile::{compile, compile_all, compile_full, compile_with_tls};
 pub use compile_error::CompileError;
 pub use compiled_https::CompiledHttps;

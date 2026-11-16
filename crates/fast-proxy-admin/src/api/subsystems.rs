@@ -4,7 +4,7 @@ use axum::Json;
 use fast_proxy_config_service::SubsystemEdit;
 use fast_proxy_model::{SubsystemId, SubsystemName};
 use fast_proxy_store::repository::subsystems;
-use fast_proxy_store::{Mutation, SubsystemFields};
+use fast_proxy_store::{Mutation, StoreError, SubsystemFields};
 use serde::Deserialize;
 
 use super::change::Change;
@@ -103,6 +103,10 @@ pub async fn create_subsystem(
         description: edit.description,
         https: edit.https.unwrap_or_default(),
     };
+    state
+        .config
+        .check_https_change(None, &fields.https)
+        .map_err(StoreError::from)?;
     let name = fields.name.as_str().to_string();
     let applied = state
         .config

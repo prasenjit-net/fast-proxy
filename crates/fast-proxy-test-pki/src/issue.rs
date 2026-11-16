@@ -1,5 +1,6 @@
 use rcgen::{
-    BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose, SanType,
+    BasicConstraints, CertificateParams, CertificateSigningRequestParams, DnType, IsCa, Issuer,
+    KeyPair, KeyUsagePurpose, SanType,
 };
 use time::{Duration, OffsetDateTime};
 
@@ -88,6 +89,21 @@ impl TestCa {
     pub fn issue(&self, spec: &LeafSpec) -> Issued {
         let key = KeyPair::generate().expect("generating a test leaf key");
         self.issue_for_key(spec, &key)
+    }
+
+    /// Signs a certificate signing request (DER), as an ACME CA does at
+    /// finalize: the names and key come from the CSR, the validity from `spec`
+    /// (whose names are ignored). Returns the chain, leaf first, as PEM; an
+    /// unparsable or badly signed CSR is an error.
+    pub fn sign_csr(&self, csr_der: &[u8], spec: &LeafSpec) -> Result<String, String> {
+        let mut request = CertificateSigningRequestParams::from_der(&csr_der.to_vec().into())
+            .map_err(|err| err.to_string())?;
+        request.params.not_before = spec.not_before;
+        request.params.not_after = spec.not_after;
+        let leaf = request
+            .signed_by(&self.issuer)
+            .map_err(|err| err.to_string())?;
+        Ok(format!("{}{}", leaf.pem(), self.pem))
     }
 
     fn issue_for_key(&self, spec: &LeafSpec, key: &KeyPair) -> Issued {

@@ -38,6 +38,7 @@ impl Env {
     fn settings(&self, enabled: bool) -> TlsSettings {
         TlsSettings {
             enabled,
+            acme_enabled: false,
             master_key_file: Some(self.key_file()),
             env_master_key: None,
         }
@@ -940,6 +941,7 @@ async fn the_key_can_come_from_the_environment_without_any_file() {
     let env = Env::new();
     let settings = TlsSettings {
         enabled: true,
+        acme_enabled: false,
         master_key_file: None,
         env_master_key: Some("AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=".into()),
     };

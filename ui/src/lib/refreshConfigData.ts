@@ -22,6 +22,11 @@ export function refreshCertificates(client: QueryClient): Promise<void> {
   return client.invalidateQueries({ predicate: (query) => keys.has(String(query.queryKey[0])) });
 }
 
+/** Refetches what shows ACME: the overview and each subsystem's status. */
+export function refreshAcme(client: QueryClient): Promise<void> {
+  return client.invalidateQueries({ predicate: (query) => query.queryKey[0] === "acme" });
+}
+
 /** Refetches what shows sampling: the settings and overrides, and the sample lists. */
 export function refreshSampling(client: QueryClient): Promise<void> {
   const keys = new Set(["sampling", "samples"]);

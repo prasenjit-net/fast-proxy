@@ -9,8 +9,8 @@ use fast_proxy_model::{
 
 use crate::compile::tests::{route, subsystem};
 use crate::{
-    compile_full, CompileError, MaintenanceInputs, SamplingInputs, SamplingRuntime, Snapshot,
-    TlsInputs,
+    compile_full, AcmeInputs, CompileError, MaintenanceInputs, SamplingInputs, SamplingRuntime,
+    Snapshot, TlsInputs,
 };
 
 fn config() -> Config {
@@ -49,6 +49,7 @@ fn compile(sampling: &SamplingInputs) -> Result<Snapshot, CompileError> {
         &TlsInputs::off(),
         &MaintenanceInputs::none(),
         sampling,
+        &AcmeInputs::none(),
     )
 }
 
@@ -225,6 +226,7 @@ fn a_disabled_or_removed_route_has_no_window_and_a_new_one_starts_fresh() {
             runtime: first.sampling_runtime(),
             ..SamplingInputs::none()
         },
+        &AcmeInputs::none(),
     )
     .unwrap();
     assert!(

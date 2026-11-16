@@ -510,7 +510,41 @@ fast-proxy samples list --since 10m                                     # the sh
 curl -s -H "$H" -X DELETE $A/samples                                    # delete them all (audited)
 ```
 
+## 21. Automatic certificates (ACME)
+
+ACME needs a CA that can reach the proxy on port 80 under the subsystem's real name,
+so on a laptop the honest walkthrough uses Let's Encrypt **staging** against a name
+that points at you, or [Pebble](https://github.com/letsencrypt/pebble) locally.
+Turn TLS and ACME on in `config.toml` and restart:
+
+```toml
+[data_plane.tls]
+enabled = true
+
+[data_plane.acme]
+enabled = true
+allowed_domains = ["*.example.com"]
+# directory: Let's Encrypt staging by default. For Pebble:
+# directory = "https://localhost:14000/dir"
+# directory_ca = "/path/to/pebble/test/certs/pebble.minica.pem"
+# self_check = false   # when the proxy cannot reach its own public name
+```
+
+Turn ACME on for a subsystem, then follow it:
+
+```sh
+curl -s -H "$H" -H "$J" -X PUT -d '{"name":"shop","https":{"enabled":true,"acmeEnabled":true}}' $A/subsystems/$ID
+curl -s -H "$H" $A/subsystems/$ID/acme   # what the order covers; the status once it ran
+curl -s -H "$H" $A/acme                  # the directory, the account, the lease, every status
+fast-proxy acme status                   # the same, as text
+fast-proxy acme renew shop               # order again now (refused while one runs)
+```
+
+The state goes `pending`, then `valid` with the certificate's expiry; a failure shows
+the CA's reason (`unauthorized: ...` when the challenge was not reachable) and when
+the next attempt is due. The certificate is served from the next handshake on.
+
 ## Not available yet
 
-ACME certificates and rate limits are later milestones (see
+Rate limits and the 1.0 hardening are the next milestone (see
 [ROADMAP.md](ROADMAP.md)).

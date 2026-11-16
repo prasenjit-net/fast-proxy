@@ -5,6 +5,7 @@
 //! [`SnapshotHolder`](fast_proxy_routing::SnapshotHolder); it never touches
 //! storage.
 
+mod acme_challenge;
 mod connections;
 mod forward;
 mod headers;
@@ -31,6 +32,8 @@ mod upstream_errors;
 
 #[cfg(test)]
 mod accounting_tests;
+#[cfg(test)]
+mod acme_challenge_tests;
 #[cfg(test)]
 mod balancing_tests;
 #[cfg(test)]

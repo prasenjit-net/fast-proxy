@@ -1,0 +1,17 @@
+[package]
+name = "fast-proxy-acme"
+version = "0.0.0"
+edition = "2021"
+description = "ACME for fast-proxy: which names to certify, when to renew and back off, the steps of one order (pure), and the protocol client"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+instant-acme = { version = "0.8.5", default-features = false, features = ["ring", "hyper-rustls"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+fast-proxy-test-acme = { path = "../fast-proxy-test-acme" }
+fast-proxy-tls = { path = "../fast-proxy-tls" }
+proptest = "1"
+tokio = { workspace = true }

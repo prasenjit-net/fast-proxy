@@ -65,6 +65,7 @@ struct Setup {
     settings: SamplingSettings,
     overrides: Vec<(SamplingTarget, SamplingOverride)>,
     maintenance: MaintenanceInputs,
+    acme: fast_proxy_routing::AcmeInputs,
     body_budget_bytes: u64,
 }
 
@@ -74,6 +75,7 @@ impl Setup {
             settings,
             overrides: Vec::new(),
             maintenance: MaintenanceInputs::none(),
+            acme: fast_proxy_routing::AcmeInputs::none(),
             body_budget_bytes: 1 << 20,
         }
     }
@@ -131,6 +133,7 @@ async fn start(shop: fast_proxy_model::SubsystemConfig, mut setup: Setup) -> Sam
                 overrides: setup.overrides,
                 runtime: SamplingRuntime::new(),
             },
+            &setup.acme,
         )
         .unwrap(),
     );
@@ -601,6 +604,44 @@ async fn a_route_with_sampling_off_is_never_sampled() {
     assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 502);
     proxy.settle().await;
     assert!(proxy.shop().is_empty());
+    proxy.stop().await;
+}
+
+#[tokio::test]
+async fn an_acme_challenge_answer_is_never_sampled() {
+    let backend = TestUpstream::start(respond(200, "ok")).await;
+    let mut setup = Setup::new(quiet());
+    let mut everything = an_override();
+    everything.baseline_per_mille = Some(1000);
+    setup
+        .overrides
+        .push((SamplingTarget::Subsystem(SubsystemId(1)), everything));
+    setup.acme = fast_proxy_routing::AcmeInputs {
+        challenges: vec![fast_proxy_model::AcmeChallenge::new(
+            fast_proxy_model::AcmeToken::parse("tok").unwrap(),
+            SubsystemId(1),
+            vec![HOST.into()],
+            "tok.thumb".into(),
+            i64::MAX,
+        )
+        .unwrap()],
+        now_ms: 0,
+    };
+    let proxy = start(shop_with(&[&backend], vec![route(1, "/")]), setup).await;
+    let answered = get(proxy.addr, HOST, "/.well-known/acme-challenge/tok", "").await;
+    assert_eq!(
+        (answered.status, answered.body.as_str()),
+        (200, "tok.thumb")
+    );
+    assert_eq!(get(proxy.addr, HOST, "/", "").await.status, 200);
+    proxy.settle().await;
+    let shop = proxy.shop();
+    assert_eq!(shop.len(), 1, "only the routed request is sampled");
+    assert!(
+        !json(&shop[0]).contains("acme-challenge"),
+        "{}",
+        json(&shop[0])
+    );
     proxy.stop().await;
 }
 

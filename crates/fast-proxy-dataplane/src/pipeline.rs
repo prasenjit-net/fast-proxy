@@ -4,14 +4,17 @@ use std::time::Instant;
 
 use fast_proxy_routing::{
     redirect_target, CompiledMaintenance, CompiledRoute, CompiledSubsystem, Lookup, Snapshot,
-    SnapshotHolder,
+    SnapshotHolder, ACME_CHALLENGE_PREFIX,
 };
 use fast_proxy_sampling::Answer;
-use fast_proxy_telemetry::{DataPlaneFields, Metrics, NO_ROUTE, UNMATCHED_SUBSYSTEM};
+use fast_proxy_telemetry::{
+    AcmeChallengeOutcome, DataPlaneFields, Metrics, NO_ROUTE, UNMATCHED_SUBSYSTEM,
+};
 use http::{header, Request, Response};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
+use crate::acme_challenge;
 use crate::connections::{ConnectionContext, TlsConnection};
 use crate::maintenance::{self, evaluate, BypassedScopes, ScopeOutcome, BYPASS_HEADER};
 use crate::pending_request::PendingRequest;
@@ -26,6 +29,13 @@ use crate::{FixedResponse, Forward, Observability, ResponseBody, Target};
 
 /// What the snapshot says should happen to a request.
 enum Resolved<'snapshot> {
+    /// An ACME HTTP-01 challenge this proxy holds: answered before anything
+    /// else, never forwarded or sampled.
+    AcmeChallenge {
+        key_authorization: Arc<str>,
+        /// The subsystem the host resolved to, if any (for labels and logs).
+        subsystem: Option<&'snapshot CompiledSubsystem>,
+    },
     Respond {
         fixed: FixedResponse,
         /// The subsystem the host resolved to, if any (for labels and logs).
@@ -96,6 +106,16 @@ impl<F: Forward> RequestPipeline<F> {
         self.observability.metrics.clone()
     }
 
+    /// Counts a request on the challenge path: answered, or routed as usual.
+    fn count_acme_challenge(&self, resolved: &Resolved<'_>, path: &str) {
+        let outcome = match resolved {
+            Resolved::AcmeChallenge { .. } => AcmeChallengeOutcome::Answered,
+            _ if path.starts_with(ACME_CHALLENGE_PREFIX) => AcmeChallengeOutcome::NotAnswered,
+            _ => return,
+        };
+        self.observability.metrics.acme_challenge_request(outcome);
+    }
+
     /// Handles one request. Never fails: every problem becomes a response.
     pub async fn handle(
         &self,
@@ -151,9 +171,13 @@ impl<F: Forward> RequestPipeline<F> {
             &request,
             (tls.as_deref(), self.https_port, client),
         );
+        self.count_acme_challenge(&resolved, request.uri().path());
         // What the sampling decision will need, gathered now because the request
         // is consumed by forwarding; nothing is decided until the response is done.
-        let started_sampling = self.observability.sampler.as_deref().and_then(|sampler| {
+        // A challenge answer is not a routed request and is never sampled.
+        let samplable = !matches!(resolved, Resolved::AcmeChallenge { .. });
+        let sampler = self.observability.sampler.as_deref().filter(|_| samplable);
+        let started_sampling = sampler.and_then(|sampler| {
             SamplingTail::begin(
                 (sampler, &self.observability.metrics),
                 &snapshot,
@@ -168,6 +192,15 @@ impl<F: Forward> RequestPipeline<F> {
             pending.set_sampling(tail);
         }
         let mut response = match resolved {
+            Resolved::AcmeChallenge {
+                key_authorization,
+                subsystem,
+            } => {
+                if let Some(subsystem) = subsystem {
+                    pending.fields_mut().subsystem = subsystem.name.as_str().to_string();
+                }
+                acme_challenge::render(&key_authorization, &request_id)
+            }
             Resolved::Respond { fixed, subsystem } => {
                 if let Some(subsystem) = subsystem {
                     pending.fields_mut().subsystem = subsystem.name.as_str().to_string();
@@ -325,8 +358,15 @@ fn sampling_source(snapshot: &Snapshot, resolved: &Resolved<'_>) -> SamplingSour
             subsystem: Some(subsystem),
             ..
         }
+        | Resolved::AcmeChallenge {
+            subsystem: Some(subsystem),
+            ..
+        }
         | Resolved::Redirect { subsystem, .. } => policy_only(&subsystem.sampling),
         Resolved::Respond {
+            subsystem: None, ..
+        }
+        | Resolved::AcmeChallenge {
             subsystem: None, ..
         } => policy_only(&snapshot.unmatched_sampling),
         Resolved::Maintenance {
@@ -371,6 +411,23 @@ fn resolve<'snapshot>(
     let path = request.uri().path();
     let host = host_of(request);
     let lookup = snapshot.lookup(host, path);
+    // A challenge this proxy holds comes before the redirect, the 421 rule
+    // and maintenance, so certificates renew whatever else is configured.
+    if let Some(key_authorization) = acme_challenge::answer_for(snapshot, request, host) {
+        let subsystem = match &lookup {
+            Lookup::SubsystemDisabled { subsystem, .. }
+            | Lookup::NoRoute { subsystem, .. }
+            | Lookup::Matched { subsystem, .. } => Some(*subsystem),
+            Lookup::UnknownHost => None,
+        };
+        return (
+            Resolved::AcmeChallenge {
+                key_authorization,
+                subsystem,
+            },
+            BypassedScopes::default(),
+        );
+    }
     // On a plain-HTTP listener, a matched subsystem may send clients to HTTPS
     // before anything is routed.
     if tls.is_none() {

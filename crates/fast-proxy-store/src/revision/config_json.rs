@@ -43,6 +43,7 @@ struct HttpsJson {
     hsts_enabled: bool,
     hsts_max_age_secs: u32,
     hsts_include_subdomains: bool,
+    acme_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -291,6 +292,7 @@ fn https_json(https: &HttpsPolicy, certificate_names: &HashMap<i64, String>) -> 
         hsts_enabled: https.hsts.enabled,
         hsts_max_age_secs: https.hsts.max_age_secs,
         hsts_include_subdomains: https.hsts.include_subdomains,
+        acme_enabled: https.acme_enabled,
     }
 }
 
@@ -304,6 +306,7 @@ fn https_from_json(json: &HttpsJson) -> Result<HttpsPolicy, FieldError> {
             max_age_secs: json.hsts_max_age_secs,
             include_subdomains: json.hsts_include_subdomains,
         },
+        acme_enabled: json.acme_enabled,
     };
     https.validate()?;
     Ok(https)

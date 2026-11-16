@@ -132,7 +132,7 @@ fn existing_name(rows: &[CertificateRow], id: CertificateId) -> String {
 }
 
 /// `base`, or `base-2`, `base-3`... when an admin-made certificate holds the name.
-fn free_name(rows: &[CertificateRow], base: &str) -> String {
+pub(crate) fn free_name(rows: &[CertificateRow], base: &str) -> String {
     let taken = |name: &str| rows.iter().any(|row| row.certificate.name.as_str() == name);
     if !taken(base) {
         return base.to_string();
@@ -143,7 +143,7 @@ fn free_name(rows: &[CertificateRow], base: &str) -> String {
         .unwrap_or_else(|| base.to_string())
 }
 
-fn attach(
+pub(crate) fn attach(
     conn: &Connection,
     subsystem: &SubsystemConfig,
     id: CertificateId,

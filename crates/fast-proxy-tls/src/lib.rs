@@ -4,6 +4,8 @@
 //! - [`validate_upload`] parses and checks PEM supplied by an admin.
 //! - [`Vault`] seals private keys with AES-256-GCM under a master key; the
 //!   store only ever sees ciphertext.
+//! - [`generate_order_key`] makes the key and CSR of an ACME order, and
+//!   [`validate_issued`] checks what the CA returned.
 //! - [`generate_self_signed`] makes development certificates; the ephemeral
 //!   "unknown host" certificate is made in memory and never stored.
 //! - [`CertCache`] holds parsed, decrypted keys and reuses unchanged entries
@@ -11,6 +13,7 @@
 //! - [`build_server_config`] builds the rustls server configuration from the TLS policy.
 //! - [`ClientConfigs`] builds rustls client configurations for upstream TLS.
 
+mod acme_key;
 mod cache;
 mod client_config;
 mod key_material;
@@ -20,6 +23,7 @@ mod status;
 mod validate;
 mod vault;
 
+pub use acme_key::{generate_order_key, OrderKey};
 pub use cache::{
     CertCache, CertEntry, CertHandle, CertVersion, RebuildStats, StoredCertificate, UnreadableCert,
     UnreadableReason,
@@ -32,7 +36,7 @@ pub use self_signed::{ephemeral_unknown_host, generate_self_signed, GeneratedCer
 pub use server_config::{build_server_config, MinTlsVersion, ServerConfigError, ServerTlsPolicy};
 pub use status::{certificate_readings, CertificateState, EXPIRING_SOON_DAYS};
 pub use validate::{
-    expiry_state, parse_ca_bundle, parse_chain, parse_key, read_metadata, validate_upload,
-    validate_with_key, CaCertInfo, ExpiryState, ValidatedCertificate,
+    expiry_state, parse_ca_bundle, parse_chain, parse_key, read_metadata, validate_issued,
+    validate_upload, validate_with_key, CaCertInfo, ExpiryState, ValidatedCertificate,
 };
 pub use vault::{load_master_key, LoadedMasterKey, MasterKey, Sealed, Vault, VaultError};

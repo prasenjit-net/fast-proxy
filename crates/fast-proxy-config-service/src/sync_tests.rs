@@ -30,6 +30,7 @@ struct Pair {
 fn settings(key: &str) -> TlsSettings {
     TlsSettings {
         enabled: true,
+        acme_enabled: false,
         master_key_file: None,
         env_master_key: Some(key.into()),
     }

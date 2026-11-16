@@ -38,6 +38,18 @@ pub struct AdminState {
     pub security: AdminSecurity,
     /// Reads the sampled requests of every instance sharing the database.
     pub samples: Arc<SampleReader>,
+    /// ACME, when it is on for the process.
+    pub acme: Option<AcmeAdmin>,
+}
+
+/// What the admin plane knows about ACME on this process: the settings it
+/// shows, and the runner it can ask for a renewal.
+pub struct AcmeAdmin {
+    pub directory: String,
+    /// The directory is Let's Encrypt staging (untrusted certificates).
+    pub staging: bool,
+    pub allowlist: fast_proxy_model::DomainAllowlist,
+    pub control: fast_proxy_acme_service::AcmeControl,
 }
 
 pub type SharedState = Arc<AdminState>;
@@ -81,7 +93,14 @@ impl AdminState {
             endpoint_events,
             security,
             samples,
+            acme: None,
         }
+    }
+
+    /// Turns the ACME endpoints on, for a process with ACME on.
+    pub fn with_acme(mut self, acme: AcmeAdmin) -> Self {
+        self.acme = Some(acme);
+        self
     }
 
     /// Tells every client sampling changed: `settings`, `override` or

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import Badge from "../components/Badge";
+import AcmeOverviewSection from "../components/certificates/AcmeOverviewSection";
 import CaBundlesSection from "../components/certificates/CaBundlesSection";
 import { SourceBadge, StateBadge } from "../components/certificates/CertificateBadges";
 import { RenameForm, SelfSignedForm } from "../components/certificates/SmallForms";
@@ -253,6 +254,8 @@ export default function CertificatesPage() {
           </div>
         )}
       </section>
+
+      <AcmeOverviewSection />
 
       <CaBundlesSection />
 

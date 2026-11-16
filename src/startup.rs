@@ -65,11 +65,15 @@ pub enum StartupError {
     AdminServe(std::io::Error),
     #[error(transparent)]
     Sampling(#[from] SamplingError),
+    #[error(transparent)]
+    Config(#[from] crate::config::ConfigError),
 }
 
 /// Starts everything and serves until Ctrl-C. Every listener is bound
 /// before any traffic is served, so a bind failure aborts startup cleanly.
 pub async fn run(config: AppConfig) -> Result<(), StartupError> {
+    let acme_warnings = config.acme_warnings();
+    let acme_settings = crate::acme::runner_settings(&config)?;
     let data_plane = &config.data_plane;
     let trusted_proxies = TrustedProxies::parse(&data_plane.trusted_proxies)?;
 
@@ -152,7 +156,17 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         },
         config_service.token_cache(),
     );
-    let admin_state = Arc::new(AdminState::new(
+    // The ACME runner is built now so the admin plane can ask it for
+    // renewals; it starts below with the other background tasks.
+    let (acme, acme_admin) = match acme_settings {
+        Some(settings) => {
+            let (prepared, admin) =
+                crate::acme::prepare(settings, config_service.clone(), metrics.clone());
+            (Some(prepared), Some(admin))
+        }
+        None => (None, None),
+    };
+    let mut admin_state = AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
         access_log.clone(),
@@ -164,7 +178,11 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         // Reads the samples of every instance sharing the database, whether or
         // not this process samples.
         Arc::new(SampleReader::open(&database, Duration::from_secs(5))?),
-    ));
+    );
+    if let Some(admin) = acme_admin {
+        admin_state = admin_state.with_acme(admin);
+    }
+    let admin_state = Arc::new(admin_state);
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
@@ -200,6 +218,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         metrics.clone(),
         data_stop.clone(),
     ));
+    // Certificates through ACME, when on: only the instance holding the lease
+    // talks to the CA. It stops with the data plane.
+    let acme = acme.map(|prepared| prepared.start(data_stop.clone()));
 
     // Request sampling: its thread, the pruner and the periodic upkeep. Off
     // costs nothing; on, the data plane only holds the handle.
@@ -253,7 +274,10 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         database.display(),
         config_service.snapshot_holder().load().version
     );
-    for warning in admin_warnings(&config.admin) {
+    for warning in admin_warnings(&config.admin)
+        .into_iter()
+        .chain(acme_warnings)
+    {
         tracing::warn!("{warning}");
     }
 
@@ -300,6 +324,10 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             );
         }
     }
+    // Give the renewal lease up, so another instance can take over at once.
+    if let Some(acme) = acme {
+        acme.stopped().await;
+    }
     // Every request has finished, so every sample has been handed over: write
     // what is queued and stop the sampler and the pruner.
     if let Some(sampling) = sampling {
@@ -322,11 +350,12 @@ fn redirect_port(tls: &TlsConfig, https: Option<&TlsPlane>) -> u16 {
 /// The name of the HTTPS listener in logs, metrics and the admin runtime view.
 const HTTPS_LISTENER: &str = "https";
 
-/// What the config service needs to know about TLS: the switch, and where the
+/// What the config service needs to know about TLS: the switches (TLS, ACME), and where the
 /// master key comes from (`FAST_PROXY_MASTER_KEY` wins over the file).
 fn tls_settings(config: &AppConfig) -> TlsSettings {
     TlsSettings {
         enabled: config.data_plane.tls.enabled,
+        acme_enabled: config.data_plane.acme.enabled,
         master_key_file: Some(config.data_plane.master_key_path()),
         env_master_key: std::env::var("FAST_PROXY_MASTER_KEY").ok(),
     }

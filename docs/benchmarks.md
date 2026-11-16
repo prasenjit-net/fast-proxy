@@ -428,3 +428,30 @@ noise). The first round overlapped a compile on the same machine and is the nois
 - **A backup** of the database contains redacted request data (client addresses, paths,
   bodies where a route opted in) as well as the configuration. Protect it like the
   database. See [security-review-m6.md](security-review-m6.md).
+
+## M4 results: ACME
+
+Run with `scripts/bench-m4.sh <results-file> [rounds]` (builds the release binaries, starts one
+`bench_backend`, and drives the real proxy with `oha -c 64` over plain HTTP). Both scenarios run
+with TLS on and sampling off; "ACME on" also has `[data_plane.acme]` on and the subsystem's
+`https.acmeEnabled` on, against an unreachable directory, so the runner backs off and nothing is
+issued: the request path pays exactly what ACME adds to every request (whether any challenge is
+pending, and one prefix comparison of the path for the challenge metric). Each point is 6 s after
+a 2 s warm-up. The script runs "off" first in each round; a second run swapped the order, because
+the first showed the second-placed scenario a little slower in every round.
+
+| Run | Scenario | Round 1 | Round 2 | Round 3 | Mean rps |
+|---|---|---:|---:|---:|---:|
+| as scripted | ACME off | 93,771 | 89,195 | 91,342 | 91,436 |
+| as scripted | ACME on | 92,015 | 87,581 | 87,968 | 89,188 (-2.5%) |
+| order swapped | ACME on | 92,735 | 90,651 | 92,680 | 92,022 |
+| order swapped | ACME off | 93,665 | 91,154 | 92,673 | 92,497 (on: -0.5%) |
+
+Pooled over both runs, ACME on is 1.5% below off (90,605 against 91,967), inside the spread of
+the rounds (about 5% from round to round in each scenario) and in line with the order effect.
+Median latency was 0.66 to 0.69 ms and p99 1.2 to 1.6 ms in every point. The M4 budget
+([M4-PLAN.md](M4-PLAN.md) section 8, "within the noise of the M6 baseline") is met: the M6
+fast-backend baseline was 94,330 rps with sampling off and TLS off, on the same machine.
+
+A challenge answer itself is a map lookup and a fixed 200; it is not benchmarked (a CA fetches a
+handful per order). The caveats of M1 apply.

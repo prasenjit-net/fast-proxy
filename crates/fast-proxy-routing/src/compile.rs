@@ -12,9 +12,9 @@ use crate::compiled_upstream::GroupFault;
 use crate::sampling_table::SamplingTable;
 use crate::snapshot::{CompiledRoute, CompiledSubsystem};
 use crate::{
-    CompileError, CompiledHttps, CompiledMaintenance, CompiledSampling, CompiledUpstream,
-    HostTable, MaintenanceInputs, MaintenanceScope, RouteTable, SamplingInputs, SamplingRuntime,
-    Snapshot, TlsInputs,
+    AcmeChallenges, AcmeInputs, CompileError, CompiledHttps, CompiledMaintenance, CompiledSampling,
+    CompiledUpstream, HostTable, MaintenanceInputs, MaintenanceScope, RouteTable, SamplingInputs,
+    SamplingRuntime, Snapshot, TlsInputs,
 };
 
 /// Compiles `config` into a snapshot labelled `version`. Pure and
@@ -65,13 +65,15 @@ pub fn compile_all(
         tls,
         maintenance,
         &SamplingInputs::none(),
+        &AcmeInputs::none(),
     )
 }
 
 /// Like [`compile_all`], also resolving how every route is sampled from the
 /// sampling settings and overrides, and carrying the sampling runtime state
 /// (the guards and each route's rolling latency) into the snapshot. Fails when
-/// an override names a subsystem or route that does not exist.
+/// an override names a subsystem or route that does not exist. The pending
+/// ACME challenges that have not expired go into the snapshot as they are.
 pub fn compile_full(
     version: u64,
     config: &Config,
@@ -79,6 +81,7 @@ pub fn compile_full(
     tls: &TlsInputs,
     maintenance: &MaintenanceInputs,
     sampling: &SamplingInputs,
+    acme: &AcmeInputs,
 ) -> Result<Snapshot, CompileError> {
     let scopes = ScopeTable::build(config, maintenance)?;
     let sampling_table = SamplingTable::build(config, sampling)?;
@@ -142,6 +145,7 @@ pub fn compile_full(
         sampling_settings: Arc::new(sampling.settings.clone()),
         unmatched_sampling: sampling_table.global_policy(),
         sampling: runtime,
+        acme_challenges: Arc::new(AcmeChallenges::build(acme)),
     })
 }
 

@@ -208,6 +208,21 @@ impl Vault {
         self.open(&key_aad(id, name), sealed)
     }
 
+    /// Seals a secret that is not a certificate key (the ACME account
+    /// credentials), bound to `label` so it opens only for the same label.
+    pub fn seal_secret(&self, label: &str, plaintext: &[u8]) -> Result<Sealed, VaultError> {
+        self.seal(&secret_aad(label), plaintext)
+    }
+
+    /// Opens a secret sealed with [`seal_secret`](Self::seal_secret) for `label`.
+    pub fn open_secret(
+        &self,
+        label: &str,
+        sealed: &Sealed,
+    ) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        self.open(&secret_aad(label), sealed)
+    }
+
     /// A fresh check value, stored once so a wrong master key is detected as one
     /// clear problem rather than as one failure per certificate.
     pub fn create_check(&self) -> Result<Sealed, VaultError> {
@@ -262,6 +277,11 @@ impl Vault {
 
 fn key_aad(id: CertificateId, name: &str) -> Vec<u8> {
     format!("{}:{name}", id.0).into_bytes()
+}
+
+/// Distinct from every key AAD, which starts with a numeric id.
+fn secret_aad(label: &str) -> Vec<u8> {
+    format!("secret:{label}").into_bytes()
 }
 
 #[cfg(test)]
@@ -323,6 +343,29 @@ mod tests {
         let sealed = vault.seal_key(CertificateId(1), "shop", b"secret").unwrap();
         assert!(vault.open_key(CertificateId(2), "shop", &sealed).is_err());
         assert!(vault.open_key(CertificateId(1), "blog", &sealed).is_err());
+    }
+
+    #[test]
+    fn a_secret_round_trips_only_under_its_label_and_never_as_a_key() {
+        let vault = vault();
+        let sealed = vault
+            .seal_secret("acme-account:https://ca/dir", b"credentials")
+            .unwrap();
+        assert!(!sealed.ciphertext.windows(11).any(|w| w == b"credentials"));
+        assert_eq!(
+            vault
+                .open_secret("acme-account:https://ca/dir", &sealed)
+                .unwrap()
+                .as_slice(),
+            b"credentials"
+        );
+        assert!(vault
+            .open_secret("acme-account:https://other/dir", &sealed)
+            .is_err());
+        // A sealed key cannot be opened as a secret, nor the other way round.
+        let key = vault.seal_key(CertificateId(1), "shop", b"secret").unwrap();
+        assert!(vault.open_secret("1:shop", &key).is_err());
+        assert!(vault.open_key(CertificateId(1), "shop", &sealed).is_err());
     }
 
     #[test]

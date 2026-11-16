@@ -230,6 +230,7 @@ mod tests {
                 overrides: Vec::new(),
                 runtime: SamplingRuntime::new(),
             },
+            &fast_proxy_routing::AcmeInputs::none(),
         )
         .unwrap()
     }

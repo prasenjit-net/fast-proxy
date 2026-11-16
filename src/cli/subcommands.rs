@@ -20,6 +20,11 @@ pub enum Command {
     Status(RemoteArgs),
     /// Show recent audit entries of a running proxy
     Audit(AuditArgs),
+    /// Show what ACME is doing on a running proxy, or ask it to renew now
+    Acme {
+        #[command(subcommand)]
+        action: AcmeAction,
+    },
     /// List or export the sampled requests of a running proxy (an admin token)
     Samples {
         #[command(subcommand)]
@@ -187,6 +192,22 @@ pub struct SamplesExportArgs {
     pub remote: RemoteArgs,
     #[command(flatten)]
     pub filters: SampleFilters,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AcmeAction {
+    /// Show the directory, the account, the lease and every subsystem's certificate
+    Status(RemoteArgs),
+    /// Order a certificate for a subsystem now, skipping the backoff (an admin token)
+    Renew(AcmeRenewArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AcmeRenewArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    /// The subsystem, by name or id
+    pub subsystem: String,
 }
 
 #[derive(Subcommand, Debug)]

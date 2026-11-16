@@ -55,7 +55,7 @@ impl Default for Hsts {
 }
 
 /// How a subsystem is served over HTTPS (effective only while TLS is on for
-/// the process). Redirect and HSTS settings need `enabled`.
+/// the process). Redirect, HSTS and ACME settings need `enabled`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HttpsPolicy {
     pub enabled: bool,
@@ -63,6 +63,9 @@ pub struct HttpsPolicy {
     pub certificate_id: Option<CertificateId>,
     pub redirect: RedirectMode,
     pub hsts: Hsts,
+    /// The certificate is issued and renewed through ACME (effective only while
+    /// ACME is on for the process, ADR 0014).
+    pub acme_enabled: bool,
 }
 
 impl HttpsPolicy {
@@ -93,6 +96,12 @@ impl HttpsPolicy {
                 "requires https.enabled",
             ));
         }
+        if self.acme_enabled {
+            return Err(FieldError::new(
+                "https.acmeEnabled",
+                "requires https.enabled",
+            ));
+        }
         Ok(())
     }
 }
@@ -111,7 +120,7 @@ mod tests {
     #[test]
     fn defaults_are_off_and_valid() {
         let policy = HttpsPolicy::default();
-        assert!(!policy.enabled && policy.certificate_id.is_none());
+        assert!(!policy.enabled && policy.certificate_id.is_none() && !policy.acme_enabled);
         assert_eq!(policy.redirect, RedirectMode::Off);
         assert_eq!(policy.hsts.max_age_secs, 31_536_000);
         assert!(policy.validate().is_ok());
@@ -135,8 +144,8 @@ mod tests {
     }
 
     #[test]
-    fn redirect_and_hsts_need_https_enabled() {
-        let cases: [(HttpsPolicy, &str); 3] = [
+    fn redirect_hsts_and_acme_need_https_enabled() {
+        let cases: [(HttpsPolicy, &str); 4] = [
             (
                 HttpsPolicy {
                     redirect: RedirectMode::Permanent308,
@@ -163,6 +172,13 @@ mod tests {
                     ..HttpsPolicy::default()
                 },
                 "https.hsts.includeSubdomains",
+            ),
+            (
+                HttpsPolicy {
+                    acme_enabled: true,
+                    ..HttpsPolicy::default()
+                },
+                "https.acmeEnabled",
             ),
         ];
         for (policy, field) in cases {

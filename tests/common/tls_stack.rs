@@ -38,6 +38,8 @@ pub struct Options {
     pub tls: bool,
     /// The port redirects name; defaults to the HTTPS listener's own.
     pub public_port: Option<u16>,
+    /// ACME on for the process, so subsystems may turn their switch on.
+    pub acme: bool,
 }
 
 impl Default for Options {
@@ -51,6 +53,7 @@ impl Default for Options {
             max_handshakes: 64,
             tls: true,
             public_port: None,
+            acme: false,
         }
     }
 }
@@ -120,6 +123,7 @@ impl Stack {
         let store = Store::open(&dir.path().join("fast-proxy.db")).unwrap();
         let settings = TlsSettings {
             enabled: options.tls,
+            acme_enabled: options.acme,
             master_key_file: Some(dir.path().join("master.key")),
             env_master_key: None,
         };

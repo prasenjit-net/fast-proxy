@@ -70,6 +70,17 @@ pub enum Event {
         timestamp_ms: i64,
     },
 
+    /// A subsystem's ACME status changed on this instance (an order started,
+    /// succeeded or failed). The detail is read from the API.
+    #[serde(rename_all = "camelCase")]
+    AcmeStatus {
+        subsystem_id: i64,
+        state: &'static str,
+        next_attempt_at_ms: Option<i64>,
+        last_error: String,
+        timestamp_ms: i64,
+    },
+
     /// Sampling changed: `change` is `settings`, `override` or `cleared` (the
     /// stored samples were deleted). Carries no setting and no sample.
     #[serde(rename_all = "camelCase")]

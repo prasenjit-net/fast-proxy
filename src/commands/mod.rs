@@ -3,6 +3,7 @@
 //! with the exit code of [`Failure`]: 0 success, 1 refused or invalid, 2 usage
 //! or connection problems.
 
+mod acme;
 mod client;
 mod credentials;
 mod failure;
@@ -13,7 +14,8 @@ mod validate;
 use std::process::ExitCode;
 
 use crate::cli::{
-    Cli, Command, ConfigAction, MaintenanceAction, RemoteArgs, SamplesAction, TokenAction,
+    AcmeAction, Cli, Command, ConfigAction, MaintenanceAction, RemoteArgs, SamplesAction,
+    TokenAction,
 };
 use crate::config::AppConfig;
 use client::{AdminClient, Trust};
@@ -51,6 +53,12 @@ async fn execute(cli: &Cli, command: &Command) -> Outcome {
         Command::Reload(remote) => remote::reload(&connect(cli, remote)?, remote.json).await,
         Command::Status(remote) => remote::status(&connect(cli, remote)?, remote.json).await,
         Command::Audit(args) => remote::audit(&connect(cli, &args.remote)?, args).await,
+        Command::Acme { action } => match action {
+            AcmeAction::Status(remote) => {
+                acme::status(&connect(cli, remote)?, remote.json, now_ms()).await
+            }
+            AcmeAction::Renew(args) => acme::renew(&connect(cli, &args.remote)?, args).await,
+        },
         Command::Samples { action } => match action {
             SamplesAction::List(args) => {
                 remote::samples_list(&connect(cli, &args.remote)?, args, now_ms()).await
