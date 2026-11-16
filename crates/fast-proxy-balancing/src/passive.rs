@@ -54,10 +54,9 @@ pub fn record_outcome(
     match outcome {
         Outcome::Success => {
             runtime.consecutive_failures.store(0, Relaxed);
-            if !half_open {
+            if !half_open || !claim_transition(runtime, until, 0) {
                 return None;
             }
-            runtime.ejected_until_ms.store(0, Relaxed);
             runtime.ejection_count.store(0, Relaxed);
             Some(Transition::Recovered)
         }
@@ -72,11 +71,16 @@ pub fn record_outcome(
             if !half_open && !may_eject_another(group, index, policy) {
                 return None;
             }
-            let times = runtime.ejection_count.fetch_add(1, Relaxed);
+            let times = runtime.ejection_count.load(Relaxed);
             let until_ms = now_ms
                 .saturating_add(ejection_length_ms(policy, times))
                 .max(1);
-            runtime.ejected_until_ms.store(until_ms, Relaxed);
+            if !claim_transition(runtime, until, until_ms) {
+                return None;
+            }
+            // Only the winner of the claim gets here, and nobody else can until
+            // the ejection it just set expires.
+            runtime.ejection_count.store(times + 1, Relaxed);
             runtime.consecutive_failures.store(0, Relaxed);
             Some(Transition::Ejected {
                 until_ms,
@@ -84,6 +88,16 @@ pub fn record_outcome(
             })
         }
     }
+}
+
+/// Moves `ejected_until_ms` from `seen` (what this caller read) to `next`.
+/// Outcomes that arrive together all read the same `seen`; only the one whose
+/// swap succeeds may eject or recover the endpoint, so it happens once.
+fn claim_transition(runtime: &crate::EndpointRuntime, seen: u64, next: u64) -> bool {
+    runtime
+        .ejected_until_ms
+        .compare_exchange(seen, next, Relaxed, Relaxed)
+        .is_ok()
 }
 
 /// Whether ejecting `group[index]` keeps the ejected share within the limit.
@@ -237,5 +251,34 @@ mod tests {
             assert_eq!(record_outcome(&g, 0, Outcome::Failure, &off, 0), None);
         }
         assert!(g[0].runtime.is_routable(0));
+    }
+
+    /// Failures that arrive together (refused connects reported at once) must
+    /// eject an endpoint once, not once per caller that saw it still in rotation.
+    #[test]
+    fn concurrent_failures_eject_once() {
+        const CALLERS: usize = 8;
+        for _ in 0..200 {
+            let g = Arc::new(group(3));
+            let start = Arc::new(std::sync::Barrier::new(CALLERS));
+            let ejections: usize = (0..CALLERS)
+                .map(|_| {
+                    let (g, start) = (g.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        (0..3)
+                            .filter_map(|_| fail(&g, 0, 1_000))
+                            .filter(|t| matches!(t, Transition::Ejected { .. }))
+                            .count()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|caller| caller.join().unwrap())
+                .sum();
+            assert_eq!(ejections, 1);
+            assert_eq!(g[0].runtime.ejection_count.load(Relaxed), 1);
+            assert_eq!(g[0].runtime.ejected_until_ms.load(Relaxed), 11_000);
+        }
     }
 }
