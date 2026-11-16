@@ -49,7 +49,9 @@ impl TestAcme {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let tls_ca = TestCa::new("test acme tls");
         let directory_ca = dir.path().join("acme-root.pem");
-        std::fs::write(&directory_ca, &tls_ca.pem).expect("writing the root");
+        tokio::fs::write(&directory_ca, &tls_ca.pem)
+            .await
+            .expect("writing the root");
         let issuer = TestCa::new("test acme issuer");
         let issuer_pem = issuer.pem.clone();
         let (addr, server, state) = server::start(&tls_ca, issuer).await;
