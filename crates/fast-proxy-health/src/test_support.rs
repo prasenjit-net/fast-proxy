@@ -136,6 +136,7 @@ pub fn config_for(check: HealthCheck, addrs: &[SocketAddr]) -> Config {
                     })
                     .collect(),
             }],
+            rate_limit: None,
             routes: vec![RouteConfig {
                 id: RouteId(1),
                 prefix: RoutePrefix::parse("/").unwrap(),
@@ -147,6 +148,8 @@ pub fn config_for(check: HealthCheck, addrs: &[SocketAddr]) -> Config {
                 response_timeout: Duration::from_secs(1),
                 retry: RetryPolicy::default(),
                 enabled: true,
+                rate_limit: None,
+                max_body_bytes: None,
             }],
         }],
     }

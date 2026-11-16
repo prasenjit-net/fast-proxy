@@ -300,6 +300,9 @@ fn parse_policy(request: &UpstreamRequest, errors: &mut FieldErrors) -> Option<G
         passive: passive?,
         retry_budget: budget?,
         tls: tls?,
+        // Not part of this request yet: a new group stores it as unlimited and an
+        // update leaves the stored cap alone (`upstreams::set_max_requests`).
+        max_requests: None,
     })
 }
 

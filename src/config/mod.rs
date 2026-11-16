@@ -6,6 +6,7 @@ mod admin;
 mod data_plane;
 mod duration;
 mod error;
+mod limits;
 mod logging;
 mod sampling;
 mod tls;
@@ -21,6 +22,7 @@ pub use acme::{AcmeConfig, LETS_ENCRYPT_STAGING};
 pub use admin::{AdminAuth, AdminConfig, AdminTlsConfig};
 pub use data_plane::DataPlaneConfig;
 pub use error::ConfigError;
+pub use limits::LimitsConfig;
 pub use logging::LoggingConfig;
 pub use sampling::SamplingConfig;
 pub use tls::TlsConfig;
@@ -33,6 +35,7 @@ pub struct AppConfig {
     pub admin: AdminConfig,
     pub logging: LoggingConfig,
     pub sampling: SamplingConfig,
+    pub limits: LimitsConfig,
     pub ui: UiConfig,
 }
 

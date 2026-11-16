@@ -258,6 +258,7 @@ mod tests {
                     state: EndpointState::Enabled,
                 }],
             }],
+            rate_limit: None,
             routes: vec![RouteConfig {
                 id: RouteId(7),
                 prefix: RoutePrefix::parse("/").unwrap(),
@@ -269,6 +270,8 @@ mod tests {
                 response_timeout: Duration::from_secs(30),
                 retry: RetryPolicy::default(),
                 enabled: true,
+                rate_limit: None,
+                max_body_bytes: None,
             }],
         }
     }

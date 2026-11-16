@@ -607,6 +607,7 @@ dependencies = [
  "fast-proxy-config-service",
  "fast-proxy-dataplane",
  "fast-proxy-health",
+ "fast-proxy-limits",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-sample-service",
@@ -726,6 +727,7 @@ dependencies = [
  "base64 0.22.1",
  "fast-proxy-auth",
  "fast-proxy-balancing",
+ "fast-proxy-limits",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-sampling",
@@ -793,6 +795,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-proxy-limits"
+version = "0.0.0"
+dependencies = [
+ "fast-proxy-model",
+ "proptest",
+]
+
+[[package]]
 name = "fast-proxy-model"
 version = "0.0.0"
 
@@ -803,6 +813,7 @@ dependencies = [
  "arc-swap",
  "fast-proxy-auth",
  "fast-proxy-balancing",
+ "fast-proxy-limits",
  "fast-proxy-model",
  "fast-proxy-sampling",
  "fast-proxy-test-pki",
@@ -830,6 +841,7 @@ dependencies = [
 name = "fast-proxy-sampling"
 version = "0.0.0"
 dependencies = [
+ "fast-proxy-limits",
  "fast-proxy-model",
  "proptest",
  "serde",

@@ -10,11 +10,15 @@ use common::{console, create_site, http, start_backend, start_proxy};
 use fast_proxy_store::Connection;
 
 /// Turns a current database back into what v0.1.1 (schema 5) stored for the same
-/// configuration: schema 6 only added the ACME tables and one subsystem column.
+/// configuration: schema 6 added the ACME tables and one subsystem column, and
+/// schema 7 the rate-limit policies and two caps.
 fn back_to_schema_5(database: &Path) {
     let conn = Connection::open(database).unwrap();
     conn.execute_batch(
-        "DROP TABLE acme_account;
+        "DROP TABLE rate_limit_policy;
+         ALTER TABLE route DROP COLUMN max_body_bytes;
+         ALTER TABLE upstream_group DROP COLUMN max_requests;
+         DROP TABLE acme_account;
          DROP TABLE acme_challenge;
          DROP TABLE acme_lease;
          DROP TABLE acme_status;
@@ -49,9 +53,9 @@ fn a_database_from_the_previous_release_is_upgraded_and_keeps_serving() {
     back_to_schema_5(&database);
 
     let running = console::start_ok(dir.path(), &[]);
-    let line = wait_for_line(&running, "upgraded the database schema from version 5 to 6")
+    let line = wait_for_line(&running, "upgraded the database schema from version 5 to ")
         .expect("the upgrade is reported on the console");
-    assert!(line.contains("fast-proxy.db.pre-v6-"), "{line}");
+    assert!(line.contains("fast-proxy.db.pre-v"), "{line}");
 
     let (status, body) = http(running.data, "GET", "/", "shop.example.com", None);
     assert_eq!((status, body.as_str()), (200, "old-site /"));
@@ -59,7 +63,7 @@ fn a_database_from_the_previous_release_is_upgraded_and_keeps_serving() {
     let copies: Vec<_> = std::fs::read_dir(dir.path().join("state"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| name.starts_with("fast-proxy.db.pre-v6-"))
+        .filter(|name| name.starts_with("fast-proxy.db.pre-v"))
         .collect();
     assert_eq!(copies.len(), 1, "{copies:?}");
     let version: i64 = Connection::open(dir.path().join("state").join(&copies[0]))

@@ -36,6 +36,8 @@ pub fn route(id: i64, prefix: &str) -> RouteConfig {
         response_timeout: Duration::from_secs(30),
         retry: RetryPolicy::default(),
         enabled: true,
+        rate_limit: None,
+        max_body_bytes: None,
     }
 }
 
@@ -84,6 +86,7 @@ pub fn site_to_group(
                 .collect(),
         }],
         routes,
+        rate_limit: None,
     }
 }
 

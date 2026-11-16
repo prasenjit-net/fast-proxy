@@ -188,6 +188,9 @@ fn build(
             min_per_sec: small(n[11]),
         },
         tls,
+        // Its own column, read by the loader: updates through these lists must
+        // not reset it (see `upstreams::set_max_requests`).
+        max_requests: None,
     };
     policy.validate().map_err(corrupt)?;
     Ok(policy)

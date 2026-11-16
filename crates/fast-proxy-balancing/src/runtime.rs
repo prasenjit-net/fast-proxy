@@ -68,6 +68,20 @@ impl EndpointRuntime {
         }
     }
 
+    /// Like [`EndpointRuntime::track`], but only while fewer than `cap` requests
+    /// are in flight. The check and the count are one atomic step, so concurrent
+    /// requests can never pass the cap together (ADR 0031); `None` when full.
+    pub fn try_track(self: &Arc<Self>, cap: u32) -> Option<InFlightGuard> {
+        self.in_flight
+            .fetch_update(Relaxed, Relaxed, |in_flight| {
+                (in_flight < cap).then_some(in_flight + 1)
+            })
+            .ok()?;
+        Some(InFlightGuard {
+            runtime: Arc::clone(self),
+        })
+    }
+
     /// Requests currently in flight on this endpoint.
     pub fn in_flight(&self) -> u32 {
         self.in_flight.load(Relaxed)

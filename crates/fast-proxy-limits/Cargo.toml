@@ -1,0 +1,15 @@
+[package]
+name = "fast-proxy-limits"
+version = "0.0.0"
+edition = "2021"
+description = "Request limits with no I/O: GCRA rate limiting, the bounded key table, and the token bucket the sampler shares"
+publish = false
+
+[dependencies]
+fast-proxy-model = { path = "../fast-proxy-model" }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

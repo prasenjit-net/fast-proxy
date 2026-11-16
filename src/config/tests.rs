@@ -445,3 +445,24 @@ mod admin_protection {
         );
     }
 }
+
+#[test]
+fn the_limits_section_defaults_parses_and_is_bounded() {
+    let defaults = parse("").unwrap();
+    assert_eq!(
+        defaults.limits.rate_limit_keys,
+        fast_proxy_limits::DEFAULT_KEY_CAPACITY
+    );
+    let set = parse("[limits]\nrate_limit_keys = 5000\n").unwrap();
+    assert_eq!(set.limits.rate_limit_keys, 5000);
+    set.validate().unwrap();
+    for refused in ["0", "999", "50000001"] {
+        let config = parse(&format!("[limits]\nrate_limit_keys = {refused}\n")).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("limits.rate_limit_keys"), "{refused}: {err}");
+    }
+    assert!(
+        parse("[limits]\nmax_connection = 5\n").is_err(),
+        "unknown keys are refused"
+    );
+}

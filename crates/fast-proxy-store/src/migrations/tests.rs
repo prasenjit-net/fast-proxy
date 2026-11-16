@@ -18,13 +18,22 @@ use crate::Database;
 /// The schema v0.1.1 created, exactly as released.
 const SCHEMA_V5: &str = include_str!("fixtures/schema_v5.sql");
 
-/// A file as v0.1.1 left it: schema 5, in WAL mode.
-fn v5_file(path: &Path) {
+/// Every schema a release created, as released: each must upgrade.
+const RELEASED: &[(i64, &str)] = &[(5, SCHEMA_V5), (6, include_str!("fixtures/schema_v6.sql"))];
+
+/// A file as a release left it: its schema, in WAL mode.
+fn old_file(path: &Path, version: i64) {
+    let (_, schema) = RELEASED.iter().find(|(v, _)| *v == version).unwrap();
     let conn = Connection::open(path).unwrap();
     conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))
         .unwrap();
-    conn.execute_batch(SCHEMA_V5).unwrap();
-    conn.pragma_update(None, "user_version", 5).unwrap();
+    conn.execute_batch(schema).unwrap();
+    conn.pragma_update(None, "user_version", version).unwrap();
+}
+
+/// A file as v0.1.1 left it.
+fn v5_file(path: &Path) {
+    old_file(path, 5);
 }
 
 fn version_of(path: &Path) -> i64 {
@@ -132,10 +141,11 @@ fn column_list(conn: &Connection, schema: &str, table: &str) -> String {
         .join(", ")
 }
 
-/// Writes a schema-5 file at `old` holding, for every table schema 5 has, the
-/// rows of `current`: what v0.1.1 would have stored for the same configuration.
-fn copy_into_v5(current: &Path, old: &Path) {
-    v5_file(old);
+/// Writes a file of schema `version` at `old` holding, for every table that
+/// schema has, the rows of `current`: what that release would have stored for
+/// the same configuration.
+fn copy_into(current: &Path, old: &Path, version: i64) {
+    old_file(old, version);
     let conn = Connection::open(current).unwrap();
     conn.pragma_update(None, "foreign_keys", false).unwrap();
     conn.execute("ATTACH DATABASE ?1 AS old", [old.to_str().unwrap()])
@@ -177,41 +187,55 @@ fn the_steps_lead_from_the_oldest_upgradable_version_to_the_current_one() {
 }
 
 #[test]
-fn a_new_database_and_an_upgraded_one_have_the_same_shape() {
+fn a_new_database_and_one_upgraded_from_every_release_have_the_same_shape() {
     let dir = tempfile::tempdir().unwrap();
     let new = dir.path().join("new.db");
-    let upgraded = dir.path().join("upgraded.db");
     drop(Database::open(&new).unwrap());
-    v5_file(&upgraded);
-    let opened = Database::open(&upgraded).unwrap();
-    assert_eq!(
-        opened.schema_upgrade().map(|u| (u.from, u.to)),
-        Some((5, 6))
-    );
-    assert_eq!(
-        shape_of(&Connection::open(&upgraded).unwrap()),
-        shape_of(&Connection::open(&new).unwrap())
-    );
+    let expected = shape_of(&Connection::open(&new).unwrap());
+    for (version, _) in RELEASED {
+        let upgraded = dir.path().join(format!("v{version}.db"));
+        old_file(&upgraded, *version);
+        let opened = Database::open(&upgraded).unwrap();
+        assert_eq!(
+            opened.schema_upgrade().map(|u| (u.from, u.to)),
+            Some((*version, SCHEMA_VERSION))
+        );
+        assert_eq!(
+            shape_of(&Connection::open(&upgraded).unwrap()),
+            expected,
+            "upgraded from {version}"
+        );
+    }
 }
 
 #[test]
-fn an_upgrade_keeps_every_row_and_the_whole_configuration() {
+fn an_upgrade_from_every_release_keeps_every_row_and_the_whole_configuration() {
+    for (version, _) in RELEASED {
+        upgrade_keeps_every_row(*version);
+    }
+}
+
+fn upgrade_keeps_every_row(version: i64) {
     let dir = tempfile::tempdir().unwrap();
     let current = dir.path().join("current.db");
     let old = dir.path().join("old.db");
     let original = populated(&current).load_all().unwrap();
-    copy_into_v5(&current, &old);
+    copy_into(&current, &old, version);
 
     let upgraded = Database::open(&old).unwrap();
-    assert_eq!(upgraded.schema_upgrade().map(|u| u.from), Some(5));
-    assert_eq!(upgraded.load_all().unwrap(), original);
+    assert_eq!(upgraded.schema_upgrade().map(|u| u.from), Some(version));
+    assert_eq!(upgraded.load_all().unwrap(), original, "from {version}");
 
     let conn = Connection::open(&old).unwrap();
     let mut filled = Vec::new();
-    for table in v5_tables() {
+    for table in tables_of(version) {
         let columns = column_list(&conn, "main", &table);
         let before = rows_of(&current, &table, &columns);
-        assert_eq!(rows_of(&old, &table, &columns), before, "table {table}");
+        assert_eq!(
+            rows_of(&old, &table, &columns),
+            before,
+            "table {table} from {version}"
+        );
         if !before.is_empty() {
             filled.push(table);
         }
@@ -235,19 +259,31 @@ fn an_upgrade_keeps_every_row_and_the_whole_configuration() {
     }
 }
 
-fn v5_tables() -> Vec<String> {
+/// The tables the schema of `version` has.
+fn tables_of(version: i64) -> Vec<String> {
+    let (_, schema) = RELEASED.iter().find(|(v, _)| *v == version).unwrap();
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(SCHEMA_V5).unwrap();
+    conn.execute_batch(schema).unwrap();
     table_names(&conn, "main")
 }
 
-/// Rewrites every stored revision as v0.1.1 wrote it: its JSON had no
-/// `acme_enabled` (schema 6 added it).
+/// Rewrites every stored revision as v0.1.1 wrote it: its JSON had none of the
+/// fields later schemas added (`acme_enabled` in 6; the limits in 7).
 fn revisions_as_v0_1_1_wrote_them(path: &Path) {
     let conn = Connection::open(path).unwrap();
-    let paths: Vec<String> = (0..8)
-        .map(|i| format!("'$.subsystems[{i}].https.acme_enabled'"))
-        .collect();
+    let mut paths = Vec::new();
+    for i in 0..8 {
+        let subsystem = format!("$.subsystems[{i}]");
+        paths.push(format!("'{subsystem}.https.acme_enabled'"));
+        paths.push(format!("'{subsystem}.rate_limit'"));
+        for j in 0..8 {
+            paths.push(format!("'{subsystem}.routes[{j}].rate_limit'"));
+            paths.push(format!("'{subsystem}.routes[{j}].max_body_bytes'"));
+            paths.push(format!(
+                "'{subsystem}.upstream_groups[{j}].policy.max_requests'"
+            ));
+        }
+    }
     let changed = conn
         .execute(
             &format!(
@@ -260,7 +296,9 @@ fn revisions_as_v0_1_1_wrote_them(path: &Path) {
     assert!(changed > 0);
     let left: i64 = conn
         .query_row(
-            "SELECT count(*) FROM revision WHERE config LIKE '%acme_enabled%'",
+            "SELECT count(*) FROM revision WHERE config LIKE '%acme_enabled%'
+               OR config LIKE '%rate_limit%' OR config LIKE '%max_body_bytes%'
+               OR config LIKE '%max_requests%'",
             [],
             |row| row.get(0),
         )
@@ -274,7 +312,7 @@ fn an_upgraded_database_rolls_back_to_a_revision_the_old_release_wrote() {
     let current = dir.path().join("current.db");
     let old = dir.path().join("old.db");
     drop(populated(&current));
-    copy_into_v5(&current, &old);
+    copy_into(&current, &old, 5);
     revisions_as_v0_1_1_wrote_them(&old);
 
     let mut upgraded = Database::open(&old).unwrap();
@@ -307,7 +345,7 @@ fn an_upgraded_subsystem_has_acme_off() {
     let current = dir.path().join("current.db");
     let old = dir.path().join("old.db");
     drop(populated(&current));
-    copy_into_v5(&current, &old);
+    copy_into(&current, &old, 5);
     let config = Database::open(&old).unwrap().load_all().unwrap();
     assert!(!config.subsystems.is_empty());
     assert!(config.subsystems.iter().all(|s| !s.https.acme_enabled));
@@ -319,14 +357,15 @@ fn the_copy_taken_before_an_upgrade_is_the_old_database_readable_by_its_owner_on
     let current = dir.path().join("current.db");
     let old = dir.path().join("fast-proxy.db");
     drop(populated(&current));
-    copy_into_v5(&current, &old);
+    copy_into(&current, &old, 5);
 
     let opened = Database::open(&old).unwrap();
     let copy = opened.schema_upgrade().unwrap().backup.clone().unwrap();
     assert_eq!(copy.parent(), old.parent());
     let name = copy.file_name().unwrap().to_str().unwrap();
     assert!(
-        name.starts_with("fast-proxy.db.pre-v6-") && name.ends_with(".bak"),
+        name.starts_with(&format!("fast-proxy.db.pre-v{SCHEMA_VERSION}-"))
+            && name.ends_with(".bak"),
         "{name}"
     );
     assert_eq!(version_of(&copy), 5);

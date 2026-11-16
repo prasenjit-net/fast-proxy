@@ -78,6 +78,14 @@ lease_ttl = "10m"
 # Fetch each challenge through its public name before the CA checks it.
 self_check = true
 
+[limits]
+# Process limits (restart to change). Rate-limit policies themselves are set per
+# subsystem and route in the admin UI/API and stored in the database.
+# How many client keys all rate-limit tables together may hold (about 64 bytes
+# each). When full, idle keys make room; if none is idle, a new client is let
+# through and counted, so a flood of addresses cannot lock everyone out.
+rate_limit_keys = 100000
+
 [admin]
 # The admin plane (UI, REST API, /metrics) has no authentication yet.
 # Keep it on loopback.

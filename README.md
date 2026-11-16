@@ -278,6 +278,7 @@ failed (the message carries the proxy's own reason and names each bad field),
 | `sampling.queue_depth`, `batch_size`, `batch_interval` | `1024`, `50`, `250ms` | Kept samples that may wait, rows per write, the longest a sample waits for its batch |
 | `sampling.prune_interval` | `30s` | How often this instance prunes the shared sample table |
 | `sampling.body_budget_bytes` | `16 MiB` | Memory that captured bodies may hold at once |
+| `limits.rate_limit_keys` | `100000` | Client keys all rate-limit tables together may hold; a new client finding no room is let through and counted |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |

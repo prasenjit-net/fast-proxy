@@ -85,7 +85,13 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     // Both planes report to the same metrics and the same access log.
     let metrics = Arc::new(Metrics::new());
     let config_service = Arc::new(
-        ConfigService::start_with_tls(store, metrics.clone(), tls_settings(&config)).await?,
+        ConfigService::start_with_limits(
+            store,
+            metrics.clone(),
+            tls_settings(&config),
+            config.limits.rate_limit_keys,
+        )
+        .await?,
     );
     if config.admin.auth == AdminAuth::Required {
         ensure_admin_token(&config_service).await?;

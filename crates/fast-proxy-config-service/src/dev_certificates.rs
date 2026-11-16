@@ -185,6 +185,7 @@ mod tests {
                 .collect(),
             upstream_groups: Vec::new(),
             routes: Vec::new(),
+            rate_limit: None,
         }
     }
 

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::{
-    EndpointConfig, GroupPolicy, HostPattern, HttpsPolicy, RetryPolicy, RoutePrefix, SubsystemName,
-    UpstreamPrefix,
+    EndpointConfig, GroupPolicy, HostPattern, HttpsPolicy, RateLimitPolicy, RetryPolicy,
+    RoutePrefix, SubsystemName, UpstreamPrefix,
 };
 
 /// Database id of a subsystem.
@@ -40,6 +40,9 @@ pub struct SubsystemConfig {
     pub hosts: Vec<HostPattern>,
     pub upstream_groups: Vec<UpstreamGroupConfig>,
     pub routes: Vec<RouteConfig>,
+    /// Applies to every route of the subsystem that has no policy of its own;
+    /// those routes share one budget per key.
+    pub rate_limit: Option<RateLimitPolicy>,
 }
 
 /// A named set of endpoints with the policy that governs them: one to
@@ -66,4 +69,8 @@ pub struct RouteConfig {
     pub response_timeout: Duration,
     pub retry: RetryPolicy,
     pub enabled: bool,
+    /// Replaces the subsystem's policy for this route.
+    pub rate_limit: Option<RateLimitPolicy>,
+    /// The largest request body this route accepts; `None` uses the process default.
+    pub max_body_bytes: Option<u64>,
 }

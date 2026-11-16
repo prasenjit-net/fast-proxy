@@ -70,6 +70,7 @@ mod tests {
                 https,
                 hosts: vec![HostPattern::parse("*.example.com").unwrap()],
                 upstream_groups: Vec::new(),
+                rate_limit: None,
                 routes: Vec::new(),
             }],
         };

@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError, SamplingConfig};
+use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError, LimitsConfig, SamplingConfig};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
@@ -55,7 +55,23 @@ pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
     validate_admin(config)?;
     validate_tls(config)?;
     super::validate_acme::check(config)?;
-    validate_sampling(&config.sampling)
+    validate_sampling(&config.sampling)?;
+    validate_limits(&config.limits)
+}
+
+/// The fewest and most rate-limit keys a process may hold (about 64 bytes each).
+const RATE_LIMIT_KEYS: std::ops::RangeInclusive<usize> = 1_000..=50_000_000;
+
+/// Checks `[limits]`.
+fn validate_limits(limits: &LimitsConfig) -> Result<(), ConfigError> {
+    if !RATE_LIMIT_KEYS.contains(&limits.rate_limit_keys) {
+        return invalid(format!(
+            "limits.rate_limit_keys must be between {} and {}",
+            RATE_LIMIT_KEYS.start(),
+            RATE_LIMIT_KEYS.end()
+        ));
+    }
+    Ok(())
 }
 
 /// Checks `[admin]`: the admin plane may leave loopback only with authentication

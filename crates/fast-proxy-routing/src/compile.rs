@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use fast_proxy_balancing::RuntimeRegistry;
+use fast_proxy_limits::{PolicyIdentity, RateLimitRuntime};
 use fast_proxy_model::{
-    Config, MaintenanceTarget, RouteId, RoutePrefix, SubsystemConfig, SubsystemId,
-    UpstreamGroupConfig, UpstreamGroupId,
+    Config, MaintenanceTarget, RateLimitPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig,
+    SubsystemId, UpstreamGroupConfig, UpstreamGroupId,
 };
 use fast_proxy_tls::UpstreamTrust;
 
@@ -12,9 +13,9 @@ use crate::compiled_upstream::GroupFault;
 use crate::sampling_table::SamplingTable;
 use crate::snapshot::{CompiledRoute, CompiledSubsystem};
 use crate::{
-    AcmeChallenges, AcmeInputs, CompileError, CompiledHttps, CompiledMaintenance, CompiledSampling,
-    CompiledUpstream, HostTable, MaintenanceInputs, MaintenanceScope, RouteTable, SamplingInputs,
-    SamplingRuntime, Snapshot, TlsInputs,
+    AcmeChallenges, AcmeInputs, CompileError, CompiledHttps, CompiledMaintenance,
+    CompiledRateLimit, CompiledSampling, CompiledUpstream, HostTable, MaintenanceInputs,
+    MaintenanceScope, RouteTable, SamplingInputs, SamplingRuntime, Snapshot, TlsInputs,
 };
 
 /// Compiles `config` into a snapshot labelled `version`. Pure and
@@ -83,7 +84,55 @@ pub fn compile_full(
     sampling: &SamplingInputs,
     acme: &AcmeInputs,
 ) -> Result<Snapshot, CompileError> {
+    let inputs = CompileInputs {
+        tls,
+        maintenance,
+        sampling,
+        acme,
+        rate_limits: &RateLimitRuntime::default(),
+    };
+    compile_with(version, config, previous, &inputs)
+}
+
+/// Everything a compile takes besides the configuration and the endpoint
+/// runtime: the TLS state, maintenance scopes, sampling, ACME challenges, and the
+/// rate-limit runtime whose tables the new snapshot keeps.
+pub struct CompileInputs<'a> {
+    pub tls: &'a TlsInputs,
+    pub maintenance: &'a MaintenanceInputs,
+    pub sampling: &'a SamplingInputs,
+    pub acme: &'a AcmeInputs,
+    /// Usually the live snapshot's [`Snapshot::rate_limit_runtime`]: a policy
+    /// that still exists keeps its table, so a reload never resets a client's
+    /// budget.
+    pub rate_limits: &'a RateLimitRuntime,
+}
+
+/// Like [`compile_full`], also compiling each route's rate limit (its own
+/// policy, or its subsystem's) and request body cap, carrying the key tables of
+/// policies that remain from `inputs.rate_limits`.
+pub fn compile_with(
+    version: u64,
+    config: &Config,
+    previous: &RuntimeRegistry,
+    inputs: &CompileInputs<'_>,
+) -> Result<Snapshot, CompileError> {
+    let CompileInputs {
+        tls,
+        maintenance,
+        sampling,
+        acme,
+        rate_limits,
+    } = *inputs;
     let scopes = ScopeTable::build(config, maintenance)?;
+    let rate_limits = rate_limits.rebuilt_for(
+        config
+            .subsystems
+            .iter()
+            .flat_map(|s| s.routes.iter().filter(|r| r.enabled).map(move |r| (s, r)))
+            .filter_map(|(subsystem, route)| effective_policy(subsystem, route))
+            .map(|(identity, _)| identity),
+    );
     let sampling_table = SamplingTable::build(config, sampling)?;
     let runtime = sampling
         .runtime
@@ -131,7 +180,7 @@ pub fn compile_full(
                 tls,
                 &scopes,
                 &sampling_table,
-                &runtime,
+                (&runtime, &rate_limits),
             )?,
         );
     }
@@ -146,7 +195,45 @@ pub fn compile_full(
         unmatched_sampling: sampling_table.global_policy(),
         sampling: runtime,
         acme_challenges: Arc::new(AcmeChallenges::build(acme)),
+        rate_limits,
     })
+}
+
+/// The rate-limit policy that applies to a route, with the identity of its key
+/// table: the route's own, else its subsystem's (shared by every such route).
+fn effective_policy<'a>(
+    subsystem: &'a SubsystemConfig,
+    route: &'a RouteConfig,
+) -> Option<(PolicyIdentity, &'a RateLimitPolicy)> {
+    let identity = |route: Option<&RouteConfig>| PolicyIdentity {
+        subsystem: subsystem.name.as_str().to_string(),
+        route: route.map(|route| route.prefix.as_str().to_string()),
+    };
+    match (&route.rate_limit, &subsystem.rate_limit) {
+        (Some(own), _) => Some((identity(Some(route)), own)),
+        (None, Some(shared)) => Some((identity(None), shared)),
+        (None, None) => None,
+    }
+}
+
+/// The compiled rate limit of a route, with its table from `limits`.
+fn compile_rate_limit(
+    subsystem: &SubsystemConfig,
+    route: &RouteConfig,
+    limits: &RateLimitRuntime,
+) -> Option<CompiledRateLimit> {
+    let (identity, policy) = effective_policy(subsystem, route)?;
+    // Invariant: `limits` was rebuilt for the effective policy of every enabled
+    // route (see `compile_with`), and only enabled routes are compiled.
+    let table = limits
+        .table(&identity)
+        .expect("the runtime was rebuilt for every effective policy");
+    Some(CompiledRateLimit::new(
+        identity,
+        policy,
+        table,
+        limits.hasher().clone(),
+    ))
 }
 
 /// The active maintenance scopes, checked against the configuration and sorted
@@ -211,7 +298,7 @@ fn compile_subsystem(
     tls: &TlsInputs,
     scopes: &ScopeTable,
     sampling: &SamplingTable<'_>,
-    runtime: &SamplingRuntime,
+    (runtime, limits): (&SamplingRuntime, &RateLimitRuntime),
 ) -> Result<CompiledSubsystem, CompileError> {
     let name = subsystem.name.as_str();
     let https = compile_https(subsystem, tls)?;
@@ -255,6 +342,8 @@ fn compile_subsystem(
                         .window(name, route.prefix.as_str())
                         .unwrap_or_default(),
                 },
+                rate_limit: compile_rate_limit(subsystem, route, limits),
+                max_body_bytes: route.max_body_bytes,
             },
         ));
     }
@@ -432,6 +521,8 @@ pub(crate) mod tests {
             response_timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             enabled: true,
+            rate_limit: None,
+            max_body_bytes: None,
         }
     }
 
@@ -447,6 +538,7 @@ pub(crate) mod tests {
                 .map(|h| HostPattern::parse(h).unwrap())
                 .collect(),
             upstream_groups: vec![group(id * 10, "backend", "127.0.0.1:3000")],
+            rate_limit: None,
             routes: vec![route(id * 100, "/", id * 10)],
         }
     }

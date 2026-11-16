@@ -30,10 +30,16 @@ struct Step {
 }
 
 /// Every step from [`OLDEST_UPGRADABLE`] to [`SCHEMA_VERSION`], one per version.
-const STEPS: &[Step] = &[Step {
-    to: 6,
-    sql: include_str!("v6_acme.sql"),
-}];
+const STEPS: &[Step] = &[
+    Step {
+        to: 6,
+        sql: include_str!("v6_acme.sql"),
+    },
+    Step {
+        to: 7,
+        sql: include_str!("v7_limits.sql"),
+    },
+];
 
 /// What opening a database did to its schema, so startup can report it once.
 #[derive(Debug, Clone, PartialEq, Eq)]
