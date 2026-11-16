@@ -1,7 +1,8 @@
 # M7 Plan: Hardening and 1.0
 
-Status: **draft v0.1 (2026-11-16), proposed.** PR0 (task C1, schema migrations, ADR 0028) is built on
-`m7/pr0-schema-migrations`; nothing else is started. Items marked **(confirm)** need the owner's sign-off
+Status: **draft v0.1 (2026-11-16), proposed.** PR0 (task C1, schema migrations, ADR 0028; #74) is built,
+and carries the milestone's documents: ADRs 0029 to 0034 are written as **proposed**. PR1 (`m7/pr1-decisions`) holds
+the supply-chain gate and the `unsafe` lint (F4, F5). Nothing else is started. Items marked **(confirm)** need the owner's sign-off
 before the tasks that depend on them start.
 
 Parent document: [ROADMAP.md](ROADMAP.md) (the M7 list). Predecessors: M1 to M6, all complete; the M4 stack (#68 to
@@ -123,7 +124,7 @@ Items marked **(confirm)** are recommendations that need your sign-off.
 | L11 | Request smuggling | Refuse with `400` (fixed response, counted) a request with both `Content-Length` and `Transfer-Encoding`, with more than one `Content-Length`, with a `Transfer-Encoding` other than a final `chunked`, or with a header name or value that HTTP/1.1 forbids, before anything is forwarded. For HTTP/2 requests forwarded as HTTP/1.1, refuse connection-specific headers and any `\r` or `\n` in values (hyper's h2 server rejects most of these; the review and Q-tests check the remainder). The forwarded request never carries both framing headers. These checks are pure functions in `headers.rs` with unit and fuzz coverage. |
 | L12 | What 1.0 promises | A short `docs/stability.md`, effective from 1.0.0. **Kept across 1.x:** `config.toml` keys (deprecated keys still parsed and warned about for all of 1.x), the admin REST API under `/api` (fields may be added, never removed or renamed), the CLI's commands, flags and exit codes, metric names and labels, the access log line format, and **every database written by 1.x opening in later 1.x** with its migrations. **Not promised:** the UI's look and layout, log message text, `/api` endpoints marked experimental. This extends the owner's schema rule to the other public surfaces from 1.0 on. Until 1.0.0 is tagged, the "no compatibility work" rule in AGENTS.md still applies to config, API and behavior. **(confirm)** |
 | L13 | Fuzzing tooling | `cargo-fuzz` (libFuzzer, nightly Rust, Linux CI only) in a `fuzz/` crate outside the workspace, so stable builds, `cargo test` and Windows are untouched. Targets call pure functions only (section 5.4), and a seed corpus is checked in. Each target runs for 60 s per pull request and 20 minutes nightly, and any crash input is committed as a regression test. `proptest` stays for properties. **(confirm)** |
-| L14 | Supply-chain gate | `cargo deny check` in CI (advisories from RustSec, an allow-list of licenses, a ban on duplicate major versions of `tokio`, `hyper`, `rustls`, crates only from crates.io). `#![forbid(unsafe_code)]` at the root of every crate (none uses `unsafe` today), checked by a test over the manifests, as the store's "no crypto dependency" check is. GitHub actions stay pinned by SHA. |
+| L14 | Supply-chain gate | `cargo deny check` in CI (advisories from RustSec, an allow-list of licenses, a ban on duplicate major versions of `tokio`, `hyper`, `rustls`, crates only from crates.io). `unsafe_code = "forbid"` as a workspace lint every crate opts into (none uses `unsafe` today; a lint also covers tests, examples and build scripts), checked by a test over the manifests, as the store's "no crypto dependency" check is. GitHub actions stay pinned by SHA. |
 | L15 | The container image | A multi-stage build: compile `x86_64-` and `aarch64-unknown-linux-musl` statically (rustls and bundled SQLite need no system library), then copy into `gcr.io/distroless/static:nonroot` (no shell, user 65532). `/var/lib/fast-proxy` is the volume for the database and the master key, the default config points there, ports 8000, 8443 and 9000 are exposed, and the image health check runs `fast-proxy status --local` (a new flag that calls `/api/health` with no token). The admin plane stays on loopback by default; the recipe shows admin TLS for exposing it. Published to `ghcr.io/prasenjit-net/fast-proxy:<version>` and `:latest` by the release workflow, signed with keyless cosign, with an SBOM (`cargo cyclonedx`) and GitHub build provenance. **(confirm)** |
 | L16 | Benchmarks, published | A `scripts/bench.sh` that starts the backend and the proxy, runs `oha` through a fixed matrix, and writes a Markdown table. The published run uses a named Linux machine (cloud instance type, kernel, CPU pinning for proxy, backend and load generator), three rounds, median reported. nginx is configured equivalently (keep-alive upstream, access log off and on) as a **reference point, not a race**: the doc says what differs. The macOS numbers stay as history. |
 | L17 | Soak | `tests/soak/` holds a binary (`cargo run --release --example soak -- --duration 24h`) that drives the real proxy: steady keep-alive load, one config write per minute, one endpoint killed and revived every five minutes, a certificate write per hour, sampling on, and it samples the proxy's RSS and open descriptors every 30 s into a CSV. It fails on any client error outside an injected fault window, RSS growth over 5% after the first hour, or descriptors not returning to idle. Not part of `cargo test`. A nightly workflow runs 30 minutes, and the 24-hour run is done by hand before 1.0 and its graph goes in `benchmarks.md`. |
@@ -292,6 +293,10 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   caps, L8), 0032 (fuzzing and the supply-chain gate, L13, L14), 0033 (packaging and release, L15) and 0034 (the 1.0
   stability promise, L12). ADR 0028 (schema migrations, L18) was written with C1. Add them to the ROADMAP decision log.
   *Done when:* no **(confirm)** item is open.
+  *Status:* ADRs [0029](adr/0029-limits-and-where-they-live.md), [0030](adr/0030-rate-limiting.md),
+  [0031](adr/0031-endpoint-connection-caps.md), [0032](adr/0032-fuzzing-and-the-supply-chain-gate.md),
+  [0033](adr/0033-packaging-and-release.md) and [0034](adr/0034-the-1.0-stability-promise.md) are written as
+  **proposed** (in PR0, with the other documents); the **(confirm)** items wait for the owner.
 - [ ] **G2 (S) Spike: slow-client handling in hyper.** (a) Which of idle keep-alive, slow body and slow reader
   hyper 1.11 already bounds with `header_read_timeout`, and what it does with an h2 connection that stops reading.
   (b) The cost of a `ProgressIo` wrapper on the M6 benchmark (budget: within 1%). (c) Whether hyper's
@@ -375,8 +380,15 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   workflow that runs 20 minutes each and opens an issue with the crash input on failure. A crash input is committed
   as a unit test in the crate that owns the function.
 - [ ] **F3 (S) The 1-hour runs** before 1.0 (exit criterion 7), recorded in the outcome section.
-- [ ] **F4 (S) `cargo deny`** with `deny.toml` (L14) as a CI gate. Fix or justify each finding in the file.
-- [ ] **F5 (S) `#![forbid(unsafe_code)]`** in every crate, with the manifest test.
+- [x] **F4 (S) `cargo deny`** with `deny.toml` (L14) as a CI gate. Fix or justify each finding in the file.
+  *Built in PR1.* The first run found two advisories, both fixed rather than ignored: the bundled SQLite
+  (RUSTSEC-2026-0459; `rusqlite` 0.37 to 0.43, now one workspace dependency, no code change) and unsound `AsyncFd`
+  constructors (RUSTSEC-2026-0386; `tokio` 1.53.1 to 1.54.1). The root package became `publish = false` with
+  `license = "MIT"`. The action is pinned by commit at v2.1.1 (v2.1.2 was hours old).
+- [x] **F5 (S) `#![forbid(unsafe_code)]`** in every crate, with the manifest test.
+  *Built in PR1* as a workspace lint (`[workspace.lints.rust] unsafe_code = "forbid"`, every crate
+  `[lints] workspace = true`), which also covers tests, examples and build scripts; `tests/workspace_lints.rs` fails
+  for a crate that does not opt in.
 
 ### Workstream P: Performance and soak
 
@@ -507,9 +519,10 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
 Suggested pull requests, each leaving `main` green and releasable. **Merge each to `main` as it passes CI**, so the
 stack stays short:
 
-1. **PR0** C1: schema migrations and v5 to v6, ADR 0028, this plan (built; before the v0.1.2 release).
-2. **PR1** G1 (ADRs 0029 to 0034, the defaults table). G2 and G3 as throwaway branches. Also F4 and F5, which
-   need no decisions and harden everything after them.
+1. **PR0** C1: schema migrations and v5 to v6, ADR 0028, this plan (built; before the v0.1.2 release). At the
+   owner's request it also carries the milestone's documents: ADRs 0029 to 0034 (G1, proposed).
+2. **PR1** F4 and F5, which need no decisions and harden everything after them. G2 and G3 as throwaway branches;
+   the defaults table goes with LM1.
 3. **PR2** LM1 to LM3, S1, R1, B1: the limits crate, model, schema 7 with its migration, compile. No behavior yet.
 4. **PR3** D1 to D3: connection caps, timeouts, size limits and framing.
 5. **PR4** D4, D5: rate limiting and refusal reasons.
