@@ -34,6 +34,10 @@ adds the ACME tables (schema 6). Without an upgrade path a v0.1.1 database would
   instance cannot remove a copy another is still writing. If the copy cannot be written, the
   upgrade does not start. The copy holds what the database holds; the operator guide says to
   treat it like the database.
+- **Revisions too.** A revision stores the configuration as JSON (`revision/config_json.rs`). A field
+  added there carries `#[serde(default)]`, so a revision an older release wrote still decodes and
+  restores (rollback). `acme_enabled` (schema 6) missed it at first; a test now turns every revision
+  of an upgraded database back into the v0.1.1 form and rolls back to it.
 - **Never downgrade.** A file newer than the binary, or older than `OLDEST_UPGRADABLE`, is refused
   as before (`IncompatibleSchema`), and the message says which versions this build reads. A
   read-only open (`config validate`) does not upgrade either.

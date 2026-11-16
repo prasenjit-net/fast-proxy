@@ -241,6 +241,66 @@ fn v5_tables() -> Vec<String> {
     table_names(&conn, "main")
 }
 
+/// Rewrites every stored revision as v0.1.1 wrote it: its JSON had no
+/// `acme_enabled` (schema 6 added it).
+fn revisions_as_v0_1_1_wrote_them(path: &Path) {
+    let conn = Connection::open(path).unwrap();
+    let paths: Vec<String> = (0..8)
+        .map(|i| format!("'$.subsystems[{i}].https.acme_enabled'"))
+        .collect();
+    let changed = conn
+        .execute(
+            &format!(
+                "UPDATE revision SET config = json_remove(config, {})",
+                paths.join(", ")
+            ),
+            [],
+        )
+        .unwrap();
+    assert!(changed > 0);
+    let left: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM revision WHERE config LIKE '%acme_enabled%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(left, 0, "no revision mentions the new field");
+}
+
+#[test]
+fn an_upgraded_database_rolls_back_to_a_revision_the_old_release_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let current = dir.path().join("current.db");
+    let old = dir.path().join("old.db");
+    drop(populated(&current));
+    copy_into_v5(&current, &old);
+    revisions_as_v0_1_1_wrote_them(&old);
+
+    let mut upgraded = Database::open(&old).unwrap();
+    let first = upgraded
+        .read(|conn| crate::revision::get(conn, 1))
+        .expect("a revision without the new field decodes");
+    upgraded
+        .write(
+            |conn| {
+                crate::revision::restore(conn, 1)?;
+                Ok(crate::Mutation {
+                    value: (),
+                    summary: "rollback to v1".into(),
+                })
+            },
+            |_| Ok(()),
+        )
+        .expect("and restores");
+    assert_eq!(upgraded.load_all().unwrap(), first.config);
+    assert!(first
+        .config
+        .subsystems
+        .iter()
+        .all(|s| !s.https.acme_enabled));
+}
+
 #[test]
 fn an_upgraded_subsystem_has_acme_off() {
     let dir = tempfile::tempdir().unwrap();

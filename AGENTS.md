@@ -290,6 +290,8 @@ These rules are set by the project owner and apply to every session.
     the previous version, in one transaction, and a test that opens a database
     at the previous version and checks it upgrades with its data intact.
   - Never edit an already released schema in place.
+  - A field added to the revision JSON (`revision/config_json.rs`) has `#[serde(default)]`, so a
+    revision an older release wrote still restores.
 - For config files, APIs and behavior there is still no backward-compatibility
   work: no deprecation shims or upgrade paths. Change things directly.
   Revisit this only when the owner says so.
