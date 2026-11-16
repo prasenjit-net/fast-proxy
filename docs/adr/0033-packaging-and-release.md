@@ -1,6 +1,6 @@
 # ADR 0033: packaging and release
 
-Status: proposed (2026-11-16); pending the owner's review. Plan reference: M7 L15, tasks PK1 to
+Status: accepted (2026-11-16, the owner). Plan reference: M7 L15, tasks PK1 to
 PK5.
 
 ## Context

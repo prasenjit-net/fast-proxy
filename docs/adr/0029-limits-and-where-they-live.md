@@ -1,6 +1,6 @@
 # ADR 0029: request and connection limits, and where each one lives
 
-Status: proposed (2026-11-16); pending the owner's review. Plan reference: M7 L1, L7, L9, L10,
+Status: accepted (2026-11-16, the owner). Plan reference: M7 L1, L7, L9, L10,
 L11. Nothing is built yet; spike G2 settles the slow-client details before PR3.
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR 0030: rate limiting
 
-Status: proposed (2026-11-16); pending the owner's review. Plan reference: M7 L2 to L6. Spike G3
+Status: accepted (2026-11-16, the owner). Plan reference: M7 L2 to L6. Spike G3
 measures the key table before PR2.
 
 ## Decision

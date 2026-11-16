@@ -464,7 +464,7 @@ Detailed task plan: [M6-PLAN.md](M6-PLAN.md). Complete (pending the owner's manu
 
 ### M7: Hardening and 1.0
 
-Detailed task plan: [M7-PLAN.md](M7-PLAN.md) (draft, decisions L1-L18 proposed, pending the owner's confirmation).
+Detailed task plan: [M7-PLAN.md](M7-PLAN.md) (decisions L1-L18 accepted 2026-11-16).
 
 - [ ] Rate limiting and connection limits; slowloris and header-size defenses.
 - [ ] Load and soak testing; published benchmarks; profile-driven tuning.
@@ -559,3 +559,4 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | 2026-11-16 | M4 outcome: every exit criterion held in tests (in-process with a moved clock, against the real binary, and two processes on one database with the lease holder killed). Spike G2 confirmed `instant-acme` with `ring`; its HTTPS-only client made the directory `https` everywhere, and its problems carry no `Retry-After` (a rate limit waits the 1-hour default). The adapter is a concrete type, not a trait. The switch rules moved from compile to the write path (a stored switch must stay inert, not fail, when the process turns ACME off). The security review found the ACME overview decrypting the account to say whether one existed (fixed: a row check). ACME on costs -0.5% to -2.5% in the benchmark, inside the round-to-round spread ([benchmarks.md](benchmarks.md)). See [security-review-m4.md](security-review-m4.md). |
 | 2026-11-16 | **Schema changes are additive and migrated** (the owner's rule; [ADR 0028](adr/0028-schema-migrations.md)), replacing "no migrations while undeployed": one SQL step per version in `fast-proxy-store`'s `migrations/`, all run in one transaction at open after a 0600 copy of the file, upgrading from schema 5 (v0.1.1) on, never downgrading; a new and an upgraded database are proven to have the same shape. M7 plan drafted ([M7-PLAN.md](M7-PLAN.md), decisions L1-L18, L18 accepted). |
 | 2026-11-16 | M7 decisions recorded as **proposed** in ADRs [0029](adr/0029-limits-and-where-they-live.md) (limits and where each lives), [0030](adr/0030-rate-limiting.md) (GCRA rate limiting, per instance, fail-open key table), [0031](adr/0031-endpoint-connection-caps.md) (per-endpoint request caps), [0032](adr/0032-fuzzing-and-the-supply-chain-gate.md) (fuzzing; the supply-chain gate and the `unsafe` lint are built), [0033](adr/0033-packaging-and-release.md) (musl binaries, distroless image, SBOM, provenance) and [0034](adr/0034-the-1.0-stability-promise.md) (what 1.x keeps); pending the owner's confirmation. |
+| 2026-11-16 | M7 decisions L1-L17 **accepted by the owner** as recommended (ADRs 0029 to 0034 now accepted). |

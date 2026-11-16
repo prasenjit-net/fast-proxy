@@ -1,6 +1,6 @@
 # ADR 0031: per-endpoint request caps
 
-Status: proposed (2026-11-16); pending the owner's review. Plan reference: M7 L8. Deferred from M2
+Status: accepted (2026-11-16, the owner). Plan reference: M7 L8. Deferred from M2
 (per-endpoint connection limits).
 
 ## Decision

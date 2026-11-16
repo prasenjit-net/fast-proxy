@@ -1,7 +1,7 @@
 # ADR 0032: fuzzing and the supply-chain gate
 
-Status: the supply-chain gate (L14) is **built** in M7 PR1 (`m7/pr1-decisions`); fuzzing (L13) is
-proposed (2026-11-16), pending the owner's review. Plan reference: M7 L13, L14, tasks F1 to F5.
+Status: the supply-chain gate (L14) is **built** in M7 PR1 (`m7/pr1-decisions`); fuzzing (L13) is accepted
+(2026-11-16, the owner). Plan reference: M7 L13, L14, tasks F1 to F5.
 
 ## Decision: the supply-chain gate (built)
 
