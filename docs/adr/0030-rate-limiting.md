@@ -54,3 +54,14 @@ Metrics `fastproxy_rate_limited_total{subsystem,route}` and
 go through `ConfigService::apply` and are audited (`rate_limit.set`, `rate_limit.clear`). Exit
 criterion: admitted traffic within 5% of the policy over 10 s, and the table never past its
 capacity with a million distinct clients.
+
+## As built (M7 PR2)
+
+- The key table keeps plain times under 64 shard mutexes, each held for one lookup; no atomic per key
+  was needed. A full shard sweeps idle keys at most every 100 ms, so a flood of new keys cannot make
+  every request scan a shard.
+- Spike G3 (release build, 10 cores, hashing excluded): 10 ns per check at 1,000 keys and 38 ns at
+  1,000,000 on one thread; 16 threads on 1,000 keys 16 ns of wall time per check; a flood of new keys
+  against a full table 19 ns each, all admitted and counted.
+- `CompileInputs` carries the `RateLimitRuntime` into `compile_with`; the snapshot keeps it for the next
+  compile.

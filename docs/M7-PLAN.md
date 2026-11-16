@@ -300,36 +300,57 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   hyper 1.11 already bounds with `header_read_timeout`, and what it does with an h2 connection that stops reading.
   (b) The cost of a `ProgressIo` wrapper on the M6 benchmark (budget: within 1%). (c) Whether hyper's
   `http1().max_headers` covers L10's header count. Record the results in ADR 0029.
-- [ ] **G3 (S) Spike: the key table under contention.** GCRA over the sharded table on 16 threads with 1, 1,000
+- [x] **G3 (S) Spike: the key table under contention.** GCRA over the sharded table on 16 threads with 1, 1,000
   and 1,000,000 distinct keys. Record the per-request cost and the eviction behavior when full, and compare a
   `DashMap` against the hand-sharded table. Budget: under 100 ns per check at 1,000 keys. Record in ADR 0030.
+  *Result (2026-11-16, release build, 10 cores, hashing excluded):* 10 ns per check at 1,000 keys and 38 ns at
+  1,000,000 on one thread; 16 threads on 1,000 keys 16 ns per check of wall time (63 M checks/s); a flood of new keys
+  against a full table 19 ns each, all let through and counted. Far inside the budget, so `DashMap` was not tried.
 
 ### Workstream LM: The limits crate and model
 
-- [ ] **LM1 (M) Crate `fast-proxy-limits`.** The GCRA limiter, the sharded key table with eviction (L3), the keyed
+- [x] **LM1 (M) Crate `fast-proxy-limits`.** The GCRA limiter, the sharded key table with eviction (L3), the keyed
   connection counter (L7), and the limit types with their defaults table. Move the sampler's `bucket.rs` here, with
   its tests and the late-arrival rule. Unit tests, plus `proptest` for "never admits more than rate times time plus
   burst" under arbitrary clock order. No I/O; `now` is a parameter.
-- [ ] **LM2 (S) Model types.** `RateLimitPolicy` (validated: rate at least 1, `per_secs` 1 to 3600, burst at least
+  *Built in PR2 (`m7/pr2-limits`):* `Gcra` (pure, nanoseconds), `KeyTable` (64 mutex shards of plain times; a shard lock is held
+  for one lookup, so no atomic per key was needed), `KeyBudget` shared by every table, `KeyHasher` (seeded, IPv6 cut
+  to the prefix), `RateLimitRuntime` (tables by policy identity) and the moved `bucket`. The keyed connection
+  counter moves to PR3 with the accept-loop code that uses it.
+- [x] **LM2 (S) Model types.** `RateLimitPolicy` (validated: rate at least 1, `per_secs` 1 to 3600, burst at least
   1 and at most 10,000, a header name that is a valid token and not a hop-by-hop or pseudo header, `ipv6_prefix` 48
   to 128), `RateLimitKey`, and `max_body_bytes` and `max_requests` on route and group, all in `Config`.
+  *Built in PR2.* A subsystem's own policy is `SubsystemConfig::rate_limit`, a route's `RouteConfig::rate_limit`.
 - [ ] **LM3 (S) The `[limits]` section** in `src/config/` with validation, CLI override, and `config.toml` comments.
+  *Started in PR2:* the section with `rate_limit_keys` (validated, documented, passed to the config service). The
+  connection, timeout and size keys and `--max-connections` come in PR3 with the code that reads them.
 
 ### Workstream S: Store
 
-- [ ] **S1 (M) Schema 7 with its migration** (5.2): the migration step, the repository for policies, the new columns
+- [x] **S1 (M) Schema 7 with its migration** (5.2): the migration step, the repository for policies, the new columns
   in the route and group repositories, the revision encoding, and the migration tests from C1 extended to 7.
+  *Built in PR2.* The table has two partial unique indexes (one subsystem policy, one per route). The two caps are
+  set by their own repository functions (`routes::set_max_body_bytes`, `upstreams::set_max_requests`), so an edit
+  through today's API, which does not know them, leaves them alone; A1 folds them into the API. Every released
+  schema is a fixture (`migrations/fixtures/`), and the tests upgrade from each. New revision JSON fields carry
+  `#[serde(default)]`.
 
 ### Workstream R: Routing
 
-- [ ] **R1 (M) Compile policies.** The effective policy per route (route over subsystem) in the snapshot, the body
+- [x] **R1 (M) Compile policies.** The effective policy per route (route over subsystem) in the snapshot, the body
   cap per route, and `max_requests` per group. Carry rate-limit tables across swaps by policy identity (4.2), with
   tests that a reload neither resets a budget nor leaks a removed policy's table.
+  *Built in PR2.* `compile_with` takes the optional inputs as one `CompileInputs` (`compile_full` stays as a
+  wrapper); the snapshot carries the `RateLimitRuntime` to the next compile; the config service passes it on every
+  write, reload and sync, and starts it with `[limits] rate_limit_keys` (`ConfigService::start_with_limits`).
 
 ### Workstream B: Balancing
 
-- [ ] **B1 (S) `max_requests` eligibility (L8).** An endpoint at its cap is ineligible; when all are, the reason is
+- [x] **B1 (S) `max_requests` eligibility (L8).** An endpoint at its cap is ineligible; when all are, the reason is
   `endpoint_capacity`. Tests: with the algorithms of ADR 0006, with retries, and not overridden by panic mode.
+  *Built in PR2.* `Balancer::with_max_requests`, `is_at_capacity` (the reason for D5), and
+  `EndpointRuntime::try_track(cap)`, which checks and counts in one atomic step; D4 switches the data plane to it so
+  concurrent requests can never pass the cap.
 
 ### Workstream D: Data plane
 

@@ -22,3 +22,12 @@ The rule "draining and disabled endpoints are never selected" gains a third reas
 tests of ADR 0006 run with caps too. The cap counts requests rather than pooled connections,
 because requests are what the proxy controls; the connection pool still reuses idle connections
 freely.
+
+## As built (M7 PR2)
+
+`Balancer::with_max_requests` filters full endpoints in normal and panic selection, and
+`Balancer::is_at_capacity` tells the data plane the refusal was capacity. Checking `in_flight` at
+selection and counting the request afterwards would let concurrent requests pass the cap together, so
+`EndpointRuntime::try_track(cap)` checks and counts in one compare-and-swap; the data plane switches to
+it in PR4. The cap is stored by `upstreams::set_max_requests`, apart from the policy columns an update
+rewrites.
