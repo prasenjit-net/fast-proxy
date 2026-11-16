@@ -20,3 +20,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 proptest = "1"
+
+[lints]
+workspace = true

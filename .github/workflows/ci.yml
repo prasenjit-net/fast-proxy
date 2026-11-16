@@ -63,6 +63,19 @@ jobs:
 
       - run: cargo clippy --locked --all-targets -- -D warnings
 
+  # The supply-chain gate (M7 F4): RustSec advisories, licenses, banned crates
+  # and sources, as configured in deny.toml.
+  deny:
+    name: Dependencies (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --all-features
+
   test:
     name: Rust test / ${{ matrix.os }}
     needs: frontend

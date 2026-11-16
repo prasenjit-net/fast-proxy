@@ -2,14 +2,24 @@
 name = "fast-proxy"
 version = "0.1.1"
 edition = "2021"
+license = "MIT"
+# Released as binaries and a container image, never to crates.io.
+publish = false
 description = "Fast, realtime-configurable ingress server and reverse proxy: host/prefix routing, TLS + ACME, load balancing, health checks, and live diagnostics"
 
 [workspace]
 members = ["crates/*"]
 default-members = [".", "crates/*"]
 
+# Lints every crate opts into with `[lints] workspace = true` (a test checks they all do).
+# No crate needs `unsafe`; forbidding it keeps memory-safety review to the dependencies.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 # Shared dependency versions; member crates opt in with `{ workspace = true }`.
 [workspace.dependencies]
+# One SQLite for the whole build (it is linked once); `bundled` compiles the C library in.
+rusqlite = { version = "0.43", features = ["bundled"] }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -67,3 +77,6 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 lto = true
 strip = true
 codegen-units = 1
+
+[lints]
+workspace = true

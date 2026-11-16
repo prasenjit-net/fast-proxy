@@ -40,3 +40,6 @@ bytes = "1"
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 tempfile = { workspace = true }
 http-body-util = { workspace = true }
+
+[lints]
+workspace = true

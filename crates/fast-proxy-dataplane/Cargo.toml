@@ -34,3 +34,6 @@ http-body-util = { workspace = true, features = ["channel"] }
 futures-util = "0.3"
 tempfile = { workspace = true }
 tokio-tungstenite = "0.29"
+
+[lints]
+workspace = true
