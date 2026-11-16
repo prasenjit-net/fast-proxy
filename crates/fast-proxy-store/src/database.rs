@@ -3,11 +3,13 @@ use std::path::Path;
 use fast_proxy_model::Config;
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
+use crate::migrations::{self, SchemaUpgrade};
 use crate::repository::load;
 use crate::{revision, StoreError};
 
-/// Bump together with `schema.sql`. Stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 6;
+/// Bump together with `schema.sql` and a new step in `migrations`. Stored in
+/// `PRAGMA user_version`.
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 /// The actor recorded for changes nobody asked for by name (the sweeper, tests).
 /// The WAL is truncated to this size after a checkpoint.
 const WAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
@@ -31,46 +33,58 @@ pub struct Mutation<T> {
     pub summary: String,
 }
 
-/// Creates the database file readable by its owner only, when there is none yet.
+/// Creates a file readable by its owner only, failing with `AlreadyExists` when
+/// there is one: the database file, and the copy taken before an upgrade.
 /// The file holds certificate ciphertext, token hashes and, since request
 /// sampling, redacted request data (client addresses, paths, optionally bodies);
 /// SQLite gives the `-wal` and `-shm` files the mode of the main file. An
 /// existing file keeps whatever mode its owner chose.
 #[cfg(unix)]
-fn create_private_file(path: &Path) -> std::io::Result<()> {
+pub(crate) fn create_private_file_new(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
-    match std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(path)
-    {
-        Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => Err(err),
-        _ => Ok(()),
-    }
+        .map(drop)
 }
 
 /// Windows has no mode bits; the state directory's access rules apply.
 #[cfg(not(unix))]
-fn create_private_file(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+pub(crate) fn create_private_file_new(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map(drop)
+}
+
+/// [`create_private_file_new`], leaving a file that already exists as it is.
+pub(crate) fn create_private_file(path: &Path) -> std::io::Result<()> {
+    match create_private_file_new(path) {
+        Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => Err(err),
+        _ => Ok(()),
+    }
 }
 
 /// A synchronous handle on the SQLite file. It is not `Sync`; the async
 /// [`Store`](crate::Store) keeps one on a dedicated thread.
 pub struct Database {
     conn: Connection,
+    schema_upgrade: Option<SchemaUpgrade>,
 }
 
 impl Database {
     /// Opens (creating if needed) the database at `path`, enables WAL and
-    /// foreign keys, and creates the schema in an empty file.
+    /// foreign keys, creates the schema in an empty file, and upgrades the schema
+    /// of a file an earlier release wrote (after copying it, see `migrations`).
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
         create_private_file(path)?;
-        Self::prepare(Connection::open(path)?)
+        Self::prepare(Connection::open(path)?, Some(path))
     }
 
     /// Opens another connection to a database this process already opened, for
@@ -82,7 +96,7 @@ impl Database {
         path: &Path,
         busy_timeout: std::time::Duration,
     ) -> Result<Self, StoreError> {
-        let database = Self::prepare(Connection::open(path)?)?;
+        let database = Self::prepare(Connection::open(path)?, Some(path))?;
         database.conn.busy_timeout(busy_timeout)?;
         Ok(database)
     }
@@ -100,7 +114,10 @@ impl Database {
         conn.pragma_update(None, "foreign_keys", true)?;
         let found: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match found {
-            SCHEMA_VERSION => Ok(Self { conn }),
+            SCHEMA_VERSION => Ok(Self {
+                conn,
+                schema_upgrade: None,
+            }),
             0 => Err(StoreError::NotFound(
                 "a fast-proxy database (the file is empty)".into(),
             )),
@@ -113,10 +130,16 @@ impl Database {
 
     /// An in-memory database, for tests.
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        Self::prepare(Connection::open_in_memory()?)
+        Self::prepare(Connection::open_in_memory()?, None)
     }
 
-    fn prepare(conn: Connection) -> Result<Self, StoreError> {
+    /// What opening this database did to its schema: `None` unless it was
+    /// upgraded from an earlier release's version just now.
+    pub fn schema_upgrade(&self) -> Option<&SchemaUpgrade> {
+        self.schema_upgrade.as_ref()
+    }
+
+    fn prepare(conn: Connection, path: Option<&Path>) -> Result<Self, StoreError> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -124,28 +147,47 @@ impl Database {
         conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
         // Returns the resulting mode as a row; in-memory databases stay "memory".
         conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-        let database = Self { conn };
-        database.ensure_schema()?;
+        let mut database = Self {
+            conn,
+            schema_upgrade: None,
+        };
+        database.schema_upgrade = database.ensure_schema(path)?;
         Ok(database)
     }
 
-    fn ensure_schema(&self) -> Result<(), StoreError> {
+    fn ensure_schema(&mut self, path: Option<&Path>) -> Result<Option<SchemaUpgrade>, StoreError> {
         let found: i64 = self
             .conn
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
         match found {
-            SCHEMA_VERSION => Ok(()),
-            0 => {
-                self.conn.execute_batch(SCHEMA_SQL)?;
-                self.conn
-                    .pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                Ok(())
+            SCHEMA_VERSION => Ok(None),
+            0 => self.create_schema(path),
+            older if migrations::is_upgradable(older) => {
+                migrations::upgrade(&mut self.conn, path, older).map(Some)
             }
             other => Err(StoreError::IncompatibleSchema {
                 found: other,
                 expected: SCHEMA_VERSION,
             }),
         }
+    }
+
+    /// Creates the schema in a database that has none. Another process may be
+    /// opening the same new file: the version is read again under the write lock,
+    /// and the one that comes second treats the file as the first one left it.
+    fn create_schema(&mut self, path: Option<&Path>) -> Result<Option<SchemaUpgrade>, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let found: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if found != 0 {
+            drop(tx);
+            return self.ensure_schema(path);
+        }
+        tx.execute_batch(SCHEMA_SQL)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.commit()?;
+        Ok(None)
     }
 
     /// Runs a read-only closure against the connection.

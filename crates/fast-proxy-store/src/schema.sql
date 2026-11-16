@@ -1,5 +1,8 @@
--- Schema v6. The project is not deployed, so changes edit this file directly
--- (no migrations); SCHEMA_VERSION in database.rs must be bumped with it.
+-- Schema v6: what a new database is created with. A released schema is never
+-- edited in place: a change is additive and comes with a step in `migrations/`
+-- that upgrades the previous version, and SCHEMA_VERSION in database.rs is bumped
+-- with it. A column added by a migration goes at the end of its table here too,
+-- so a new database and an upgraded one have the same shape (a test compares them).
 
 -- Certificate material. Private keys are stored only as AES-256-GCM ciphertext
 -- (sealed by the tls crate); this crate never decrypts. The SQL stays portable
@@ -50,9 +53,9 @@ CREATE TABLE subsystem (
   hsts_enabled            INTEGER NOT NULL DEFAULT 0,
   hsts_max_age_secs       INTEGER NOT NULL DEFAULT 31536000,
   hsts_include_subdomains INTEGER NOT NULL DEFAULT 0,
-  https_acme_enabled      INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  https_acme_enabled      INTEGER NOT NULL DEFAULT 0  -- schema 6
 );
 
 CREATE TABLE subsystem_host (

@@ -56,7 +56,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `CompiledMaintenance::check`, used by the data plane and the resolver alike. No I/O.
 - `crates/fast-proxy-store/` is SQLite persistence: `Database` (sync core, all
   writes via `Database::write`), `Store` (async handle on a dedicated thread),
-  `repository/` (one file per resource), `revision/`. The data plane must never
+  `repository/` (one file per resource), `revision/`, and `migrations/` (one SQL step
+  per schema version, run at open after a copy of the file; ADR 0028). `schema.sql` is
+  the schema of a new database; `migrations/fixtures/` holds released schemas. The data plane must never
   use it.
 - `crates/fast-proxy-config-service/` is the only writer: `ConfigService::apply`
   validates (compiles) a change, persists it with its revision and its audit row in one
@@ -117,7 +119,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `sampling_cluster.rs` are M6's. `acme_challenges.rs`, `acme_issuance.rs` (the runner against the in-process test CA
   with a moved clock), `acme_binary.rs` (the real binary, the CLI and a key scan) and
   `acme_cluster.rs` (two processes, the lease holder killed) are M4's; `common/acme_binary.rs`
-  holds their config helpers. Tests that deliver real signals are `#[cfg(unix)]`.
+  holds their config helpers. `schema_upgrade.rs` starts the real binary on a database of the
+  previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
   The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
   `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
@@ -273,11 +276,19 @@ These rules are set by the project owner and apply to every session.
 
 ### Compatibility and migration
 
-- The project is **not deployed anywhere yet**. Do not add backward
-  compatibility, data migrations, deprecation shims, or upgrade paths for
-  config files, DB schemas, APIs, or behavior. Change things directly; for
-  example, edit the initial DB schema in place instead of adding a migration.
-  Revisit this rule only when the owner says the project has been deployed.
+- **Database schema changes are additive and always migrated.** Releases are
+  out (v0.1.1), so an existing database must keep opening after an upgrade.
+  - Add tables, and columns that are nullable or have a default. Do not drop,
+    rename or change the type of an existing table or column unless a migration
+    carries the data over.
+  - Every bump of `SCHEMA_VERSION` (`crates/fast-proxy-store/src/database.rs`,
+    stored in `PRAGMA user_version`) comes with a migration step that upgrades
+    the previous version, in one transaction, and a test that opens a database
+    at the previous version and checks it upgrades with its data intact.
+  - Never edit an already released schema in place.
+- For config files, APIs and behavior there is still no backward-compatibility
+  work: no deprecation shims or upgrade paths. Change things directly.
+  Revisit this only when the owner says so.
 
 ## Common Commands
 

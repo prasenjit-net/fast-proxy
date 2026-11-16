@@ -291,6 +291,18 @@ belong in this file) fails at startup instead of being ignored. Every listener i
 traffic is served, so a bad address or a port in use aborts startup with a clear
 message.
 
+### Upgrading
+
+A new release opens the database an earlier one wrote (from v0.1.1 on) and upgrades
+its schema in place, in one transaction, keeping every subsystem, certificate, token
+and sample. Before it does, it copies the file to
+`<database>.pre-v<N>-<time>.bak` beside it (owner-only permissions, the newest three
+kept) and logs where. That copy is only needed to go back to the previous release:
+stop the proxy, put the copy in place of the database, start the old binary. A
+database is never downgraded, so an older binary refuses one a newer release has
+upgraded. Instances sharing one database must all be upgraded together. The copy
+holds what the database holds, so protect it the same way.
+
 ## API
 
 All routes except `/api/health` need `Authorization: Bearer <token>`; a missing or wrong token is 401, a `viewer` token on anything but a read is 403.

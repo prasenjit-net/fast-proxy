@@ -79,6 +79,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
 
     let database = data_plane.database_path();
     let store = Store::open(&database)?;
+    if let Some(upgrade) = store.schema_upgrade() {
+        report_schema_upgrade(upgrade);
+    }
     // Both planes report to the same metrics and the same access log.
     let metrics = Arc::new(Metrics::new());
     let config_service = Arc::new(
@@ -337,6 +340,25 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
+}
+
+/// Says once that the database was upgraded, and where the copy taken before it is,
+/// so an operator who must go back to the previous release knows what to restore.
+fn report_schema_upgrade(upgrade: &fast_proxy_store::SchemaUpgrade) {
+    match &upgrade.backup {
+        Some(copy) => tracing::warn!(
+            "upgraded the database schema from version {} to {}; the database as it was \
+             is kept at {} (needed only to go back to the previous release)",
+            upgrade.from,
+            upgrade.to,
+            copy.display()
+        ),
+        None => tracing::warn!(
+            "upgraded the database schema from version {} to {}",
+            upgrade.from,
+            upgrade.to
+        ),
+    }
 }
 
 /// The port a redirect to HTTPS names: `public_port` when set (NAT, containers),
