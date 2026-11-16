@@ -117,7 +117,7 @@ jobs:
       - name: Download Pebble
         run: |
           for tool in pebble pebble-challtestsrv; do
-            curl -fsSL "https://github.com/letsencrypt/pebble/releases/download/${PEBBLE_VERSION}/${tool}-linux-amd64.tar.gz" \
+            curl --proto '=https' --tlsv1.2 -fsSL "https://github.com/letsencrypt/pebble/releases/download/${PEBBLE_VERSION}/${tool}-linux-amd64.tar.gz" \
               | tar -xz -C "$RUNNER_TEMP"
             # The release archives do not keep the execute bit.
             chmod +x "$RUNNER_TEMP/${tool}-linux-amd64/linux/amd64/${tool}"
