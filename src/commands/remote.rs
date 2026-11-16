@@ -15,7 +15,7 @@ use crate::commands::client::AdminClient;
 use crate::commands::failure::{Failure, Outcome};
 
 /// Pretty JSON for `--json`.
-fn json_text(value: &Value) -> String {
+pub(crate) fn json_text(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_default()
 }
 
@@ -287,7 +287,7 @@ async fn scope_path(client: &AdminClient, scope: &ScopeArgs) -> Result<String, F
 }
 
 /// The id of the entry whose `key` equals `wanted` (or, for a number, whose id does).
-fn find_id(entries: &Value, wanted: &str, key: &str) -> Option<i64> {
+pub(crate) fn find_id(entries: &Value, wanted: &str, key: &str) -> Option<i64> {
     let numeric = wanted.parse::<i64>().ok();
     entries.as_array()?.iter().find_map(|entry| {
         let id = entry["id"].as_i64()?;
@@ -331,7 +331,7 @@ fn describe_line(scope: &Value) -> String {
     line
 }
 
-fn duration_text(secs: u64) -> String {
+pub(crate) fn duration_text(secs: u64) -> String {
     if secs == 0 {
         return "0s".to_string();
     }

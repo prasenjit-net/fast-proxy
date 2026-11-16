@@ -6,12 +6,13 @@ use std::time::Duration;
 
 use fast_proxy_acme::RenewalPolicy;
 use fast_proxy_acme_service::{system_clock, AcmeRunner, RunnerSettings, SelfCheck};
+use fast_proxy_admin::AcmeAdmin;
 use fast_proxy_config_service::ConfigService;
 use fast_proxy_model::DomainAllowlist;
 use fast_proxy_telemetry::Metrics;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AppConfig, ConfigError};
+use crate::config::{AppConfig, ConfigError, LETS_ENCRYPT_STAGING};
 
 /// The longest one wait on the CA may take (validation, issuance).
 const CA_TIMEOUT: Duration = Duration::from_secs(120);
@@ -57,24 +58,45 @@ fn default_propagation_wait(poll: Duration) -> Duration {
     poll * 2 + Duration::from_secs(2)
 }
 
+/// A runner built but not started, so the admin plane can be given its
+/// control before anything runs.
+pub struct PreparedAcme(AcmeRunner);
+
+/// Builds the runner, and what the admin plane needs to show ACME and to ask
+/// the runner for a renewal.
+pub fn prepare(
+    settings: RunnerSettings,
+    service: Arc<ConfigService>,
+    metrics: Arc<Metrics>,
+) -> (PreparedAcme, AcmeAdmin) {
+    tracing::info!(
+        "acme: on, directory {} (the account is created on the first order)",
+        settings.directory
+    );
+    let directory = settings.directory.clone();
+    let staging = directory == LETS_ENCRYPT_STAGING;
+    let allowlist = settings.allowlist.clone();
+    let (runner, control) = AcmeRunner::new(service, metrics, settings);
+    let admin = AcmeAdmin {
+        directory,
+        staging,
+        allowlist,
+        control,
+    };
+    (PreparedAcme(runner), admin)
+}
+
+impl PreparedAcme {
+    /// Starts the runner; it stops with `shutdown`.
+    pub fn start(self, shutdown: CancellationToken) -> AcmeTask {
+        AcmeTask(tokio::spawn(self.0.run(shutdown)))
+    }
+}
+
 /// A running runner; [`AcmeTask::stopped`] waits for it to release the lease.
 pub struct AcmeTask(tokio::task::JoinHandle<()>);
 
 impl AcmeTask {
-    pub fn start(
-        settings: RunnerSettings,
-        service: Arc<ConfigService>,
-        metrics: Arc<Metrics>,
-        shutdown: CancellationToken,
-    ) -> Self {
-        tracing::info!(
-            "acme: on, directory {} (the account is created on the first order)",
-            settings.directory
-        );
-        let (runner, _control) = AcmeRunner::new(service, metrics, settings);
-        Self(tokio::spawn(runner.run(shutdown)))
-    }
-
     /// Waits a little for the runner to give the lease up after shutdown.
     pub async fn stopped(self) {
         if tokio::time::timeout(RELEASE_GRACE, self.0).await.is_err() {

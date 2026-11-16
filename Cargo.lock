@@ -669,6 +669,8 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "fast-proxy-acme",
+ "fast-proxy-acme-service",
  "fast-proxy-auth",
  "fast-proxy-balancing",
  "fast-proxy-config-service",

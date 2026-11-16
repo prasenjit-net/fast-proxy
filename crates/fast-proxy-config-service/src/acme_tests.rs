@@ -448,9 +448,11 @@ async fn status_is_stored_without_a_revision_and_a_failure_is_audited() {
     let site = acme_shop(&service).await;
     let version = service.snapshot_holder().load().version;
 
+    let mut events = service.subscribe_acme();
     let mut status = AcmeStatus::new(site);
     status.state = AcmeState::Pending;
     service.record_acme_status(status.clone()).await.unwrap();
+    assert_eq!(events.try_recv().unwrap().state, AcmeState::Pending);
     let stored = service.acme_status(site).await.unwrap().unwrap();
     assert_eq!(stored.state, AcmeState::Pending);
     assert_eq!(stored.instance, service.instance_id());
@@ -458,6 +460,7 @@ async fn status_is_stored_without_a_revision_and_a_failure_is_audited() {
     status.state = AcmeState::Failed;
     status.last_error = "dns: no such host".into();
     service.record_acme_failure(status).await.unwrap();
+    assert_eq!(events.try_recv().unwrap().state, AcmeState::Failed);
     assert_eq!(
         service.acme_statuses().await.unwrap()[0].state,
         AcmeState::Failed
@@ -490,6 +493,7 @@ async fn the_account_is_sealed_at_rest_and_opens_for_its_directory_only() {
     let secret = b"account-private-key-material".to_vec();
     let directory = "https://ca.example/directory";
     assert!(service.acme_account(directory).await.unwrap().is_none());
+    assert!(!service.acme_account_registered(directory).await.unwrap());
     service
         .save_acme_account(
             directory,
@@ -499,6 +503,7 @@ async fn the_account_is_sealed_at_rest_and_opens_for_its_directory_only() {
         .await
         .unwrap();
 
+    assert!(service.acme_account_registered(directory).await.unwrap());
     let account = service.acme_account(directory).await.unwrap().unwrap();
     assert_eq!(account.credentials.expose(), secret.as_slice());
     assert_eq!(account.email, "ops@example.com");

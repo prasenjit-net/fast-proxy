@@ -72,7 +72,8 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(code, res.status, message, fields);
   }
 
-  if (res.status === 204) {
+  // 204 No Content, and 202 Accepted (work queued, nothing to show), have no body.
+  if (res.status === 204 || res.status === 202) {
     return undefined as T;
   }
   return (await res.json()) as T;

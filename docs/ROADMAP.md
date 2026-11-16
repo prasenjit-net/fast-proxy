@@ -419,22 +419,24 @@ Detailed task plan and outcome: [M3-PLAN.md](M3-PLAN.md).
       probes.
 - [x] Cert expiry and handshake metrics; certificate screens in the admin UI.
 
-### M4: ACME automatic certificates
+### M4: ACME automatic certificates (complete)
 
-Detailed task plan: [M4-PLAN.md](M4-PLAN.md) (draft, decisions K1-K17 proposed).
+Detailed task plan and outcome: [M4-PLAN.md](M4-PLAN.md) (four stacked PRs, #68 to #71;
+decisions K1-K17 proposed, pending the owner's confirmation).
 
-- [ ] `[data_plane.acme]` config section (`enabled`, email, directory; `--acme`);
+- [x] `[data_plane.acme]` config section (`enabled`, email, directory; `--acme`);
       ACME client; issued certificates stored in SQLite through the M3
       certificate path; account key sealed by the key vault.
-- [ ] Per-subsystem ACME switch, accepted only when ACME is enabled for the
+- [x] Per-subsystem ACME switch, accepted only when ACME is enabled for the
       process.
-- [ ] Derive domains to certify from subsystem hosts in the DB, filtered by
+- [x] Derive domains to certify from subsystem hosts in the DB, filtered by
       the config allowlist; react to host add/remove at runtime.
-- [ ] HTTP-01 challenge handling ahead of routing, tokens kept in the database;
+- [x] HTTP-01 challenge handling ahead of routing, tokens kept in the database;
       a lease so one cluster instance renews.
-- [ ] Renewal scheduler with jitter, backoff, and status reporting.
-- [ ] Staging/production directory switch; rate-limit safeguards.
-- [ ] Stretch: TLS-ALPN-01, DNS-01 for wildcards.
+- [x] Renewal scheduler with jitter, backoff, and status reporting.
+- [x] Staging/production directory switch; rate-limit safeguards.
+- [ ] Stretch: TLS-ALPN-01, DNS-01 for wildcards (moved: TLS-ALPN-01 and ARI stay
+      M4 stretch tasks X1 and X2; DNS-01 providers are a post-1.0 candidate).
 
 ### M5: Operations control and diagnostics UI (complete)
 
@@ -552,3 +554,4 @@ direct throughput. Reload with thousands of routes is not measured yet.
 | 2026-11-11 | M6 design decisions J1-J19 **accepted by the owner** ([M6-PLAN.md](M6-PLAN.md) section 3, ADRs [0020](adr/0020-tail-based-sampler.md) to [0023](adr/0023-sampling-settings-and-access.md)); spike G2 (2026-11-12) confirmed J15 and J17 (request-head cost about 77 ns per request; sample writes do not slow configuration writes at 100 times the default rate). Tail-based sampling after the response; an upstream's own 5xx is not a trigger, a connectivity failure is; a per-key storm guard (burst 3, then 1 per 30 s) keeps an outage from flooding the samples; **samples are stored in the shared database** (cluster-wide, bounded by shared retention, written in batches by a sample service with no revision) instead of a ring buffer and spill file; redaction always on, bodies opt-in per route; sampling settings outside `Config` and samples readable by `admin` only. |
 | 2026-11-13 | M6 outcome: all exit criteria held in end-to-end tests against the real binary. The load test found a real bug (the token bucket refilled completely when a concurrent caller's clock reading was a few ms old; the storm guard and rate limiter leaked under load; fixed, with property tests); the security review found the database file created world-readable (now 0600) and `Referer`/`Location` queries stored unredacted (now redacted). Sampling costs +0.1% on healthy traffic and -4.6% when every request is a connectivity failure ([benchmarks.md](benchmarks.md)). See [security-review-m6.md](security-review-m6.md). |
 | 2026-11-15 | M4 design decisions K1-K17 **proposed** ([M4-PLAN.md](M4-PLAN.md) section 3; ADRs [0024](adr/0024-acme-client-and-crates.md) to [0027](adr/0027-acme-account-keys-and-settings.md)); M4 is split into four PRs, PR1 (foundations) written: `instant-acme` behind an `AcmeClient` trait (spike G2), new crates `fast-proxy-acme` and `fast-proxy-acme-service`; HTTP-01 only, challenges stored in the database and compiled into the snapshot, answered before the redirect and maintenance, with a propagation wait and a self-check; a lease and a status table written without a revision; renewal at two thirds of the lifetime with jitter, stored backoff and an hourly failure cap; Let's Encrypt staging by default and a required allowlist; an in-process test CA plus an opt-in Pebble job. |
+| 2026-11-16 | M4 outcome: every exit criterion held in tests (in-process with a moved clock, against the real binary, and two processes on one database with the lease holder killed). Spike G2 confirmed `instant-acme` with `ring`; its HTTPS-only client made the directory `https` everywhere, and its problems carry no `Retry-After` (a rate limit waits the 1-hour default). The adapter is a concrete type, not a trait. The switch rules moved from compile to the write path (a stored switch must stay inert, not fail, when the process turns ACME off). The security review found the ACME overview decrypting the account to say whether one existed (fixed: a row check). ACME on costs -0.5% to -2.5% in the benchmark, inside the round-to-round spread ([benchmarks.md](benchmarks.md)). See [security-review-m4.md](security-review-m4.md). |

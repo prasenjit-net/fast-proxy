@@ -1,7 +1,7 @@
 # M4 Plan: ACME automatic certificates
 
-Status: **draft v0.4 (2026-11-15), proposed; PR1 (#68), PR2 (#69) and PR3 (`m4/pr3-runner`) written, awaiting the
-owner's review.**
+Status: **v1.0 (2026-11-16), complete; PR1 (#68), PR2 (#69), PR3 (#70) and PR4 (`m4/pr4-surface`) written, awaiting
+the owner's review and manual check.** The outcome is in section 12.
 The owner asked to start the work, so PR1 builds on the recommendations as written; the ADRs (0024 to 0027) stay
 *proposed* until the owner confirms the **(confirm)** items, and anything changed at review is reworked there.
 
@@ -364,7 +364,9 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
   *As built:* `crates/fast-proxy-test-acme` over HTTPS on loopback (its root is the `directory_ca`), round-robin
   challenge targets for cluster tests, `set_rate_limited`, `set_lifetime_days`, counters and a validation log. It
   trusts JWS signatures (Pebble checks those).
-- [ ] **TA2 (S) Pebble harness** for the opt-in CI job (download, start, its CA for `directory_ca`, cleanup).
+- [x] **TA2 (S) Pebble harness** for the opt-in CI job (download, start, its CA for `directory_ca`, cleanup).
+  *As built:* a `pebble` job in `.github/workflows/ci.yml` (release binaries, the repository at the same tag for
+  its config and certificates, challtestsrv for DNS); it runs `crates/fast-proxy-acme/tests/pebble.rs`.
 
 ### Workstream CS: Config service
 
@@ -440,62 +442,87 @@ the ACME crate, **TA** the test CA, **CS** config service, **R** routing, **D** 
 
 ### Workstream A: Admin API
 
-- [ ] **A1 (M) `GET /api/acme`, `GET /api/subsystems/{id}/acme`, `POST .../acme/renew`** registered in the
+- [x] **A1 (M) `GET /api/acme`, `GET /api/subsystems/{id}/acme`, `POST .../acme/renew`** registered in the
   `RouteTable` with their `Access`; the permission table test enumerates them; error envelopes with no CA URLs or
   storage detail.
-- [ ] **A2 (S) `acme_status` WebSocket event.**
-- [ ] **A3 (S) `docs/getting-started.md`**: the curl walkthrough for ACME against Pebble or staging.
+  *As built:* `admin/src/api/acme.rs`; `AdminState::with_acme` carries the settings and the runner's `AcmeControl`;
+  a 429 is the new `AppError::RateLimited` with `Retry-After`; the overview checks for the account without opening it
+  (security review finding 1).
+- [x] **A2 (S) `acme_status` WebSocket event.**
+  *As built:* `ConfigService::subscribe_acme` and `admin/src/acme_bridge.rs` (`acmeStatus`).
+- [x] **A3 (S) `docs/getting-started.md`**: the curl walkthrough for ACME against Pebble or staging.
+  *As built:* section 21.
 
 ### Workstream CL: CLI
 
-- [ ] **CL1 (S) `fast-proxy acme status` and `fast-proxy acme renew <subsystem>`**, exit codes 0/1/2, tests in
+- [x] **CL1 (S) `fast-proxy acme status` and `fast-proxy acme renew <subsystem>`**, exit codes 0/1/2, tests in
   `tests/cli.rs`.
+  *As built:* `src/commands/acme.rs`; checked against the real binary in `tests/acme_binary.rs`.
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (M) ACME on the subsystem page**: the switch in the HTTPS form (disabled with an explanation when the
+- [x] **U1 (M) ACME on the subsystem page**: the switch in the HTTPS form (disabled with an explanation when the
   process has ACME off; a staging badge), the status card (state, names and skipped names with reasons, expiry,
   next attempt, last error, lease holder), "Renew now" for an admin; live through the event.
-- [ ] **U2 (S) ACME overview** (a section of the certificates page): the directory, the account, every subsystem's
+  *As built:* `components/subsystem/AcmeCard.tsx` in the HTTPS section (a viewer sees it read-only); the attached
+  certificate's manual actions give way to "Managed by ACME".
+- [x] **U2 (S) ACME overview** (a section of the certificates page): the directory, the account, every subsystem's
   status, a filter on failing ones.
-- [ ] **U3 (S) Types, API functions, validation** in `ui/src/lib/`; Vitest tests for the form rules, the status
+  *As built:* `components/certificates/AcmeOverviewSection.tsx` with an "Only failing" filter.
+- [x] **U3 (S) Types, API functions, validation** in `ui/src/lib/`; Vitest tests for the form rules, the status
   card states and the renew button's errors (409, 429).
+  *As built:* `lib/types.ts`, `lib/api.ts`, `lib/acme.ts`; a 202 is now an empty answer in `http.ts`; Vitest tests
+  for the card, the overview and the helpers; `LiveContext` refreshes on `acmeStatus`.
 
 ### Workstream Q: Quality
 
-- [ ] **Q1 (L) Exit-criteria tests** `tests/acme.rs` against the real binary and the test CA: issuance and the next
+- [x] **Q1 (L) Exit-criteria tests** `tests/acme.rs` against the real binary and the test CA: issuance and the next
   handshake (1), a host added and the skipped names (2), renewal, failure, backoff and rate limit with short-lived
   certificates (3), the challenge under redirect, maintenance and a disabled subsystem, and an unknown token reaching
   the backend (4), restart without re-ordering (6).
   *Partly done in PR3:* `tests/acme_issuance.rs` covers 1, 2, 3 and 6 in-process (the real runner, data plane and
   config service, a moved clock); PR2's `tests/acme_challenges.rs` covers 4. Left for PR4: the same against the real
   binary, which needs the API.
-- [ ] **Q2 (M) Cluster test** `tests/acme_cluster.rs`: two processes, one database; one lease holder; the CA's
+  *Done in PR4:* `tests/acme_binary.rs` issues and renews through the real binary and checks the CLI; ACME off and a
+  start without TLS or an allowlist are covered too.
+- [x] **Q2 (M) Cluster test** `tests/acme_cluster.rs`: two processes, one database; one lease holder; the CA's
   fetches answered by both (the test CA alternates between them); the certificate served by both; kill the holder
   mid-order, the other finishes after the lease expires (5).
-- [ ] **Q3 (M) Secret hygiene**: extend `tests/secret_hygiene.rs` and the database and WAL scan with the account key
+  *As built:* two processes; the holder is killed (not stopped), the survivor takes the lease once it expires
+  (`lease_ttl` 30 s, the minimum) and orders for a new host; the test takes about 35 s.
+- [x] **Q3 (M) Secret hygiene**: extend `tests/secret_hygiene.rs` and the database and WAL scan with the account key
   and issued keys; `Debug` of every new type (7).
-- [ ] **Q4 (S) Pebble job** in CI (Linux), running Q1's issuance test against Pebble.
-- [ ] **Q5 (S) Regression and coverage**: every earlier exit-criteria suite green; coverage measured and recorded;
+  *As built:* in `tests/acme_binary.rs` (every file under the state directory, the API and the metrics);
+  storing the credentials unsealed turns it red.
+- [x] **Q4 (S) Pebble job** in CI (Linux), running Q1's issuance test against Pebble.
+  *As built:* see TA2; it runs the protocol client's Pebble tests rather than the whole issuance test (the client is
+  what an independent server checks; the runner is covered by the in-process CA).
+- [x] **Q5 (S) Regression and coverage**: every earlier exit-criteria suite green; coverage measured and recorded;
   the "data plane never depends on the store" manifest test still passes; the new crates' manifest tests (the store
   never decrypts).
-- [ ] **Q6 (S) Benchmark**: the M6 numbers re-run with the challenge check in place, recorded in `benchmarks.md`.
-- [ ] **Q7 (M) Security review** `docs/security-review-m4.md`: what the account key allows, the allowlist as the guard
+  *Result:* see section 12.
+- [x] **Q6 (S) Benchmark**: the M6 numbers re-run with the challenge check in place, recorded in `benchmarks.md`.
+  *As built:* `scripts/bench-m4.sh`; results in `benchmarks.md`.
+- [x] **Q7 (M) Security review** `docs/security-review-m4.md`: what the account key allows, the allowlist as the guard
   against issuing for names nobody meant, a hostile `Host` with a known token, the challenge path as an unauthenticated
   surface, CA error text reaching the API, the propagation wait, the staging default.
+  *As built:* [security-review-m4.md](security-review-m4.md), one finding (fixed).
 
 ### Workstream W: Documentation
 
-- [ ] **W1 (S)** README (ACME section, port 80 and DNS requirements, staging versus production, cluster notes),
+- [x] **W1 (S)** README (ACME section, port 80 and DNS requirements, staging versus production, cluster notes),
   AGENTS.md (new crates and rules), ROADMAP (tick M4, the decision log row), the outcome section of this plan.
-- [ ] **W2 (S)** Operator notes: rate limits and how to read the status; moving from staging to production (a new
+  *As built:* README (an ACME section, the CLI, the structure and tests), AGENTS.md, ROADMAP (ticked, outcome row).
+- [x] **W2 (S)** Operator notes: rate limits and how to read the status; moving from staging to production (a new
   account, every certificate reissued).
+  *As built:* in the README's ACME section (renewal, backoff, rate limits, staging to production, watching it).
 
 ### Workstream X: Stretch (only after section 10 holds)
 
 - [ ] **X1 (M) TLS-ALPN-01** for deployments without port 80: an `acme-tls/1` ALPN certificate in the TLS resolver,
   chosen per challenge from the snapshot.
 - [ ] **X2 (M) ARI (RFC 9773)**: ask the CA when to renew, falling back to K6.
+  *Moved (X1 and X2):* stretch tasks not taken in M4; they stay candidates for after M7.
 
 ## 7. Dependencies and suggested order
 
@@ -581,16 +608,16 @@ Four pull requests, each leaving `main` green and releasable; each starts from `
 
 ## 10. Definition of done for M4
 
-- [ ] Every task above is checked, or explicitly moved with a note (stretch tasks may be moved).
-- [ ] Exit criteria (section 1) demonstrated by Q1 to Q4, with the table in the outcome section. The manual run
+- [x] Every task above is checked, or explicitly moved with a note (stretch tasks may be moved).
+- [x] Exit criteria (section 1) demonstrated by Q1 to Q4, with the table in the outcome section. The manual run
   (turn ACME on against staging for a real name, see the certificate, add a host, force a renewal, restart, two
   instances) is the owner's click-through.
 - [ ] CI green on all three platforms, the Pebble job green on Linux; no new clippy warnings.
-- [ ] Overall test coverage above 60%, the number recorded here.
+- [x] Overall test coverage above 60%, the number recorded here.
 - [ ] Nothing committed without the owner's go-ahead after manual review.
-- [ ] README, AGENTS.md, ROADMAP.md and getting-started updated.
-- [ ] Benchmark re-run and recorded within the budget of section 8.
-- [ ] The security review (Q7) done and its findings recorded.
+- [x] README, AGENTS.md, ROADMAP.md and getting-started updated.
+- [x] Benchmark re-run and recorded within the budget of section 8.
+- [x] The security review (Q7) done and its findings recorded.
 
 ## 11. Touch points with finished work, and what M4 leaves for M7
 
@@ -605,3 +632,36 @@ Four pull requests, each leaving `main` green and releasable; each starts from `
   challenge path or the CA's fetches could be refused; fuzzing gets `eligible_names` and the allowlist parser.
 - **The PostgreSQL project:** the new tables are portable SQL; the lease's compare-and-swap is one `UPDATE` that
   PostgreSQL runs as is.
+
+## 12. Outcome
+
+Written 2026-11-16, when PR4 was ready. Everything is built; the owner's manual check, the confirmation of the
+decisions K1 to K17 (still *proposed*) and the merges are open.
+
+| Exit criterion | Held? | Where |
+|---|---|---|
+| 1. Issuance end to end, served by the next handshake | yes | `tests/acme_binary.rs` (real binary), `tests/acme_issuance.rs` (through a redirecting subsystem) |
+| 2. Domains follow the database; ineligible names skipped with a reason | yes | `an_added_host_is_ordered_after_the_debounce_and_ineligible_ones_are_explained`; the API preview test |
+| 3. Renewal at two thirds, backoff, rate limits, the old certificate keeps serving | yes | `tests/acme_issuance.rs` with a moved clock |
+| 4. The challenge ahead of the redirect, maintenance and a disabled subsystem; unknown tokens routed | yes | `tests/acme_challenges.rs`, the data plane's `acme_challenge_tests.rs` |
+| 5. One instance talks to the CA; both answer and serve; failover | yes | `tests/acme_cluster.rs` |
+| 6. Restarts never re-order; staging by default; hourly cap | yes | `a_valid_certificate_is_never_ordered_again_not_even_after_a_restart`, the cap tests, the config default |
+| 7. No secret leaks | yes, after one fix | `tests/acme_binary.rs` scan; [security-review-m4.md](security-review-m4.md) finding 1 |
+| 8. Visible and audited | yes | the API, CLI and UI tests; audit actions asserted in the issuance tests |
+| 9. No regression; the request path cost | yes | the whole suite; [benchmarks.md](benchmarks.md) (-0.5% to -2.5%, inside the spread) |
+
+Numbers: **1676 Rust tests pass and 4 are ignored** (two are the Pebble tests); **483 Vitest tests pass**; coverage
+**95.83% regions, 97.31% lines** (`cargo llvm-cov --workspace --summary-only`). `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings` are clean. One unrelated test failed in the full run and fails about three
+times in four when run alone: `fast-proxy-sampling`'s `concurrent_recording_loses_nothing_within_an_epoch`. It is a
+race in M6's `LatencyWindow::record` at an epoch rollover (a thread that sees the new epoch number already swapped in
+adds to a bucket another thread is still zeroing), present on `main`; it is reported to the owner rather than fixed
+here.
+
+What the build changed in the design, beyond the "As built" notes: the directory must be `https` everywhere (spike
+G2); the adapter is a concrete type; the switch rules live in the write path; the status table gained
+`window_failures`; `self_check` became a config key; a status left `pending` or `renewing` by a stopped instance is
+set right by the next pass; the overview never opens the account. Open for the owner: the decisions K1 to K17, the
+manual click-through (turn ACME on against staging for a real name), the Pebble job's first CI run (it was written but
+could not be run on the development machine), and the latency-window race.
+

@@ -377,6 +377,8 @@ export interface HttpsSettings {
   certificateId: number | null;
   redirect: RedirectMode;
   hsts: HstsSettings;
+  /** The certificate is ordered and renewed through ACME (inert while ACME is off for the proxy). */
+  acmeEnabled: boolean;
   /** HTTPS is enabled here and TLS is on for the process; otherwise inert. */
   effective: boolean;
   certificate: AttachedCertificate | null;
@@ -388,6 +390,64 @@ export interface HttpsInput {
   certificateId: number | null;
   redirect: RedirectMode;
   hsts: HstsSettings;
+  acmeEnabled: boolean;
+}
+
+export type AcmeState = "idle" | "pending" | "valid" | "renewing" | "failed" | "rate_limited" | "inactive";
+export type SkipReason = "wildcard_needs_dns01" | "single_label" | "not_allowed" | "too_many_names";
+
+/** A host left out of an ACME certificate, and why. */
+export interface SkippedName {
+  name: string;
+  reason: SkipReason;
+}
+
+/** One subsystem's ACME status, as every instance reads it from the database. */
+export interface AcmeStatus {
+  subsystemId: number;
+  subsystem: string;
+  state: AcmeState;
+  eligibleNames: string[];
+  skippedNames: SkippedName[];
+  certificateId: number | null;
+  certificateName: string | null;
+  notAfterMs: number | null;
+  nextAttemptAtMs: number | null;
+  failures: number;
+  lastError: string;
+  lastAttemptAtMs: number | null;
+  lastSuccessAtMs: number | null;
+  /** The instance that last wrote the status. */
+  instance: string;
+}
+
+/** The renewal lease: the one instance that talks to the CA. */
+export interface AcmeLease {
+  holder: string;
+  expiresAtMs: number;
+  heldHere: boolean;
+}
+
+/** `GET /api/acme`. */
+export interface AcmeOverview {
+  enabled: boolean;
+  directory: string | null;
+  /** The directory is Let's Encrypt staging: certificates are not publicly trusted. */
+  staging: boolean;
+  allowedDomains: string[];
+  accountRegistered: boolean;
+  lease: AcmeLease | null;
+  subsystems: AcmeStatus[];
+}
+
+/** `GET /api/subsystems/{id}/acme`. */
+export interface SubsystemAcme {
+  /** ACME is on for the proxy. */
+  available: boolean;
+  acmeEnabled: boolean;
+  status: AcmeStatus | null;
+  /** What an order would cover now (null while ACME is off for the proxy). */
+  preview: { eligibleNames: string[]; skippedNames: SkippedName[] } | null;
 }
 
 export type CertificateSource = "uploaded" | "self_signed" | "acme";

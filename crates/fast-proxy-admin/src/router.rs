@@ -108,6 +108,17 @@ pub(crate) fn build(state: SharedState) -> (Router, Vec<RouteSpec>) {
             Needs(Write),
             api::detach_subsystem_certificate,
         )
+        .get("/api/acme", Needs(Read), api::acme_overview)
+        .get(
+            "/api/subsystems/{id}/acme",
+            Needs(Read),
+            api::subsystem_acme,
+        )
+        .post(
+            "/api/subsystems/{id}/acme/renew",
+            Needs(Write),
+            api::renew_acme,
+        )
         .get("/api/certificates", Needs(Read), api::list_certificates)
         .post("/api/certificates", Needs(Keys), api::upload_certificate)
         .post(

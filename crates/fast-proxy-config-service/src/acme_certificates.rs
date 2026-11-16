@@ -195,7 +195,27 @@ fn is_dev_name(name: &str, dev: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_dev_name;
+    use fast_proxy_model::{AcmeKeyType, SubsystemId};
+
+    use super::{is_dev_name, IssuedCertificate};
+
+    #[test]
+    fn debug_shows_the_subsystem_and_names_but_not_the_key_or_chain() {
+        let names = vec!["shop.example.com".to_string()];
+        let order = fast_proxy_tls::generate_order_key(&names, AcmeKeyType::EcdsaP256).unwrap();
+        let issued = IssuedCertificate {
+            subsystem: SubsystemId(1),
+            chain_pem: "-----BEGIN CERTIFICATE-----\nAAAA".into(),
+            key: order.key,
+            names,
+        };
+        let shown = format!("{issued:?}");
+        assert!(shown.contains("shop.example.com"), "{shown}");
+        assert!(
+            !shown.contains("BEGIN") && !shown.contains("Pkcs8"),
+            "{shown}"
+        );
+    }
 
     #[test]
     fn only_the_subsystems_own_development_names_match() {

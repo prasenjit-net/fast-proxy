@@ -10,6 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod acme_binary;
 pub mod flaky;
 pub mod groups;
 pub mod load;

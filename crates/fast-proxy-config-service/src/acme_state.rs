@@ -78,12 +78,21 @@ impl ConfigService {
         Ok(self.read(lease::get).await?.value)
     }
 
-    /// Stores a subsystem's status as written by this instance.
+    /// Stores a subsystem's status as written by this instance, and tells
+    /// [`subscribe_acme`](Self::subscribe_acme) listeners.
     pub async fn record_acme_status(&self, mut written: AcmeStatus) -> Result<(), StoreError> {
         written.instance = self.instance.clone();
+        let event = written.clone();
         self.store
             .run(move |db| db.write_unrecorded(|conn| status::put(conn, &written)))
-            .await
+            .await?;
+        let _ = self.acme_events.send(event);
+        Ok(())
+    }
+
+    /// Receives every ACME status this instance writes.
+    pub fn subscribe_acme(&self) -> tokio::sync::broadcast::Receiver<AcmeStatus> {
+        self.acme_events.subscribe()
     }
 
     /// Stores a status after a failed order together with its audit entry
@@ -92,6 +101,7 @@ impl ConfigService {
     pub async fn record_acme_failure(&self, mut written: AcmeStatus) -> Result<(), StoreError> {
         written.instance = self.instance.clone();
         let entry = failure_entry(&written, &self.instance);
+        let event = written.clone();
         self.store
             .run(move |db| {
                 db.write_unrecorded(|conn| {
@@ -101,6 +111,7 @@ impl ConfigService {
             })
             .await?;
         self.metrics.audit_entry(AuditResult::Failed);
+        let _ = self.acme_events.send(event);
         Ok(())
     }
 
@@ -125,6 +136,16 @@ impl ConfigService {
         self.store
             .run(move |db| db.write_unrecorded(|conn| status::delete(conn, subsystem)))
             .await
+    }
+
+    /// Whether an account is stored for `directory`, without opening it.
+    pub async fn acme_account_registered(&self, directory: &str) -> Result<bool, StoreError> {
+        let directory = directory.to_string();
+        Ok(self
+            .read(move |conn| account::get(conn, &directory))
+            .await?
+            .value
+            .is_some())
     }
 
     /// The account registered with `directory`, opened with the vault.

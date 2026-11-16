@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository.
 
 ## Project Overview
 
-`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. Milestone 5 is complete as well: the admin plane needs a bearer token (two roles), every change is audited with its actor, maintenance mode closes the whole proxy, a subsystem or one route (503, TTL, bypass), the admin plane can serve TLS, and a CLI does the common operations. Milestone 6 is complete: request sampling of unusual requests (tail-based, redacted, stored in the shared database, with a storm guard, admin API, CLI and UI). ACME is the next milestone (M4 was skipped).
+`fast-proxy` is a fast, realtime-configurable ingress server and reverse proxy (see `docs/ROADMAP.md`). Milestones 1 and 2 are complete: a working HTTP reverse proxy with host-based subsystems, prefix routing, live configuration stored in SQLite with history and rollback, WebSocket passthrough, graceful draining, Prometheus metrics, and an admin UI (M1); upstream groups with several endpoints, five load-balancing algorithms, active and passive health checking, safe retries, and drain/disable of endpoints (M2). Milestone 3 is complete too: TLS termination with per-subsystem certificates stored encrypted in SQLite and managed live, HTTP/2 to clients, redirect and HSTS, TLS to upstreams, and several instances sharing one database. Milestone 5 is complete as well: the admin plane needs a bearer token (two roles), every change is audited with its actor, maintenance mode closes the whole proxy, a subsystem or one route (503, TTL, bypass), the admin plane can serve TLS, and a CLI does the common operations. Milestone 6 is complete: request sampling of unusual requests (tail-based, redacted, stored in the shared database, with a storm guard, admin API, CLI and UI). Milestone 4 is complete: ACME automatic certificates (HTTP-01 answered ahead of routing on every instance, a renewal lease so one instance talks to the CA, renewal with backoff and an hourly cap, sealed account and keys, admin API, CLI and UI). M7 (rate limits, hardening, 1.0) is next.
 
 - Rust workspace: a data plane on hyper, an admin plane on Axum, SQLite via rusqlite, Tokio, Clap, Serde, Tracing, and `rust-embed`.
 - React frontend under `ui/`, built with Vite, TypeScript, Tailwind CSS v4, TanStack Router, and TanStack Query.
@@ -24,7 +24,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `refusal_audit.rs` (the access log and the audit of refusals), `host_allow_list.rs`,
   `security_headers.rs`, `tls_server.rs` (the admin listener over TLS), `api/` (one
   file per resource: subsystems, hosts, upstreams, routes, certificates, tokens, maintenance,
-  audit, sampling (settings and overrides, readable by a viewer), samples (the sampled requests, admin only), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  audit, sampling (settings and overrides, readable by a viewer), samples (the sampled requests, admin only), acme
+  (the overview and statuses, readable by a viewer; a forced renewal is a write), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-auth/` is token and secret handling with no HTTP and no database:
   generation, SHA-256 hashing, constant-time comparison (`subtle`), roles, the failure
@@ -100,7 +101,7 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
   clients); never use it outside `dev-dependencies` and tests.
 - `src/cli/` and `src/commands/` are the subcommands (`maintenance`, `reload`, `status`,
-  `audit`, `samples list|export`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
+  `audit`, `samples list|export`, `acme status|renew`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
   proxy refused or a check failed, 2 usage or connection errors.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
@@ -113,7 +114,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `admin_auth.rs`, `admin_tls.rs` and `cli.rs` are M5's (`common/console.rs` starts the
   binary with authentication on and reads the bootstrap token from its console).
   `sampling.rs` (the M6 exit criteria), `sampling_hygiene.rs`, `sampling_under_load.rs` and
-  `sampling_cluster.rs` are M6's. Tests that deliver real signals are `#[cfg(unix)]`.
+  `sampling_cluster.rs` are M6's. `acme_challenges.rs`, `acme_issuance.rs` (the runner against the in-process test CA
+  with a moved clock), `acme_binary.rs` (the real binary, the CLI and a key scan) and
+  `acme_cluster.rs` (two processes, the lease holder killed) are M4's; `common/acme_binary.rs`
+  holds their config helpers. Tests that deliver real signals are `#[cfg(unix)]`.
   The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
   `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
@@ -218,7 +222,7 @@ These rules are set by the project owner and apply to every session.
 - **Never commit or push unless the owner explicitly says so.** When a task is
   done, stop and report. The owner does a manual check first, then asks for the
   commit and push.
-- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md`, `M2-PLAN.md`, `M3-PLAN.md`, `M5-PLAN.md`). Keep them
+- Plans and roadmap live in `docs/` (`ROADMAP.md`, `M1-PLAN.md` to `M6-PLAN.md`). Keep them
   current: tick tasks as they land and record decisions. Start a milestone by
   writing its `docs/Mn-PLAN.md`; record new design decisions as an ADR in
   `docs/adr/` and in the ROADMAP decision log.

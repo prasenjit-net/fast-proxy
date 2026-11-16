@@ -10,6 +10,7 @@ import CertificateUploadForm from "../CertificateUploadForm";
 import FormField from "../FormField";
 import Modal from "../Modal";
 import Toggle from "../Toggle";
+import AcmeCard from "./AcmeCard";
 import AttachedCertificate from "./AttachedCertificate";
 import HttpsPolicyForm from "./HttpsPolicyForm";
 
@@ -40,6 +41,7 @@ function inputOf(https: HttpsSettings): HttpsInput {
     certificateId: https.certificateId,
     redirect: https.redirect,
     hsts: https.hsts,
+    acmeEnabled: https.acmeEnabled,
   };
 }
 
@@ -132,9 +134,27 @@ export default function HttpsSection({ subsystem }: Readonly<{ subsystem: Subsys
           <AttachedCertificate
             certificate={https.certificate}
             secondsLeft={secondsLeft}
+            managedByAcme={https.acmeEnabled}
             onUpload={() => setDialog("upload")}
             onChoose={() => setDialog("choose")}
             onUseDevelopment={() => void useDevelopment()}
+          />
+        ) : null}
+        {https.enabled ? (
+          <AcmeCard
+            subsystem={subsystem}
+            onToggle={async (acmeEnabled) => {
+              try {
+                await saveHttps(
+                  { acmeEnabled },
+                  acmeEnabled
+                    ? "ACME on: the certificate will be ordered shortly"
+                    : "ACME off: the current certificate stays attached",
+                );
+              } catch (error) {
+                notifyError(error);
+              }
+            }}
           />
         ) : null}
         {https.enabled && !https.certificate ? (
@@ -174,7 +194,10 @@ export default function HttpsSection({ subsystem }: Readonly<{ subsystem: Subsys
           {https.enabled ? (
             <>
               <dt className="text-ink-muted">Certificate</dt>
-              <dd>{https.certificate?.name ?? "none attached"}</dd>
+              <dd>
+                {https.certificate?.name ?? "none attached"}
+                {https.acmeEnabled ? " (managed by ACME)" : ""}
+              </dd>
               <dt className="text-ink-muted">Redirect from HTTP</dt>
               <dd>{https.redirect === "off" ? "off" : https.redirect}</dd>
               <dt className="text-ink-muted">HSTS</dt>
@@ -183,6 +206,11 @@ export default function HttpsSection({ subsystem }: Readonly<{ subsystem: Subsys
           ) : null}
         </dl>
       )}
+      {!canWrite && https.enabled ? (
+        <div className="mt-3">
+          <AcmeCard subsystem={subsystem} />
+        </div>
+      ) : null}
 
       {dialog === "upload" ? (
         <Modal title="Upload a certificate" wide onClose={() => setDialog(null)}>

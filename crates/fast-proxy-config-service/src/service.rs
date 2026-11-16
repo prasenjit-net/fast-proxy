@@ -49,6 +49,8 @@ pub struct ConfigService {
     /// Held across persist + swap so commit order always equals swap order.
     writer: Mutex<()>,
     changes: broadcast::Sender<ConfigChanged>,
+    /// Every ACME status this instance writes, for the admin plane's live view.
+    pub(crate) acme_events: broadcast::Sender<fast_proxy_model::AcmeStatus>,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) tls: Arc<TlsState>,
     /// Names this process in audit entries, so a shared log says which instance wrote.
@@ -122,11 +124,13 @@ impl ConfigService {
         publish_certificates(&metrics, &prepared);
         tls.install(prepared.cache);
         let (changes, _) = broadcast::channel(64);
+        let (acme_events, _) = broadcast::channel(64);
         let service = Self {
             store,
             holder,
             writer: Mutex::new(()),
             changes,
+            acme_events,
             metrics,
             tls,
             instance: new_instance_id(),

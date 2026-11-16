@@ -2,9 +2,11 @@
 //! and the Pebble CI job). Ignored unless asked for:
 //!
 //! ```sh
-//! pebble-challtestsrv -defaultIPv4 127.0.0.1 -defaultIPv6 "" &
+//! # in a checkout of letsencrypt/pebble (for its test/ directory)
+//! pebble-challtestsrv -defaultIPv4 127.0.0.1 -defaultIPv6 "" -http01 "" -https01 "" -tlsalpn01 "" -doh "" &
 //! PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 pebble -config test/config/pebble-config.json -dnsserver 127.0.0.1:8053 &
-//! FAST_PROXY_PEBBLE_CA=test/certs/pebble.minica.pem cargo test -p fast-proxy-acme --test pebble -- --ignored
+//! FAST_PROXY_PEBBLE_CA=$PWD/test/certs/pebble.minica.pem \
+//!   cargo test --manifest-path <fast-proxy>/Cargo.toml -p fast-proxy-acme --test pebble -- --ignored --test-threads=1
 //! ```
 //!
 //! The test answers HTTP-01 itself on Pebble's `httpPort` (5002), so it checks

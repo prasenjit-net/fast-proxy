@@ -17,7 +17,7 @@ use std::path::Path;
 use fast_proxy_admin::UiConfig;
 use serde::Deserialize;
 
-pub use acme::AcmeConfig;
+pub use acme::{AcmeConfig, LETS_ENCRYPT_STAGING};
 pub use admin::{AdminAuth, AdminConfig, AdminTlsConfig};
 pub use data_plane::DataPlaneConfig;
 pub use error::ConfigError;

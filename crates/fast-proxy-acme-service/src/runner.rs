@@ -247,7 +247,14 @@ impl AcmeRunner {
                 return now;
             }
             Decision::Idle => status.state = AcmeState::Idle,
-            Decision::NotDueUntil(_) if status.state == AcmeState::Idle => {
+            // No order runs between passes, so `pending` or `renewing` here was
+            // left by an instance that stopped mid-order.
+            Decision::NotDueUntil(_)
+                if matches!(
+                    status.state,
+                    AcmeState::Idle | AcmeState::Pending | AcmeState::Renewing
+                ) =>
+            {
                 status.state = AcmeState::Valid;
             }
             Decision::CapReached { until_ms } => {

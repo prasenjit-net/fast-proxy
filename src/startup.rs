@@ -26,7 +26,6 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::acme::AcmeTask;
 use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
 use crate::sampling::{Sampling, SamplingError};
 
@@ -157,7 +156,17 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         },
         config_service.token_cache(),
     );
-    let admin_state = Arc::new(AdminState::new(
+    // The ACME runner is built now so the admin plane can ask it for
+    // renewals; it starts below with the other background tasks.
+    let (acme, acme_admin) = match acme_settings {
+        Some(settings) => {
+            let (prepared, admin) =
+                crate::acme::prepare(settings, config_service.clone(), metrics.clone());
+            (Some(prepared), Some(admin))
+        }
+        None => (None, None),
+    };
+    let mut admin_state = AdminState::new(
         config.ui,
         env!("CARGO_PKG_VERSION"),
         access_log.clone(),
@@ -169,7 +178,11 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
         // Reads the samples of every instance sharing the database, whether or
         // not this process samples.
         Arc::new(SampleReader::open(&database, Duration::from_secs(5))?),
-    ));
+    );
+    if let Some(admin) = acme_admin {
+        admin_state = admin_state.with_acme(admin);
+    }
+    let admin_state = Arc::new(admin_state);
     fast_proxy_admin::spawn_background_tasks(admin_state.clone());
     tokio::spawn(cancel_on_ctrl_c(data_stop.clone()));
 
@@ -207,14 +220,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     ));
     // Certificates through ACME, when on: only the instance holding the lease
     // talks to the CA. It stops with the data plane.
-    let acme = acme_settings.map(|settings| {
-        AcmeTask::start(
-            settings,
-            config_service.clone(),
-            metrics.clone(),
-            data_stop.clone(),
-        )
-    });
+    let acme = acme.map(|prepared| prepared.start(data_stop.clone()));
 
     // Request sampling: its thread, the pruner and the periodic upkeep. Off
     // costs nothing; on, the data plane only holds the handle.

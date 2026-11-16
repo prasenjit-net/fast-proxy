@@ -46,6 +46,46 @@ pub struct TestApp {
     pub token: Option<String>,
     /// Every route the router registered, with the access it needs.
     pub specs: Vec<crate::route_table::RouteSpec>,
+    /// The ACME runner behind `state.acme` (never run: the tests see what was
+    /// asked of it through its queue).
+    _acme_runner: Option<fast_proxy_acme_service::AcmeRunner>,
+}
+
+/// The ACME section of the admin state, for a process with ACME on, with the
+/// runner it would ask (directory and allowlist as a test expects them).
+fn acme_admin(
+    config: &Arc<ConfigService>,
+    metrics: &Arc<Metrics>,
+) -> (crate::AcmeAdmin, fast_proxy_acme_service::AcmeRunner) {
+    use fast_proxy_acme_service::{system_clock, AcmeRunner, RunnerSettings, SelfCheck};
+    let allowlist =
+        fast_proxy_model::DomainAllowlist::parse(&["*.example.com".to_string()]).unwrap();
+    let directory = "https://acme-staging.example/directory".to_string();
+    let (runner, control) = AcmeRunner::new(
+        config.clone(),
+        metrics.clone(),
+        RunnerSettings {
+            directory: directory.clone(),
+            directory_ca: None,
+            email: String::new(),
+            allowlist: allowlist.clone(),
+            key_type: fast_proxy_model::AcmeKeyType::EcdsaP256,
+            check_interval: std::time::Duration::from_secs(3600),
+            propagation_wait: std::time::Duration::ZERO,
+            lease_ttl: std::time::Duration::from_secs(60),
+            self_check: SelfCheck::Off,
+            ca_timeout: std::time::Duration::from_secs(5),
+            policy: fast_proxy_acme::RenewalPolicy::default(),
+            clock: system_clock(),
+        },
+    );
+    let admin = crate::AcmeAdmin {
+        directory,
+        staging: true,
+        allowlist,
+        control,
+    };
+    (admin, runner)
 }
 
 /// A master key for tests that store private keys (no key file is created).
@@ -143,6 +183,7 @@ impl TestApp {
     }
 
     async fn start(settings: TlsSettings, protection: Protection) -> Self {
+        let acme_enabled = settings.acme_enabled;
         let tls = TlsInfo {
             enabled: settings.enabled,
             listen: settings
@@ -196,7 +237,8 @@ impl TestApp {
         let access_log = Arc::new(AccessLog::open(None).await);
         let samples_dir = tempfile::tempdir().unwrap();
         let samples_db = samples_dir.path().join("samples.db");
-        let state = Arc::new(AdminState::new(
+        let acme = acme_enabled.then(|| acme_admin(&config, &metrics));
+        let admin_state = AdminState::new(
             UiConfig::default(),
             "0.0.0-test",
             access_log,
@@ -214,7 +256,12 @@ impl TestApp {
             EndpointEvents::new(),
             security,
             Arc::new(SampleReader::open(&samples_db, std::time::Duration::from_secs(5)).unwrap()),
-        ));
+        );
+        let (admin_state, acme_runner) = match acme {
+            Some((admin, runner)) => (admin_state.with_acme(admin), Some(runner)),
+            None => (admin_state, None),
+        };
+        let state = Arc::new(admin_state);
         let (router, specs) = crate::router::build(state.clone());
         Self {
             router,
@@ -224,6 +271,7 @@ impl TestApp {
             state,
             samples_dir,
             token: Some(admin_token),
+            _acme_runner: acme_runner,
         }
     }
 

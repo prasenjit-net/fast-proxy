@@ -243,6 +243,19 @@ async fn a_first_certificate_is_issued_validated_through_the_proxy_and_served_at
 }
 
 #[tokio::test]
+async fn a_status_left_renewing_by_a_stopped_instance_is_set_right_on_the_next_pass() {
+    let rig = Rig::start().await;
+    let mut runner = rig.runner();
+    runner.run_once(None).await;
+    let mut stale = rig.status().await;
+    stale.state = AcmeState::Renewing;
+    rig.stack.service.record_acme_status(stale).await.unwrap();
+    runner.run_once(None).await;
+    assert_eq!(rig.status().await.state, AcmeState::Valid);
+    assert_eq!(rig.ca.orders(), 1);
+}
+
+#[tokio::test]
 async fn a_valid_certificate_is_never_ordered_again_not_even_after_a_restart() {
     let rig = Rig::start().await;
     let mut runner = rig.runner();

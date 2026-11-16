@@ -95,3 +95,54 @@ jobs:
           bin=target/release/fast-proxy
           [ -f "$bin.exe" ] && bin="$bin.exe"
           "$bin" --version
+
+  # The ACME client against a real ACME server (M4, Q4). Pebble's release
+  # binaries are downloaded; its repository (same tag) supplies the test
+  # configuration and certificates. challtestsrv answers DNS with 127.0.0.1, so
+  # Pebble fetches HTTP-01 challenges from the test's own listener on port 5002.
+  pebble:
+    name: ACME against Pebble (Linux)
+    runs-on: ubuntu-latest
+    env:
+      PEBBLE_VERSION: v2.10.3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: letsencrypt/pebble
+          ref: v2.10.3
+          path: pebble-src
+
+      - name: Download Pebble
+        run: |
+          for tool in pebble pebble-challtestsrv; do
+            curl -fsSL "https://github.com/letsencrypt/pebble/releases/download/${PEBBLE_VERSION}/${tool}-linux-amd64.tar.gz" \
+              | tar -xz -C "$RUNNER_TEMP"
+          done
+
+      - name: Start Pebble
+        working-directory: pebble-src
+        run: |
+          "$RUNNER_TEMP/pebble-challtestsrv-linux-amd64/linux/amd64/pebble-challtestsrv" \
+            -defaultIPv4 127.0.0.1 -defaultIPv6 "" -http01 "" -https01 "" -tlsalpn01 "" -doh "" &
+          PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 \
+            "$RUNNER_TEMP/pebble-linux-amd64/linux/amd64/pebble" \
+            -config test/config/pebble-config.json -dnsserver 127.0.0.1:8053 &
+          for attempt in $(seq 1 30); do
+            curl -sk https://localhost:14000/dir >/dev/null && exit 0
+            sleep 1
+          done
+          echo "Pebble did not start" >&2
+          exit 1
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          key: pebble
+
+      # One test at a time: each answers challenges on Pebble's port 5002.
+      - run: cargo test --locked -p fast-proxy-acme --test pebble -- --ignored --test-threads=1
+        env:
+          FAST_PROXY_PEBBLE_CA: ${{ github.workspace }}/pebble-src/test/certs/pebble.minica.pem

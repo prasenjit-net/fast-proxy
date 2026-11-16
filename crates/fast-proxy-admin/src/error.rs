@@ -53,6 +53,14 @@ pub enum AppError {
     #[error("too many failed authentications; try again later")]
     TooManyRequests { retry_after_secs: u64 },
 
+    /// A limit of the operation itself is spent (not of the caller), such as
+    /// the hourly cap on failed ACME orders.
+    #[error("{message}")]
+    RateLimited {
+        message: String,
+        retry_after_secs: u64,
+    },
+
     /// The `Host` header is not one this admin plane answers to.
     #[error("{0}")]
     Misdirected(String),
@@ -75,7 +83,9 @@ impl AppError {
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            AppError::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
+            AppError::TooManyRequests { .. } | AppError::RateLimited { .. } => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
             AppError::Misdirected(_) => StatusCode::MISDIRECTED_REQUEST,
             AppError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Conflict(_) => StatusCode::CONFLICT,
@@ -91,6 +101,7 @@ impl AppError {
             AppError::Forbidden(_) => "FORBIDDEN",
             AppError::Unauthorized(_) => "UNAUTHORIZED",
             AppError::TooManyRequests { .. } => "TOO_MANY_REQUESTS",
+            AppError::RateLimited { .. } => "RATE_LIMITED",
             AppError::Misdirected(_) => "MISDIRECTED_REQUEST",
             AppError::TooLarge(_) => "PAYLOAD_TOO_LARGE",
             AppError::Validation(_) => "VALIDATION_FAILED",
@@ -120,6 +131,7 @@ impl IntoResponse for AppError {
             | AppError::Forbidden(_)
             | AppError::Unauthorized(_)
             | AppError::TooManyRequests { .. }
+            | AppError::RateLimited { .. }
             | AppError::Misdirected(_)
             | AppError::TooLarge(_)
             | AppError::Validation(_)
@@ -141,7 +153,10 @@ impl IntoResponse for AppError {
             AppError::Unauthorized(_) => {
                 headers.insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
             }
-            AppError::TooManyRequests { retry_after_secs } => {
+            AppError::TooManyRequests { retry_after_secs }
+            | AppError::RateLimited {
+                retry_after_secs, ..
+            } => {
                 headers.insert(RETRY_AFTER, HeaderValue::from(*retry_after_secs));
             }
             _ => {}

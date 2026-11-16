@@ -6,6 +6,8 @@ description = "Axum admin plane for fast-proxy: REST API, WebSocket push, and th
 publish = false
 
 [dependencies]
+fast-proxy-acme = { path = "../fast-proxy-acme" }
+fast-proxy-acme-service = { path = "../fast-proxy-acme-service" }
 fast-proxy-auth = { path = "../fast-proxy-auth" }
 fast-proxy-config-service = { path = "../fast-proxy-config-service" }
 fast-proxy-model = { path = "../fast-proxy-model" }

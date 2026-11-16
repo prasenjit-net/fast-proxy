@@ -77,6 +77,7 @@ describe("HttpsSection", () => {
         certificateId: null,
         redirect: "off",
         hsts: { enabled: false, maxAgeSecs: 31_536_000, includeSubdomains: false },
+        acmeEnabled: false,
       },
     });
     expect(await screen.findByText("HTTPS enabled")).toBeInTheDocument();
