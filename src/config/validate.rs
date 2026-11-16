@@ -59,19 +59,60 @@ pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
     validate_limits(&config.limits)
 }
 
-/// The fewest and most rate-limit keys a process may hold (about 64 bytes each).
-const RATE_LIMIT_KEYS: std::ops::RangeInclusive<usize> = 1_000..=50_000_000;
-
-/// Checks `[limits]`.
+/// Checks `[limits]`. hyper refuses a head buffer under 8 KiB, and a request
+/// target must fit in the head.
 fn validate_limits(limits: &LimitsConfig) -> Result<(), ConfigError> {
-    if !RATE_LIMIT_KEYS.contains(&limits.rate_limit_keys) {
-        return invalid(format!(
-            "limits.rate_limit_keys must be between {} and {}",
-            RATE_LIMIT_KEYS.start(),
-            RATE_LIMIT_KEYS.end()
-        ));
+    let within = |name: &str, value: u64, min: u64, max: u64| {
+        if (min..=max).contains(&value) {
+            return Ok(());
+        }
+        invalid(format!("limits.{name} must be between {min} and {max}"))
+    };
+    within(
+        "max_connections",
+        limits.max_connections as u64,
+        1,
+        1_000_000,
+    )?;
+    within(
+        "max_connections_per_client",
+        limits.max_connections_per_client as u64,
+        0,
+        limits.max_connections as u64,
+    )?;
+    within(
+        "header_read_timeout",
+        limits.header_read_timeout.as_millis() as u64,
+        1_000,
+        300_000,
+    )?;
+    within("max_header_count", limits.max_header_count as u64, 1, 1_000)?;
+    within(
+        "max_header_bytes",
+        limits.max_header_bytes as u64,
+        8 * 1024,
+        1 << 20,
+    )?;
+    within(
+        "max_uri_bytes",
+        limits.max_uri_bytes as u64,
+        256,
+        limits.max_header_bytes as u64,
+    )?;
+    if limits.max_body_bytes != 0 {
+        within(
+            "max_body_bytes",
+            limits.max_body_bytes,
+            1,
+            fast_proxy_model::MAX_REQUEST_BODY_BYTES,
+        )?;
     }
-    Ok(())
+    within(
+        "rate_limit_keys",
+        limits.rate_limit_keys as u64,
+        1_000,
+        50_000_000,
+    )
 }
 
 /// Checks `[admin]`: the admin plane may leave loopback only with authentication

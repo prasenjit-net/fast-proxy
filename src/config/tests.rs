@@ -466,3 +466,59 @@ fn the_limits_section_defaults_parses_and_is_bounded() {
         "unknown keys are refused"
     );
 }
+
+#[test]
+fn every_limit_parses_and_its_bounds_are_enforced() {
+    let config = parse(
+        "[limits]\nmax_connections = 500\nmax_connections_per_client = 0\n\
+         header_read_timeout = \"5s\"\nmax_header_count = 50\nmax_header_bytes = 16384\n\
+         max_uri_bytes = 4096\nmax_body_bytes = 1048576\n",
+    )
+    .unwrap();
+    config.validate().unwrap();
+    let limits = &config.limits;
+    assert_eq!(
+        (limits.max_connections, limits.max_connections_per_client),
+        (500, 0)
+    );
+    assert_eq!(
+        limits.header_read_timeout,
+        std::time::Duration::from_secs(5)
+    );
+    assert_eq!(
+        (limits.max_header_count, limits.max_header_bytes),
+        (50, 16384)
+    );
+    assert_eq!(
+        (limits.max_uri_bytes, limits.max_body_bytes),
+        (4096, 1 << 20)
+    );
+
+    let defaults = parse("").unwrap();
+    defaults.validate().unwrap();
+    assert_eq!(defaults.limits.max_body_bytes, 0, "unlimited by default");
+
+    for (bad, field) in [
+        ("max_connections = 0", "limits.max_connections"),
+        (
+            "max_connections = 10\nmax_connections_per_client = 11",
+            "limits.max_connections_per_client",
+        ),
+        (
+            "header_read_timeout = \"100ms\"",
+            "limits.header_read_timeout",
+        ),
+        ("max_header_count = 0", "limits.max_header_count"),
+        ("max_header_bytes = 4096", "limits.max_header_bytes"),
+        ("max_uri_bytes = 100", "limits.max_uri_bytes"),
+        (
+            "max_header_bytes = 8192\nmax_uri_bytes = 9000",
+            "limits.max_uri_bytes",
+        ),
+        ("max_body_bytes = 2199023255553", "limits.max_body_bytes"),
+    ] {
+        let config = parse(&format!("[limits]\n{bad}\n")).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains(field), "{bad}: {err}");
+    }
+}

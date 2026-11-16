@@ -10,13 +10,16 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::connections::{ConnectionContext, ConnectionTracker};
-use crate::{BoundListener, Forward, Http2Limits, RequestPipeline, TlsPlane};
+use crate::connections::{ConnectionContext, ConnectionGuard, ConnectionTracker};
+use crate::{BoundListener, Forward, Http2Limits, RequestPipeline, ServerLimits, TlsPlane};
 
-/// How long a client may take to send complete request headers.
-const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// Upper bound for buffered request head data (and so for header size).
-const MAX_HEAD_BYTES: usize = 64 * 1024;
+/// hyper's own header-count limit: setting another value moves its header
+/// buffer to the heap for every request (about 5% slower), so only a different
+/// limit is passed on.
+const HYPER_DEFAULT_MAX_HEADERS: usize = 100;
+/// How long the accept loop pauses after refusing a connection at the global
+/// cap, so a flood cannot make it spin.
+const FULL_BACKOFF: Duration = Duration::from_millis(10);
 
 /// Streams a client may reset before the server accepts them (hyper's default,
 /// stated here because it is the rapid-reset mitigation).
@@ -40,6 +43,8 @@ struct Signals {
     shutdown: CancellationToken,
     /// The grace period is over: close right now.
     force_close: CancellationToken,
+    /// What every connection is held to.
+    limits: ServerLimits,
 }
 
 /// The running data plane: one accept loop per bound listener.
@@ -71,11 +76,25 @@ impl DataPlane {
         pipeline: Arc<RequestPipeline<F>>,
         shutdown: CancellationToken,
     ) -> Self {
-        let connections = ConnectionTracker::new(pipeline.metrics());
+        Self::start_with_limits(listeners, tls, pipeline, shutdown, ServerLimits::default())
+    }
+
+    /// Like [`DataPlane::start_with_tls`], holding every connection to `limits`
+    /// (`[limits]` in `config.toml`): the connection caps are checked when a
+    /// connection is accepted, before any TLS handshake.
+    pub fn start_with_limits<F: Forward>(
+        listeners: Vec<BoundListener>,
+        tls: Option<TlsPlane>,
+        pipeline: Arc<RequestPipeline<F>>,
+        shutdown: CancellationToken,
+        limits: ServerLimits,
+    ) -> Self {
+        let connections = ConnectionTracker::new(pipeline.metrics(), limits.connections);
         let force_close = CancellationToken::new();
         let signals = Signals {
             shutdown,
             force_close: force_close.clone(),
+            limits,
         };
         let mut local_addrs: Vec<(String, SocketAddr)> = listeners
             .iter()
@@ -154,15 +173,18 @@ async fn accept_loop<F: Forward>(
         };
         match accepted {
             Ok((stream, peer)) => {
+                let Some(guard) = admit(&connections, peer).await else {
+                    continue;
+                };
                 let context = ConnectionContext {
-                    guard: Arc::new(connections.open()),
+                    guard: Arc::new(guard),
                     force_close: signals.force_close.clone(),
                     scheme: "http",
                     tls: None,
                 };
                 tokio::spawn(serve_connection(
                     stream,
-                    peer,
+                    (peer, signals.limits),
                     pipeline.clone(),
                     context,
                     signals.shutdown.clone(),
@@ -194,9 +216,14 @@ async fn tls_accept_loop<F: Forward>(
         };
         match accepted {
             Ok((stream, peer)) => {
+                // Before the handshake: a refused peer costs no TLS work.
+                let Some(guard) = admit(&connections, peer).await else {
+                    continue;
+                };
                 let (tls, pipeline) = (tls.clone(), pipeline.clone());
+                let limits = signals.limits;
                 let context = ConnectionContext {
-                    guard: Arc::new(connections.open()),
+                    guard: Arc::new(guard),
                     force_close: signals.force_close.clone(),
                     scheme: "https",
                     tls: None,
@@ -215,14 +242,14 @@ async fn tls_accept_loop<F: Forward>(
                             tls: Some(Arc::new(accepted.connection)),
                             ..context
                         };
-                        let limits = tls.http2_limits();
+                        let http2 = tls.http2_limits();
                         serve_connection(
                             accepted.stream,
-                            peer,
+                            (peer, limits),
                             pipeline,
                             context,
                             shutdown,
-                            Some(limits),
+                            Some(http2),
                         )
                         .await;
                     }
@@ -251,9 +278,25 @@ fn configure_http2(builder: &mut auto::Builder<TokioExecutor>, limits: Http2Limi
         .max_local_error_reset_streams(RAPID_RESET_LOCAL_ERROR_CAP);
 }
 
+/// Admits a just-accepted connection within the caps. A refused one is closed
+/// (the stream is dropped by the caller's `continue`); at the global cap the
+/// loop pauses briefly, since every new connection would be refused too.
+async fn admit(connections: &Arc<ConnectionTracker>, peer: SocketAddr) -> Option<ConnectionGuard> {
+    match connections.admit(peer.ip()) {
+        Ok(guard) => Some(guard),
+        Err(refusal) => {
+            tracing::debug!(%peer, reason = refusal.label(), "connection refused");
+            if refusal == fast_proxy_limits::ConnectionRefusal::Total {
+                tokio::time::sleep(FULL_BACKOFF).await;
+            }
+            None
+        }
+    }
+}
+
 async fn serve_connection<F: Forward, S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     stream: S,
-    peer: SocketAddr,
+    (peer, limits): (SocketAddr, ServerLimits),
     pipeline: Arc<RequestPipeline<F>>,
     context: ConnectionContext,
     shutdown: CancellationToken,
@@ -269,9 +312,12 @@ async fn serve_connection<F: Forward, S: AsyncRead + AsyncWrite + Unpin + Send +
     builder
         .http1()
         .timer(TokioTimer::new())
-        .header_read_timeout(HEADER_READ_TIMEOUT)
-        .max_buf_size(MAX_HEAD_BYTES)
+        .header_read_timeout(limits.header_read_timeout)
+        .max_buf_size(limits.max_header_bytes)
         .keep_alive(true);
+    if limits.max_header_count != HYPER_DEFAULT_MAX_HEADERS {
+        builder.http1().max_headers(limits.max_header_count);
+    }
     // HTTP/2 only where the listener offers it (TLS, negotiated by ALPN); the
     // connection then speaks whichever protocol the client chose.
     let builder = match http2 {

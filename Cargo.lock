@@ -751,6 +751,7 @@ dependencies = [
  "bytes",
  "fast-proxy-auth",
  "fast-proxy-balancing",
+ "fast-proxy-limits",
  "fast-proxy-model",
  "fast-proxy-routing",
  "fast-proxy-sampling",

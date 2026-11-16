@@ -14,10 +14,11 @@ use fast_proxy_config_service::{
 };
 use fast_proxy_dataplane::{
     bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
-    RequestPipeline, TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError,
-    UpstreamClient,
+    RequestLimits, RequestPipeline, ServerLimits, TlsPlane, TlsPlaneError, TlsPlaneSettings,
+    TrustedProxies, TrustedProxyError, UpstreamClient,
 };
 use fast_proxy_health::{run_status_gauges, HealthEngine};
+use fast_proxy_limits::ConnectionCaps;
 use fast_proxy_sample_service::SampleReader;
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
@@ -26,7 +27,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
+use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, LimitsConfig, TlsConfig};
 use crate::sampling::{Sampling, SamplingError};
 
 /// The environment variable that seeds the first admin token (for containers).
@@ -261,9 +262,16 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             observability,
         )
         .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref()))
-        .with_trusted_proxies(trusted_proxies),
+        .with_trusted_proxies(trusted_proxies)
+        .with_request_limits(request_limits(&config.limits)),
     );
-    let plane = DataPlane::start_with_tls(bound, https, pipeline, data_stop.clone());
+    let plane = DataPlane::start_with_limits(
+        bound,
+        https,
+        pipeline,
+        data_stop.clone(),
+        server_limits(&config.limits),
+    );
 
     for (name, addr) in plane.local_addrs() {
         let scheme = if name == HTTPS_LISTENER {
@@ -346,6 +354,27 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
+}
+
+/// The connection and head limits of `[limits]`, as the data plane takes them.
+fn server_limits(limits: &LimitsConfig) -> ServerLimits {
+    ServerLimits {
+        connections: ConnectionCaps {
+            total: limits.max_connections,
+            per_client: limits.max_connections_per_client,
+        },
+        header_read_timeout: limits.header_read_timeout,
+        max_header_count: limits.max_header_count,
+        max_header_bytes: limits.max_header_bytes,
+    }
+}
+
+/// The per-request limits of `[limits]`; a body cap of 0 is unlimited.
+fn request_limits(limits: &LimitsConfig) -> RequestLimits {
+    RequestLimits {
+        max_uri_bytes: limits.max_uri_bytes,
+        max_body_bytes: (limits.max_body_bytes > 0).then_some(limits.max_body_bytes),
+    }
 }
 
 /// Says once that the database was upgraded, and where the copy taken before it is,

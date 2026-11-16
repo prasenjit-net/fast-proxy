@@ -20,12 +20,13 @@ use crate::maintenance::{self, evaluate, BypassedScopes, ScopeOutcome, BYPASS_HE
 use crate::pending_request::PendingRequest;
 use crate::redirect::{hsts_value, render_redirect};
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
+use crate::request_size;
 use crate::responses::accepts_json;
 use crate::sampling_tail::{SamplingSource, SamplingTail};
 use crate::selection::select_endpoint;
 use crate::tracked_body::TrackedBody;
 use crate::trusted_proxies::TrustedProxies;
-use crate::{FixedResponse, Forward, Observability, ResponseBody, Target};
+use crate::{BodyCap, FixedResponse, Forward, Observability, RequestLimits, ResponseBody, Target};
 
 /// What the snapshot says should happen to a request.
 enum Resolved<'snapshot> {
@@ -74,6 +75,8 @@ pub struct RequestPipeline<F> {
     /// Peers whose `X-Forwarded-For` is believed when deciding who the client
     /// is for a maintenance bypass.
     trusted_proxies: TrustedProxies,
+    /// The target length and default body cap every request is held to.
+    request_limits: RequestLimits,
 }
 
 impl<F: Forward> RequestPipeline<F> {
@@ -84,7 +87,14 @@ impl<F: Forward> RequestPipeline<F> {
             observability,
             https_port: 443,
             trusted_proxies: TrustedProxies::default(),
+            request_limits: RequestLimits::default(),
         }
+    }
+
+    /// Sets the request target and body limits (`[limits]` in `config.toml`).
+    pub fn with_request_limits(mut self, limits: RequestLimits) -> Self {
+        self.request_limits = limits;
+        self
     }
 
     /// Sets the port a redirect to HTTPS names (the public port of the HTTPS
@@ -250,9 +260,26 @@ impl<F: Forward> RequestPipeline<F> {
                 known.route = route.prefix.clone();
                 let upstream = &route.upstream;
                 bypassed.strip_secrets(request.headers_mut());
-                match select_endpoint(upstream, request.headers(), client_addr.ip(), None) {
-                    None => FixedResponse::NoHealthyUpstream.render(&request_id, wants_json),
-                    Some(selection) => {
+                let size = request_size::check(
+                    request.uri(),
+                    request.headers(),
+                    self.request_limits,
+                    route.max_body_bytes,
+                );
+                if let Ok(Some(cap)) = size {
+                    request.extensions_mut().insert(BodyCap(cap));
+                }
+                // An oversized request never selects (nor counts against) an endpoint.
+                let selection = match size {
+                    Ok(_) => select_endpoint(upstream, request.headers(), client_addr.ip(), None),
+                    Err(_) => None,
+                };
+                match (size, selection) {
+                    (Err(refusal), _) => refusal.render(&request_id, wants_json),
+                    (Ok(_), None) => {
+                        FixedResponse::NoHealthyUpstream.render(&request_id, wants_json)
+                    }
+                    (Ok(_), Some(selection)) => {
                         let endpoint = &upstream.endpoints[selection.index];
                         let candidate = &upstream.candidates[selection.index];
                         if selection.panic {

@@ -19,8 +19,8 @@ use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    bind, DataPlane, Forward, ListenerSpec, Observability, RequestPipeline, TrustedProxies,
-    UpstreamClient,
+    bind, DataPlane, Forward, ListenerSpec, Observability, RequestLimits, RequestPipeline,
+    ServerLimits, TrustedProxies, UpstreamClient,
 };
 
 /// A route with default settings (no rewriting, host preserved).
@@ -130,6 +130,20 @@ impl Harness {
         .await
     }
 
+    /// Serves `config` through the real upstream client, held to `limits`.
+    pub async fn proxying_with_limits(
+        config: Config,
+        limits: (ServerLimits, RequestLimits),
+    ) -> Self {
+        Self::start_limited(
+            config,
+            |metrics, events| UpstreamClient::new(TrustedProxies::default(), metrics, events),
+            (None, TrustedProxies::default()),
+            limits,
+        )
+        .await
+    }
+
     /// The general form: `make_forwarder` receives the metrics and the endpoint
     /// event bus the pipeline reports to.
     pub async fn start_full<F: Forward>(
@@ -137,6 +151,21 @@ impl Harness {
         make_forwarder: impl FnOnce(Arc<Metrics>, EndpointEvents) -> F,
         log_path: Option<&Path>,
         trusted: TrustedProxies,
+    ) -> Self {
+        Self::start_limited(
+            config,
+            make_forwarder,
+            (log_path, trusted),
+            (ServerLimits::default(), RequestLimits::default()),
+        )
+        .await
+    }
+
+    async fn start_limited<F: Forward>(
+        config: Config,
+        make_forwarder: impl FnOnce(Arc<Metrics>, EndpointEvents) -> F,
+        (log_path, trusted): (Option<&Path>, TrustedProxies),
+        (server_limits, request_limits): (ServerLimits, RequestLimits),
     ) -> Self {
         let holder = Arc::new(SnapshotHolder::new());
         holder.swap(compile(1, &config, &RuntimeRegistry::new()).unwrap());
@@ -156,9 +185,11 @@ impl Harness {
                 make_forwarder(metrics.clone(), events.clone()),
                 observability,
             )
-            .with_trusted_proxies(trusted),
+            .with_trusted_proxies(trusted)
+            .with_request_limits(request_limits),
         );
-        let plane = DataPlane::start(bound, pipeline, shutdown.clone());
+        let plane =
+            DataPlane::start_with_limits(bound, None, pipeline, shutdown.clone(), server_limits);
         let addr = plane.local_addrs()[0].1;
         Self {
             plane,

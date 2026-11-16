@@ -20,6 +20,32 @@ use hyper::body::Incoming;
 
 type BodyError = Box<dyn Error + Send + Sync>;
 
+/// The body went past the cap the pipeline settled for it (ADR 0029): the
+/// upstream request is aborted and the client gets 413. Found by the forwarder
+/// in the error chain, so it is never taken for an upstream failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BodyCapExceeded;
+
+impl std::fmt::Display for BodyCapExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the request body is larger than its route accepts")
+    }
+}
+
+impl Error for BodyCapExceeded {}
+
+/// Whether `err`, or anything that caused it, is [`BodyCapExceeded`].
+pub(crate) fn exceeds_body_cap(err: &(dyn Error + 'static)) -> bool {
+    let mut current = Some(err);
+    while let Some(cause) = current {
+        if cause.is::<BodyCapExceeded>() {
+            return true;
+        }
+        current = cause.source();
+    }
+    false
+}
+
 /// What to learn about the request body while it streams to the upstream
 /// (for the sampler): how many bytes were read, and optionally the first few.
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +112,9 @@ struct Shared {
     body: Mutex<Incoming>,
     polled: AtomicBool,
     stats: Option<Arc<BodyStats>>,
+    /// The most bytes the body may have; `None` is unlimited.
+    cap: Option<u64>,
+    read: AtomicU64,
 }
 
 /// Owns a request body across attempts.
@@ -95,8 +124,10 @@ pub struct BodyOwner {
 }
 
 impl BodyOwner {
-    /// `observation` asks to count (and perhaps capture) the body as it is read.
-    pub fn new(body: Incoming, observation: Option<BodyObservation>) -> Self {
+    /// `observation` asks to count (and perhaps capture) the body as it is read;
+    /// `cap` is the most bytes it may have before it fails with
+    /// [`BodyCapExceeded`].
+    pub fn new(body: Incoming, observation: Option<BodyObservation>, cap: Option<u64>) -> Self {
         if body.is_end_stream() {
             return Self { shared: None };
         }
@@ -105,6 +136,8 @@ impl BodyOwner {
                 body: Mutex::new(body),
                 polled: AtomicBool::new(false),
                 stats: observation.map(|observation| Arc::new(BodyStats::new(observation))),
+                cap,
+                read: AtomicU64::new(0),
             })),
         }
     }
@@ -150,9 +183,16 @@ impl Body for ReplayBody {
         shared.polled.store(true, Ordering::SeqCst);
         let mut body = shared.body.lock().unwrap_or_else(PoisonError::into_inner);
         let polled = Pin::new(&mut *body).poll_frame(cx);
-        if let (Some(stats), Poll::Ready(Some(Ok(frame)))) = (&shared.stats, &polled) {
+        if let Poll::Ready(Some(Ok(frame))) = &polled {
             if let Some(data) = frame.data_ref() {
-                stats.record(data);
+                let length = data.len() as u64;
+                let read = shared.read.fetch_add(length, Ordering::SeqCst) + length;
+                if shared.cap.is_some_and(|cap| read > cap) {
+                    return Poll::Ready(Some(Err(Box::new(BodyCapExceeded))));
+                }
+                if let Some(stats) = &shared.stats {
+                    stats.record(data);
+                }
             }
         }
         polled.map_err(|err| Box::new(err) as BodyError)
@@ -195,16 +235,25 @@ mod tests {
 
     use super::*;
 
+    type Scenario<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+
     /// Runs `scenario` inside a hyper server so it receives a real `Incoming`,
     /// then returns what it observed.
     async fn with_incoming<T: Send + 'static>(
         method: &str,
         body: &str,
         observation: Option<BodyObservation>,
-        scenario: impl Fn(BodyOwner) -> std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>
-            + Send
-            + Sync
-            + 'static,
+        scenario: impl Fn(BodyOwner) -> Scenario<T> + Send + Sync + 'static,
+    ) -> T {
+        with_capped_incoming(method, body, (observation, None), scenario).await
+    }
+
+    /// Like [`with_incoming`], with the body capped at `cap` bytes.
+    async fn with_capped_incoming<T: Send + 'static>(
+        method: &str,
+        body: &str,
+        (observation, cap): (Option<BodyObservation>, Option<u64>),
+        scenario: impl Fn(BodyOwner) -> Scenario<T> + Send + Sync + 'static,
     ) -> T {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -215,7 +264,7 @@ mod tests {
             let service = service_fn(move |request: Request<Incoming>| {
                 let (tx, scenario) = (tx.clone(), scenario.clone());
                 async move {
-                    let owner = BodyOwner::new(request.into_body(), observation);
+                    let owner = BodyOwner::new(request.into_body(), observation, cap);
                     let _ = tx.send(scenario(owner).await);
                     Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::new())))
                 }
@@ -470,5 +519,50 @@ mod tests {
         let body = ReplayBody { shared: None };
         assert!(body.is_end_stream());
         assert_eq!(body.size_hint().exact(), Some(0));
+    }
+
+    /// Reads the whole attempt body: its length, or the error that stopped it.
+    async fn read_all(owner: &BodyOwner) -> Result<usize, BodyError> {
+        owner
+            .attempt()
+            .collect()
+            .await
+            .map(|collected| collected.to_bytes().len())
+    }
+
+    #[tokio::test]
+    async fn a_body_past_its_cap_fails_with_a_cap_error() {
+        let failed = with_capped_incoming("POST", "0123456789", (None, Some(9)), |owner| {
+            Box::pin(async move { read_all(&owner).await.unwrap_err() })
+        })
+        .await;
+        assert!(exceeds_body_cap(failed.as_ref()), "{failed}");
+        assert!(!exceeds_body_cap(&std::io::Error::other("refused")));
+    }
+
+    #[tokio::test]
+    async fn a_body_of_exactly_its_cap_passes() {
+        let read = with_capped_incoming("POST", "0123456789", (None, Some(10)), |owner| {
+            Box::pin(async move { read_all(&owner).await.unwrap() })
+        })
+        .await;
+        assert_eq!(read, 10);
+    }
+
+    #[test]
+    fn a_cap_error_is_found_behind_another_error() {
+        #[derive(Debug)]
+        struct Wrapper(BodyCapExceeded);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("wrapped")
+            }
+        }
+        impl Error for Wrapper {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        assert!(exceeds_body_cap(&Wrapper(BodyCapExceeded)));
     }
 }

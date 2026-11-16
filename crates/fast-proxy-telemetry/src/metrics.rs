@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::acme_metrics::{AcmeChallengeOutcome, AcmeMetrics, AcmeOrderOutcome};
 use crate::admin_metrics::{AdminMetrics, AdminResult, AuditResult};
+use crate::limits_metrics::LimitsMetrics;
 use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
 use crate::sampling_metrics::{SampleDropReason, SamplerReading, SamplingMetrics};
 use crate::tls_metrics::{
@@ -107,6 +108,7 @@ pub struct Metrics {
     sampling: SamplingMetrics,
     admin: AdminMetrics,
     acme: AcmeMetrics,
+    limits: LimitsMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -149,8 +151,10 @@ impl Metrics {
         let sampling = SamplingMetrics::new(&registry);
         let admin = AdminMetrics::new(&registry);
         let acme = AcmeMetrics::new(&registry);
+        let limits = LimitsMetrics::new(&registry);
         Self {
             acme,
+            limits,
             upstream,
             tls,
             maintenance,
@@ -370,6 +374,12 @@ impl Metrics {
     }
 
     /// Counts one more open client connection.
+    /// Counts a connection closed on accept because a cap was reached;
+    /// `reason` is a fixed name such as `max_connections`.
+    pub fn connection_refused(&self, reason: &'static str) {
+        self.limits.connection_refused(reason);
+    }
+
     pub fn connection_opened(&self) {
         self.active_connections.inc();
     }
@@ -729,6 +739,19 @@ mod tests {
             metrics.maintenance_response("subsystem", "shop", "_none");
         }
         assert_eq!(metrics.traffic_totals().overall().errors, 0);
+    }
+
+    #[test]
+    fn refused_connections_are_counted_by_reason() {
+        let metrics = Metrics::new();
+        metrics.connection_refused("max_connections");
+        metrics.connection_refused("max_connections_per_client");
+        metrics.connection_refused("max_connections_per_client");
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_connections_refused_total{reason="max_connections"} 1"#));
+        assert!(text.contains(
+            r#"fastproxy_connections_refused_total{reason="max_connections_per_client"} 2"#
+        ));
     }
 
     #[test]

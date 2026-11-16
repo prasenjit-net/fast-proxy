@@ -4,6 +4,7 @@ mod access_log;
 mod acme_metrics;
 mod admin_metrics;
 mod endpoint_events;
+mod limits_metrics;
 mod maintenance_metrics;
 mod metrics;
 mod sampling_metrics;

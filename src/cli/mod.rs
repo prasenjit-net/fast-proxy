@@ -90,6 +90,10 @@ pub struct Cli {
     /// Turn request sampling off, overriding [sampling].enabled
     #[arg(long)]
     pub no_sampling: bool,
+
+    /// Override [limits].max_connections, the open client connections allowed
+    #[arg(long)]
+    pub max_connections: Option<usize>,
 }
 
 impl Cli {
@@ -136,6 +140,9 @@ impl Cli {
         }
         if self.no_sampling {
             config.sampling.enabled = false;
+        }
+        if let Some(max) = self.max_connections {
+            config.limits.max_connections = max;
         }
         if let Some(listen) = self.https_listen {
             config.data_plane.tls.listen = listen;
@@ -301,6 +308,19 @@ mod tests {
         assert_eq!(config.data_plane.state_dir, PathBuf::from("/tmp/state"));
         assert_eq!(config.logging.level, "debug");
         assert_eq!(config.logging.access_log, Some(PathBuf::from("/tmp/a.log")));
+    }
+
+    #[test]
+    fn max_connections_overrides_the_file() {
+        let mut config = AppConfig::default();
+        parse(&["--max-connections", "500"]).apply(&mut config);
+        assert_eq!(config.limits.max_connections, 500);
+        let mut untouched = AppConfig::default();
+        parse(&[]).apply(&mut untouched);
+        assert_eq!(
+            untouched.limits.max_connections,
+            fast_proxy_limits::defaults::MAX_CONNECTIONS
+        );
     }
 
     #[test]

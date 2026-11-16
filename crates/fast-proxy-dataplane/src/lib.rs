@@ -9,6 +9,7 @@ mod acme_challenge;
 mod connections;
 mod forward;
 mod headers;
+mod limits;
 mod listener;
 mod maintenance;
 mod pending_request;
@@ -17,6 +18,7 @@ mod protocol_switch;
 mod redirect;
 mod replay_body;
 mod request_id;
+mod request_size;
 mod responses;
 mod retry_policy;
 mod sampling_head;
@@ -41,6 +43,8 @@ mod drain_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod limits_tests;
+#[cfg(test)]
 mod maintenance_tests;
 #[cfg(test)]
 mod observability_tests;
@@ -60,6 +64,7 @@ mod tests;
 mod upgrade_tests;
 
 pub use forward::{Forward, Forwarded, ResponseBody, Target};
+pub use limits::{BodyCap, RequestLimits, ServerLimits};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use replay_body::{BodyObservation, BodyStats};

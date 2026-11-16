@@ -24,6 +24,10 @@ pub enum FixedResponse {
     BadGateway,
     /// The upstream did not answer in time.
     GatewayTimeout,
+    /// The request body is larger than the route accepts (ADR 0029).
+    PayloadTooLarge,
+    /// The request target is longer than the proxy accepts (ADR 0029).
+    UriTooLong,
 }
 
 impl FixedResponse {
@@ -34,6 +38,8 @@ impl FixedResponse {
             Self::MisdirectedRequest => StatusCode::MISDIRECTED_REQUEST,
             Self::BadGateway => StatusCode::BAD_GATEWAY,
             Self::GatewayTimeout => StatusCode::GATEWAY_TIMEOUT,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UriTooLong => StatusCode::URI_TOO_LONG,
         }
     }
 
@@ -46,6 +52,8 @@ impl FixedResponse {
             Self::MisdirectedRequest => "misdirected_request",
             Self::BadGateway => "bad_gateway",
             Self::GatewayTimeout => "gateway_timeout",
+            Self::PayloadTooLarge => "payload_too_large",
+            Self::UriTooLong => "uri_too_long",
         }
     }
 
@@ -58,6 +66,8 @@ impl FixedResponse {
             Self::MisdirectedRequest => "this host is not served on this connection",
             Self::BadGateway => "bad gateway",
             Self::GatewayTimeout => "gateway timeout",
+            Self::PayloadTooLarge => "request body too large",
+            Self::UriTooLong => "request target too long",
         }
     }
 
@@ -132,12 +142,14 @@ mod tests {
 
     use super::*;
 
-    const ALL: [FixedResponse; 7] = [
+    const ALL: [FixedResponse; 9] = [
         FixedResponse::UnknownHost,
         FixedResponse::SubsystemDisabled,
         FixedResponse::NoRoute,
         FixedResponse::NoHealthyUpstream,
         FixedResponse::MisdirectedRequest,
+        FixedResponse::PayloadTooLarge,
+        FixedResponse::UriTooLong,
         FixedResponse::BadGateway,
         FixedResponse::GatewayTimeout,
     ];
@@ -150,7 +162,7 @@ mod tests {
     #[test]
     fn maps_each_kind_to_its_status() {
         let statuses: Vec<u16> = ALL.iter().map(|r| r.status().as_u16()).collect();
-        assert_eq!(statuses, [404, 503, 404, 503, 421, 502, 504]);
+        assert_eq!(statuses, [404, 503, 404, 503, 421, 413, 414, 502, 504]);
     }
 
     #[tokio::test]
