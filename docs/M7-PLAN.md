@@ -409,14 +409,24 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
 
 ### Workstream A: Admin API and CLI
 
-- [ ] **A1 (M) Rate-limit API (5.3).** Handlers under `api/`, registered with their `Access`, writes through
+- [x] **A1 (M) Rate-limit API (5.3).** Handlers under `api/`, registered with their `Access`, writes through
   `ConfigService::apply` with an `Audited` description. `maxBodyBytes` and `maxRequests` on the route and group
   bodies, with validation errors in the `fields` envelope.
-- [ ] **A2 (S) `GET /api/limits`**: the process limits in force, the key table's fill, and the refusal counters
-  (from `Metrics`), readable by a viewer.
-- [ ] **A3 (S) CLI.** `fast-proxy limits` (status) and `fast-proxy rate-limit set|clear|show <subsystem> [--route]`,
+  *Built in PR6 (`m7/pr6-admin-limits`).* `GET|PUT|DELETE /api/subsystems/{id}/rate-limit` and
+  `.../routes/{route_id}/rate-limit` (`api/rate_limits.rs`): a read is `404` when there is no policy, `burst`
+  defaults to `rate`, `key` to `client`, and the audit actions are `rate_limit.set` and `rate_limit.clear` on
+  `subsystem:{id}` or `subsystem:{id}/route:{rid}`. The subsystem detail shows each policy. Like every other
+  update, a route or group `PUT` without `maxBodyBytes` or `maxRequests` removes the cap.
+- [x] **A2 (S) `GET /api/limits`**: the process limits in force, the key table's fill, and the refusal counters
+  (from `Metrics`), readable by a viewer. *Built in PR6:* `{data: {settings, rateLimitKeys, connectionsRefused,
+  requestsRefused, clientTimeouts, rateLimitTableFull}, version}`; the counts are this instance's.
+- [x] **A3 (S) CLI.** `fast-proxy limits` (status) and `fast-proxy rate-limit set|clear|show <subsystem> [--route]`,
   following the exit codes (0, 1, 2). Also `status --local` for the container health check (L15).
-- [ ] **A4 (S) getting-started.** Keep `docs/getting-started.md` working, and add a rate-limit step to it.
+  *Built in PR6:* `rate-limit set <subsystem> [--route /api] --rate N [--per 1m] [--burst N] [--header X]
+  [--ipv6-prefix N]`; a `--per` that is not whole seconds is a usage error (2). `status --local` calls
+  `/api/health` with no token.
+- [x] **A4 (S) getting-started.** Keep `docs/getting-started.md` working, and add a rate-limit step to it.
+  *Built in PR6:* section 22.
 
 ### Workstream U: Admin UI
 
@@ -583,14 +593,15 @@ stack stays short:
 4. **PR3** LM3 (rest), D1, D3: connection caps, size limits and framing (built; split from the timeouts after G2).
 5. **PR4** D2: the slow-client timeouts (built; split from rate limiting to keep each PR reviewable).
 6. **PR5** D4, D5: rate limiting in the pipeline, exact endpoint caps (`try_track`), refusal reasons (built).
-7. **PR6** A1 to A4, U1 to U4: API, CLI, UI.
-8. **PR7** F1 to F3: fuzzing.
-9. **PR8** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
-10. **PR9** SR1 to SR3: threat model, review, fixes.
-11. **PR10** PK1 to PK4: image, release workflow, upgrade test, changelog.
-12. **PR11** W1 to W6, then PK5: documentation and the 1.0.0 release.
+7. **PR6** A1 to A4: the admin API, the CLI and the walkthrough (built; split from the UI).
+8. **PR7** U1 to U4: the admin UI.
+9. **PR8** F1 to F3: fuzzing.
+10. **PR9** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
+11. **PR10** SR1 to SR3: threat model, review, fixes.
+12. **PR11** PK1 to PK4: image, release workflow, upgrade test, changelog.
+13. **PR12** W1 to W6, then PK5: documentation and the 1.0.0 release.
 
-PR7, PR9 and PR10 depend little on PR3 to PR6 and can run beside them; SR2 must be last among code changes.
+PR8, PR10 and PR11 depend little on PR3 to PR7 and can run beside them; SR2 must be last among code changes.
 
 ## 8. Performance and cost budget
 

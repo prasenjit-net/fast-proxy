@@ -25,7 +25,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `security_headers.rs`, `tls_server.rs` (the admin listener over TLS), `api/` (one
   file per resource: subsystems, hosts, upstreams, routes, certificates, tokens, maintenance,
   audit, sampling (settings and overrides, readable by a viewer), samples (the sampled requests, admin only), acme
-  (the overview and statuses, readable by a viewer; a forced renewal is a write), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  (the overview and statuses, readable by a viewer; a forced renewal is a write), rate_limits (the policy of a
+  subsystem or route), limits (`GET /api/limits`: the process limits, key fill and refusals), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-auth/` is token and secret handling with no HTTP and no database:
   generation, SHA-256 hashing, constant-time comparison (`subtle`), roles, the failure
@@ -113,7 +114,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
   clients); never use it outside `dev-dependencies` and tests.
 - `src/cli/` and `src/commands/` are the subcommands (`maintenance`, `reload`, `status`,
-  `audit`, `samples list|export`, `acme status|renew`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
+  `audit`, `samples list|export`, `acme status|renew`, `limits`, `rate-limit show|set|clear`, `status --local`
+  (no token: a health check), `config validate`, and the offline `token` commands); exit code 0 success, 1 the
   proxy refused or a check failed, 2 usage or connection errors.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
@@ -129,8 +131,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `sampling_cluster.rs` are M6's. `acme_challenges.rs`, `acme_issuance.rs` (the runner against the in-process test CA
   with a moved clock), `acme_binary.rs` (the real binary, the CLI and a key scan) and
   `acme_cluster.rs` (two processes, the lease holder killed) are M4's; `common/acme_binary.rs`
-  holds their config helpers. `schema_upgrade.rs` starts the real binary on a database of the
-  previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
+  holds their config helpers. `cli_limits.rs` drives `limits` and `rate-limit` against the real
+  binary (M7). `schema_upgrade.rs` starts the real binary on a database of the previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
   The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
   `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
