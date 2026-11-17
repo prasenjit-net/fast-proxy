@@ -184,11 +184,24 @@ pub fn try_start_with_args(
             return Err(format!("the proxy exited at startup ({status})"));
         }
         if TcpStream::connect(proxy.admin).is_ok() && TcpStream::connect(proxy.data).is_ok() {
-            return Ok(proxy);
+            return confirm_running(proxy);
         }
         thread::sleep(Duration::from_millis(50));
     }
     Err("the proxy did not start listening in time".to_string())
+}
+
+/// A parallel test can briefly hold a port picked for this proxy, so the ports
+/// may answer from that listener while this proxy fails to bind and exits. A
+/// proxy still running a moment after both ports answered is the one that bound them.
+fn confirm_running(mut proxy: Proxy) -> Result<Proxy, String> {
+    thread::sleep(Duration::from_millis(300));
+    match proxy.child.try_wait().unwrap() {
+        Some(status) => Err(format!(
+            "the proxy exited at startup ({status}); a port was someone else's"
+        )),
+        None => Ok(proxy),
+    }
 }
 
 /// One request over a fresh connection; returns the status and body.
