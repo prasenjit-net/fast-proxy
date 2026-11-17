@@ -73,7 +73,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `upstream_client` (pooled forwarding, the retry loop, passive outcomes),
   `retry_policy` (pure retry rules), `replay_body` (a request body shared across
   attempts, counted against its `BodyCap`), `limits` (`ServerLimits`, `RequestLimits`), `request_size` (the
-  target and declared-length checks), `progress_io` (the stall watchdog: first byte, send, tunnel idle), `pending_request` (reports a request cancelled by its client as
+  target and declared-length checks), `progress_io` (the stall watchdog: first byte, send, tunnel idle), `rate_limit` (a route's policy check
+  and `Retry-After`), `pending_request` (reports a request cancelled by its client as
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
@@ -172,6 +173,9 @@ These invariants hold across the codebase; do not break them without an ADR in `
 - **Process limits are checked before upstream work** (ADR 0029): connection caps when a connection is
   accepted (before TLS), the head limits in hyper, the target and declared body length before an endpoint is
   chosen. A body cut at its cap is the client's doing: `413`, never an upstream failure, never retried.
+- **A limit's refusal is recorded once, by the pipeline**: a fixed refusal response carries `ProxyRefusal`, and
+  the pipeline writes the reason to the access log (` refused=`), `fastproxy_requests_refused_total{reason}` and the
+  sample, wherever the refusal was made.
 - **Retries are conservative:** a connect failure may be retried for any method,
   everything else only for idempotent ones; never after a body byte was read
   (`BodyOwner::is_replayable`), never for upgrades, always within the group's

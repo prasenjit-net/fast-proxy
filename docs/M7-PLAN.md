@@ -390,12 +390,22 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   Framing is hyper's (see G2); a test proves a forwarded request never carries both framing headers. The M6
   unusual-header thresholds stay lower than these limits on purpose: a request is sampled as unusual well before
   it is refused.
-- [ ] **D4 (M) Rate limiting (L6).** The lookup in the pipeline at the place 4.1 gives, the `429` with `Retry-After`,
+- [x] **D4 (M) Rate limiting (L6).** The lookup in the pipeline at the place 4.1 gives, the `429` with `Retry-After`,
   the key from the effective client address or the hashed header (L5), and the header added to the redaction list.
   Metrics `fastproxy_rate_limited_total{subsystem,route}` and `fastproxy_rate_limit_table_full_total`, with labels
   from configuration names only.
-- [ ] **D5 (S) Reasons in the access log and samples.** Each refusal (`429`, `413`, `414`, `431`, `408`, framing
+  *Built in PR5 (`m7/pr5-rate-limiting`).* The check (`rate_limit::admit`) runs before the size check and before any
+  endpoint is chosen; `Retry-After` is whole seconds, rounded up. A policy's key header joins the sampler's redaction
+  list with the maintenance bypass headers (`redactor_for`). The data plane now reserves an endpoint's place with
+  `try_track` (`reserve_slot`: when another request took the last place after selection, another endpoint is chosen,
+  which is not a retry), answers `503 endpoint_capacity` when every eligible endpoint is full, and hands an upgrade's
+  own reservation to its tunnel so it counts once.
+- [x] **D5 (S) Reasons in the access log and samples.** Each refusal (`429`, `413`, `414`, `431`, `408`, framing
   `400`, `503 endpoint_capacity`) carries its reason in the access log line and in a sample.
+  *Built in PR5.* A fixed refusal marks its own response (`ProxyRefusal`); the pipeline records it once, wherever it
+  was made: ` refused=<reason>` in the access log, `fastproxy_requests_refused_total{reason}`, and
+  `response.refused` in a sample (a field old samples simply lack). `431` and the framing `400` are answered by hyper
+  before the pipeline, so they are not marked; their sampling and counting stay as M6 left them.
 
 ### Workstream A: Admin API and CLI
 
@@ -572,15 +582,15 @@ stack stays short:
 3. **PR2** LM1 to LM3, S1, R1, B1: the limits crate, model, schema 7 with its migration, compile. No behavior yet.
 4. **PR3** LM3 (rest), D1, D3: connection caps, size limits and framing (built; split from the timeouts after G2).
 5. **PR4** D2: the slow-client timeouts (built; split from rate limiting to keep each PR reviewable).
-6. **PR5** D4, D5: rate limiting in the pipeline, exact endpoint caps (`try_track`), refusal reasons.
-6. **PR5** A1 to A4, U1 to U4: API, CLI, UI.
-7. **PR6** F1 to F3: fuzzing.
-8. **PR7** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
-9. **PR8** SR1 to SR3: threat model, review, fixes.
-10. **PR9** PK1 to PK4: image, release workflow, upgrade test, changelog.
-11. **PR10** W1 to W6, then PK5: documentation and the 1.0.0 release.
+6. **PR5** D4, D5: rate limiting in the pipeline, exact endpoint caps (`try_track`), refusal reasons (built).
+7. **PR6** A1 to A4, U1 to U4: API, CLI, UI.
+8. **PR7** F1 to F3: fuzzing.
+9. **PR8** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
+10. **PR9** SR1 to SR3: threat model, review, fixes.
+11. **PR10** PK1 to PK4: image, release workflow, upgrade test, changelog.
+12. **PR11** W1 to W6, then PK5: documentation and the 1.0.0 release.
 
-PR6, PR8 and PR9 depend little on PR3 to PR5 and can run beside them; SR2 must be last among code changes.
+PR7, PR9 and PR10 depend little on PR3 to PR6 and can run beside them; SR2 must be last among code changes.
 
 ## 8. Performance and cost budget
 
