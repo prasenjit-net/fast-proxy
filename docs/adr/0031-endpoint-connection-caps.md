@@ -31,3 +31,8 @@ selection and counting the request afterwards would let concurrent requests pass
 `EndpointRuntime::try_track(cap)` checks and counts in one compare-and-swap; the data plane switches to
 it in PR4. The cap is stored by `upstreams::set_max_requests`, apart from the policy columns an update
 rewrites.
+
+In PR5 the forwarder reserves with `try_track` (`reserve_slot`): when another request took the last place after
+selection, another endpoint is chosen without counting a retry, and when none has room the answer is
+`503 endpoint_capacity` (`Balancer::is_at_capacity` gives the same reason when selection itself found no room). An
+upgrade hands its reservation to the tunnel, so it counts once for its whole life.
