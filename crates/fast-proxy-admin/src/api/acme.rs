@@ -206,7 +206,7 @@ pub async fn renew_acme(
             "ACME is not on for this subsystem (https.acmeEnabled)".into(),
         ));
     }
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = crate::clock::now_ms();
     if let Some(status) = state.config.acme_status(id).await? {
         refuse_while_busy(&status, now)?;
     }

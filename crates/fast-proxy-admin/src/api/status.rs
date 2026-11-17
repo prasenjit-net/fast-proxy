@@ -78,7 +78,7 @@ pub async fn status(State(state): State<SharedState>) -> AppResult<Json<Envelope
     let snapshot = state.config.snapshot_holder().load();
     let enabled = snapshot.subsystems.values().filter(|s| s.enabled).count();
     let certificates = state.config.list_certificates().await?;
-    let now = chrono::Utc::now().timestamp_millis();
+    let now = crate::clock::now_ms();
     let active_tokens = state
         .config
         .list_tokens()

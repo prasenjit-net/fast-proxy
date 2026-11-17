@@ -3,7 +3,6 @@
 //! `--json`), so what a command says is testable without a terminal.
 
 use std::fmt::Write as _;
-use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
@@ -140,10 +139,9 @@ pub async fn audit(client: &AdminClient, args: &AuditArgs) -> Outcome {
 }
 
 fn audit_line(entry: &Value) -> String {
-    let at = UNIX_EPOCH + Duration::from_millis(entry["atMs"].as_u64().unwrap_or(0));
     format!(
         "{} {:<6} {}@{} {} {}",
-        humantime::format_rfc3339_seconds(at),
+        time_text(entry["atMs"].as_i64().unwrap_or(0)),
         entry["outcome"].as_str().unwrap_or("?"),
         entry["actor"].as_str().unwrap_or("?"),
         entry["source"].as_str().unwrap_or("?"),
@@ -223,10 +221,9 @@ pub async fn samples_export(
 }
 
 fn sample_line(sample: &Value) -> String {
-    let at = UNIX_EPOCH + Duration::from_millis(sample["atMs"].as_u64().unwrap_or(0));
     format!(
         "{} {} {} {} {} {} {}ms {} instance={} id={}",
-        humantime::format_rfc3339_seconds(at),
+        time_text(sample["atMs"].as_i64().unwrap_or(0)),
         sample["status"].as_u64().unwrap_or(0),
         sample["primary"].as_str().unwrap_or("?"),
         sample["subsystem"].as_str().unwrap_or("?"),
@@ -331,11 +328,39 @@ fn describe_line(scope: &Value) -> String {
     line
 }
 
+/// `0s`, `45s`, `1h 5m`, `2days 3h`: whole seconds in days, hours, minutes and seconds.
 pub(crate) fn duration_text(secs: u64) -> String {
     if secs == 0 {
         return "0s".to_string();
     }
-    humantime::format_duration(Duration::from_secs(secs)).to_string()
+    let (days, hours, minutes, seconds) = (
+        secs / 86_400,
+        secs % 86_400 / 3600,
+        secs % 3600 / 60,
+        secs % 60,
+    );
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}day{}", if days == 1 { "" } else { "s" }));
+    }
+    for (count, unit) in [(hours, "h"), (minutes, "m"), (seconds, "s")] {
+        if count > 0 {
+            parts.push(format!("{count}{unit}"));
+        }
+    }
+    parts.join(" ")
+}
+
+/// A unix time in milliseconds as `2026-08-03T10:15:42Z`.
+pub(crate) fn time_text(ms: i64) -> String {
+    let seconds = ms.div_euclid(1000);
+    time::OffsetDateTime::from_unix_timestamp(seconds)
+        .ok()
+        .and_then(|at| {
+            at.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+        .unwrap_or_else(|| format!("@{ms}ms"))
 }
 
 /// Escapes a query value (anything that is not unreserved).
@@ -353,7 +378,24 @@ fn percent_encode(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    #[test]
+    fn durations_read_in_days_hours_minutes_and_seconds() {
+        assert_eq!(duration_text(0), "0s");
+        assert_eq!(duration_text(45), "45s");
+        assert_eq!(duration_text(3600 + 300), "1h 5m");
+        assert_eq!(duration_text(86_400 + 60), "1day 1m");
+        assert_eq!(duration_text(2 * 86_400 + 3 * 3600 + 7), "2days 3h 7s");
+    }
+
+    #[test]
+    fn times_are_rfc3339_in_utc_to_the_second() {
+        assert_eq!(time_text(0), "1970-01-01T00:00:00Z");
+        assert_eq!(time_text(1_785_752_142_999), "2026-08-03T10:15:42Z");
+    }
     use crate::cli::{RemoteArgs, SampleFilters};
 
     fn on() -> MaintenanceOn {
