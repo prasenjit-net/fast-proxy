@@ -268,11 +268,31 @@ fn two_processes_inserting_and_pruning_one_file_lose_and_fail_nothing() {
             .as_i64()
             .unwrap()
     };
-    let written = || {
-        cluster.metric(&cluster.a, "fastproxy_samples_written_total")
-            + cluster.metric(&cluster.b, "fastproxy_samples_written_total")
-    };
-    eventually("every kept sample was written", || written() >= 600.0);
+    let total = |name: &str| cluster.metric(&cluster.a, name) + cluster.metric(&cluster.b, name);
+    // Wait for every sample to be accounted for, written or dropped, so a drop
+    // fails below with its reason instead of as a timeout here.
+    eventually("every kept sample was written or dropped", || {
+        total("fastproxy_samples_written_total") + total("fastproxy_samples_dropped_total") >= 600.0
+    });
+    let dropped: Vec<String> = [
+        "storm_guard",
+        "rate_limit",
+        "queue_full",
+        "budget",
+        "store_error",
+    ]
+    .into_iter()
+    .map(|reason| {
+        let name = format!("fastproxy_samples_dropped_total{{reason=\"{reason}\"}}");
+        format!("{reason}={}", total(&name))
+    })
+    .collect();
+    assert_eq!(
+        total("fastproxy_samples_dropped_total"),
+        0.0,
+        "nothing was dropped: {dropped:?}, written {}",
+        total("fastproxy_samples_written_total")
+    );
     eventually("the pruners bring the table to its row limit", || {
         rows() <= 100
     });
