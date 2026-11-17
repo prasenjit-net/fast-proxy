@@ -53,6 +53,7 @@ pub async fn create_upstream(
                 let subsystem = subsystem_name(conn, id)?;
                 let endpoints = parsed.endpoints.unwrap_or_default();
                 let group = upstreams::create(conn, id, &parsed.fields, &endpoints)?;
+                upstreams::set_max_requests(conn, id, group, parsed.fields.policy.max_requests)?;
                 Ok(Mutation {
                     value: upstream_dto(&read_group(conn, id, group)?),
                     summary: format!("upstream created: {} in {subsystem}", parsed.fields.name),
@@ -90,6 +91,12 @@ pub async fn update_upstream(
             move |conn| {
                 let subsystem = subsystem_name(conn, id)?;
                 upstreams::update(conn, id, upstream_id, &parsed.fields)?;
+                upstreams::set_max_requests(
+                    conn,
+                    id,
+                    upstream_id,
+                    parsed.fields.policy.max_requests,
+                )?;
                 Ok(Mutation {
                     value: upstream_dto(&read_group(conn, id, upstream_id)?),
                     summary: format!("upstream updated: {} in {subsystem}", parsed.fields.name),

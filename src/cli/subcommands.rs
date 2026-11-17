@@ -17,13 +17,20 @@ pub enum Command {
     /// Make a running proxy re-read its database now
     Reload(RemoteArgs),
     /// Show what a running proxy is doing
-    Status(RemoteArgs),
+    Status(StatusArgs),
     /// Show recent audit entries of a running proxy
     Audit(AuditArgs),
     /// Show what ACME is doing on a running proxy, or ask it to renew now
     Acme {
         #[command(subcommand)]
         action: AcmeAction,
+    },
+    /// Show the limits in force on a running proxy and what they refused
+    Limits(RemoteArgs),
+    /// Show, set or clear the rate limit of a subsystem or one of its routes
+    RateLimit {
+        #[command(subcommand)]
+        action: RateLimitAction,
     },
     /// List or export the sampled requests of a running proxy (an admin token)
     Samples {
@@ -63,6 +70,15 @@ pub struct RemoteArgs {
     /// Print the proxy's JSON answer instead of text
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StatusArgs {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    /// Only check that the admin plane answers, with no token (a container health check)
+    #[arg(long)]
+    pub local: bool,
 }
 
 /// What a maintenance command covers: the whole proxy, a subsystem, or a route.
@@ -208,6 +224,49 @@ pub struct AcmeRenewArgs {
     pub remote: RemoteArgs,
     /// The subsystem, by name or id
     pub subsystem: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RateLimitAction {
+    /// Show the policy of a subsystem or of one of its routes
+    Show(RateLimitTarget),
+    /// Set the policy, replacing the one there (limits are per instance)
+    Set(RateLimitSet),
+    /// Remove the policy (a route then uses its subsystem's)
+    Clear(RateLimitTarget),
+}
+
+/// Which policy a rate-limit command works on.
+#[derive(Args, Debug, Clone)]
+pub struct RateLimitTarget {
+    #[command(flatten)]
+    pub remote: RemoteArgs,
+    /// The subsystem, by name or id
+    pub subsystem: String,
+    /// A route of that subsystem, by prefix such as /api (omit for the subsystem's own policy)
+    #[arg(long)]
+    pub route: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct RateLimitSet {
+    #[command(flatten)]
+    pub target: RateLimitTarget,
+    /// Requests allowed per period, per key, on each instance
+    #[arg(long)]
+    pub rate: u32,
+    /// The period, such as 1s, 1m or 1h
+    #[arg(long, default_value = "1s", value_parser = humantime::parse_duration)]
+    pub per: Duration,
+    /// Requests allowed at once (default: the rate)
+    #[arg(long)]
+    pub burst: Option<u32>,
+    /// Key on this request header instead of the client address
+    #[arg(long)]
+    pub header: Option<String>,
+    /// The IPv6 prefix length a client address is cut to (default 64)
+    #[arg(long)]
+    pub ipv6_prefix: Option<u8>,
 }
 
 #[derive(Subcommand, Debug)]

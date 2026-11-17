@@ -1,7 +1,17 @@
 //! Metrics of the process limits (M7, ADR 0029). The only label is the fixed
 //! reason a limit refused something, never an address.
 
+use prometheus::core::Collector;
 use prometheus::{IntCounter, IntCounterVec, Opts, Registry};
+
+/// What the limits refused so far in this process, by fixed reason name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LimitCounts {
+    pub connections_refused: Vec<(String, u64)>,
+    pub requests_refused: Vec<(String, u64)>,
+    pub client_timeouts: Vec<(String, u64)>,
+    pub rate_limit_table_full: u64,
+}
 
 const REGISTRATION: &str = "static metric definitions register on a fresh registry";
 
@@ -95,4 +105,28 @@ impl LimitsMetrics {
     pub(crate) fn connection_refused(&self, reason: &'static str) {
         self.connections_refused.with_label_values(&[reason]).inc();
     }
+
+    pub(crate) fn counts(&self) -> LimitCounts {
+        LimitCounts {
+            connections_refused: by_label(&self.connections_refused),
+            requests_refused: by_label(&self.requests_refused),
+            client_timeouts: by_label(&self.client_timeouts),
+            rate_limit_table_full: self.rate_limit_table_full.get(),
+        }
+    }
+}
+
+/// Each value of a one-label counter, sorted by label.
+fn by_label(counter: &IntCounterVec) -> Vec<(String, u64)> {
+    let mut values: Vec<(String, u64)> = counter
+        .collect()
+        .iter()
+        .flat_map(|family| family.get_metric())
+        .filter_map(|metric| {
+            let label = metric.get_label().first()?.value().to_string();
+            Some((label, metric.get_counter().value() as u64))
+        })
+        .collect();
+    values.sort();
+    values
 }

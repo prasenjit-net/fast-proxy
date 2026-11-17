@@ -7,6 +7,7 @@ mod acme;
 mod client;
 mod credentials;
 mod failure;
+mod limits;
 mod remote;
 mod tokens;
 mod validate;
@@ -14,8 +15,8 @@ mod validate;
 use std::process::ExitCode;
 
 use crate::cli::{
-    AcmeAction, Cli, Command, ConfigAction, MaintenanceAction, RemoteArgs, SamplesAction,
-    TokenAction,
+    AcmeAction, Cli, Command, ConfigAction, MaintenanceAction, RateLimitAction, RemoteArgs,
+    SamplesAction, TokenAction,
 };
 use crate::config::AppConfig;
 use client::{AdminClient, Trust};
@@ -51,7 +52,24 @@ async fn execute(cli: &Cli, command: &Command) -> Outcome {
             }
         },
         Command::Reload(remote) => remote::reload(&connect(cli, remote)?, remote.json).await,
-        Command::Status(remote) => remote::status(&connect(cli, remote)?, remote.json).await,
+        Command::Status(args) if args.local => {
+            limits::health(&connect_open(cli, &args.remote)?).await
+        }
+        Command::Status(args) => {
+            remote::status(&connect(cli, &args.remote)?, args.remote.json).await
+        }
+        Command::Limits(remote) => limits::status(&connect(cli, remote)?, remote.json).await,
+        Command::RateLimit { action } => match action {
+            RateLimitAction::Show(target) => {
+                limits::show(&connect(cli, &target.remote)?, target).await
+            }
+            RateLimitAction::Set(args) => {
+                limits::set(&connect(cli, &args.target.remote)?, args).await
+            }
+            RateLimitAction::Clear(target) => {
+                limits::clear(&connect(cli, &target.remote)?, target).await
+            }
+        },
         Command::Audit(args) => remote::audit(&connect(cli, &args.remote)?, args).await,
         Command::Acme { action } => match action {
             AcmeAction::Status(remote) => {
@@ -96,6 +114,16 @@ fn connect(cli: &Cli, remote: &RemoteArgs) -> Result<AdminClient, Failure> {
     )?;
     let trust = Trust::from_flags(remote.ca_file.as_deref(), remote.insecure)?;
     AdminClient::new(&url, token, &trust)
+}
+
+/// A client with no token, for the one open route (`/api/health`).
+fn connect_open(cli: &Cli, remote: &RemoteArgs) -> Result<AdminClient, Failure> {
+    let url = match &remote.url {
+        Some(url) => url.clone(),
+        None => credentials::default_url(&loaded_config(cli)?),
+    };
+    let trust = Trust::from_flags(remote.ca_file.as_deref(), remote.insecure)?;
+    AdminClient::new(&url, None, &trust)
 }
 
 /// The database file `token` works on: `--database`, else the configured one.

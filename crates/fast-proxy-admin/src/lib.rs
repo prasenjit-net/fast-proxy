@@ -34,6 +34,8 @@ mod audit_api_tests;
 #[cfg(test)]
 mod audit_trail_tests;
 #[cfg(test)]
+mod limits_api_tests;
+#[cfg(test)]
 mod maintenance_api_tests;
 #[cfg(test)]
 mod samples_api_tests;
@@ -56,7 +58,7 @@ mod ui_page_policy_tests;
 
 pub use error::{AppError, AppResult};
 pub use router::router;
-pub use runtime_info::{ListenerInfo, RuntimeInfo, TlsInfo};
+pub use runtime_info::{LimitsInfo, ListenerInfo, RuntimeInfo, TlsInfo};
 pub use security::{AdminSecurity, SecuritySettings};
 pub use state::{AcmeAdmin, AdminState, SharedState};
 pub use tls_server::{serve_tls, StoredCertificate};

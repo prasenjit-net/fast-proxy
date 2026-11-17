@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_admin::{
-    serve_tls, AdminSecurity, AdminState, ListenerInfo, RuntimeInfo, SecuritySettings,
+    serve_tls, AdminSecurity, AdminState, LimitsInfo, ListenerInfo, RuntimeInfo, SecuritySettings,
     StoredCertificate, TlsInfo,
 };
 use fast_proxy_config_service::{
@@ -132,6 +132,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             .collect(),
         database_path: database.display().to_string(),
         sampling_enabled: config.sampling.enabled,
+        limits: limits_info(&config.limits),
         tls: TlsInfo {
             enabled: config.data_plane.tls.enabled,
             listen: https.as_ref().map(|plane| plane.listener().local_addr()),
@@ -354,6 +355,24 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
+}
+
+/// `[limits]` as `GET /api/limits` reports it.
+fn limits_info(limits: &LimitsConfig) -> LimitsInfo {
+    let millis = |time: Duration| u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
+    LimitsInfo {
+        max_connections: limits.max_connections,
+        max_connections_per_client: limits.max_connections_per_client,
+        header_read_timeout_ms: millis(limits.header_read_timeout),
+        body_read_timeout_ms: millis(limits.body_read_timeout),
+        send_timeout_ms: millis(limits.send_timeout),
+        tunnel_idle_timeout_ms: (!limits.tunnel_idle_timeout.is_zero())
+            .then(|| millis(limits.tunnel_idle_timeout)),
+        max_header_count: limits.max_header_count,
+        max_header_bytes: limits.max_header_bytes,
+        max_uri_bytes: limits.max_uri_bytes,
+        max_body_bytes: (limits.max_body_bytes > 0).then_some(limits.max_body_bytes),
+    }
 }
 
 /// The connection and head limits of `[limits]`, as the data plane takes them.

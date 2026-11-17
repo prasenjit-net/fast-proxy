@@ -22,6 +22,24 @@ pub struct TlsInfo {
     pub redirect_port: u16,
 }
 
+/// The process limits in force (`[limits]` in `config.toml`, ADR 0029), as
+/// `GET /api/limits` reports them. Times are milliseconds; `None` is off or
+/// unlimited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LimitsInfo {
+    pub max_connections: usize,
+    /// 0 means the per-client check is off.
+    pub max_connections_per_client: usize,
+    pub header_read_timeout_ms: u64,
+    pub body_read_timeout_ms: u64,
+    pub send_timeout_ms: u64,
+    pub tunnel_idle_timeout_ms: Option<u64>,
+    pub max_header_count: usize,
+    pub max_header_bytes: usize,
+    pub max_uri_bytes: usize,
+    pub max_body_bytes: Option<u64>,
+}
+
 /// Facts about the running process that only the binary knows, reported by
 /// `GET /api/status`.
 #[derive(Debug, Clone, Default)]
@@ -32,4 +50,6 @@ pub struct RuntimeInfo {
     /// Request sampling runs in this process (`[sampling].enabled`); the
     /// samples of other instances can be read either way.
     pub sampling_enabled: bool,
+    /// The process limits, for `GET /api/limits`.
+    pub limits: LimitsInfo,
 }

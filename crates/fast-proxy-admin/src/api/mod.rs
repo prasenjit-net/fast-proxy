@@ -15,7 +15,9 @@ mod hosts;
 mod https_dto;
 mod input;
 mod json;
+mod limits;
 mod maintenance;
+mod rate_limits;
 mod reload;
 mod resolve;
 mod revisions;
@@ -42,9 +44,14 @@ pub use certificates::{
 };
 pub use endpoints::{add_endpoint, delete_endpoint, set_endpoint_state, update_endpoint};
 pub use hosts::{add_host, remove_host};
+pub use limits::limits_status;
 pub use maintenance::{
     clear_global, clear_route, clear_subsystem, list_maintenance, set_global, set_route,
     set_subsystem,
+};
+pub use rate_limits::{
+    clear_route_rate_limit, clear_subsystem_rate_limit, get_route_rate_limit,
+    get_subsystem_rate_limit, set_route_rate_limit, set_subsystem_rate_limit,
 };
 pub use reload::reload;
 pub use resolve::resolve;

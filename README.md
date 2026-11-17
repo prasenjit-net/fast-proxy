@@ -340,14 +340,17 @@ All routes except `/api/health` need `Authorization: Bearer <token>`; a missing 
 | GET, PUT, DELETE | `/api/subsystems/{id}` | Detail (hosts, upstreams, routes in match order) / replace / delete |
 | POST | `/api/subsystems/{id}/hosts` | Add a host pattern (`pattern`) |
 | DELETE | `/api/subsystems/{id}/hosts/{host_id}` | Remove a host pattern |
-| GET, POST | `/api/subsystems/{id}/upstreams` | List / create a group: `name`, `endpoints` (`addr`, `weight`, `state`), and optional `lb`, `failurePolicy`, `health`, `passive`, `retryBudget` |
+| GET, POST | `/api/subsystems/{id}/upstreams` | List / create a group: `name`, `endpoints` (`addr`, `weight`, `state`), and optional `lb`, `failurePolicy`, `health`, `passive`, `retryBudget`, `maxRequests` (requests in flight per endpoint) |
 | PUT, DELETE | `/api/subsystems/{id}/upstreams/{upstream_id}` | Replace the name and policy (endpoints are separate) / delete (409 while a route uses it) |
 | POST | `/api/subsystems/{id}/upstreams/{upstream_id}/endpoints` | Add an endpoint (`addr`, `weight`, `state`) |
 | PUT, DELETE | `.../endpoints/{endpoint_id}` | Replace / remove (409 for the last endpoint of a group) |
 | PUT | `.../endpoints/{endpoint_id}/state` | `{ "state": "enabled" \| "draining" \| "disabled" }`: takes effect for the next request |
 | GET | `.../upstreams/{upstream_id}/status` | Live state per endpoint: effective state and why, in-flight, latency, last probe |
 | GET, POST | `/api/subsystems/{id}/routes` | List in match order / create (optional `retry`: `maxAttempts`, `idempotentOn5xx`, `onTimeout`) |
-| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete |
+| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete (optional `maxBodyBytes`: the route's body cap) |
+| GET, PUT, DELETE | `/api/subsystems/{id}/rate-limit` | The subsystem's rate-limit policy (404 when none) / set `{rate, periodSecs, burst?, key?: "client"\|"header", header?, ipv6Prefix?}` / clear |
+| GET, PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}/rate-limit` | The same for one route; it replaces the subsystem's policy on that route |
+| GET | `/api/limits` | The `[limits]` in force, the rate-limit key table's fill, and refusals by reason (readable by a `viewer`) |
 | GET | `/api/revisions?limit=&before=` | Revision history, newest first (paged) |
 | GET | `/api/revisions/{version}` | The full configuration as of that revision |
 | POST | `/api/revisions/{version}/rollback` | Re-apply a revision as a new one |

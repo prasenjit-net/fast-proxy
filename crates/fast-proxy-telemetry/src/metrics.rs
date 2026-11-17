@@ -398,6 +398,11 @@ impl Metrics {
         self.limits.rate_limited(subsystem, route);
     }
 
+    /// What the limits refused so far, for `GET /api/limits`.
+    pub fn limit_counts(&self) -> crate::LimitCounts {
+        self.limits.counts()
+    }
+
     /// Counts a new client let through because the key table was full.
     pub fn rate_limit_table_full(&self) {
         self.limits.rate_limit_table_full();

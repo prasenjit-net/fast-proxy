@@ -544,7 +544,37 @@ The state goes `pending`, then `valid` with the certificate's expiry; a failure 
 the CA's reason (`unauthorized: ...` when the challenge was not reachable) and when
 the next attempt is due. The certificate is served from the next handshake on.
 
+## 22. Rate limits and request caps
+
+Allow each client two requests a minute on `shop`, with no burst beyond that:
+
+```sh
+curl -s -H "$H" -H "$J" -X PUT -d '{"rate":2,"periodSecs":60}' $A/subsystems/1/rate-limit
+for i in 1 2 3; do curl -si -H 'Host: shop.example.com' http://127.0.0.1:8000/ | head -1; done
+# 200, 200, then 429 Too Many Requests with Retry-After; the backend never sees the third
+curl -s -H "$H" $A/limits          # the limits in force, the key table, refusals by reason
+curl -s -H "$H" -X DELETE $A/subsystems/1/rate-limit
+```
+
+A route can have its own policy (`$A/subsystems/1/routes/$ROUTE/rate-limit`), which
+replaces the subsystem's for that route; `"key":"header","header":"X-Customer"` counts
+per header value instead of per client address. Limits are **per instance**: three
+instances admit up to three times the rate. A route's `maxBodyBytes` caps its request
+bodies (413), and a group's `maxRequests` caps the requests in flight to each of its
+endpoints (a full endpoint is skipped; when all are full the answer is 503). The
+connection, header, size and timeout limits are process settings, in `[limits]` of
+`config.toml`. The shell form:
+
+```sh
+fast-proxy rate-limit set shop --rate 2 --per 1m
+fast-proxy rate-limit set shop --route /api --rate 100 --per 1s --burst 200 --header X-Customer
+fast-proxy rate-limit show shop
+fast-proxy rate-limit clear shop
+fast-proxy limits
+fast-proxy status --local          # liveness only, no token: for a container health check
+```
+
 ## Not available yet
 
-Rate limits and the 1.0 hardening are the next milestone (see
-[ROADMAP.md](ROADMAP.md)).
+The rest of the 1.0 hardening (fuzzing, the threat model, packaging) is still to
+come (see [ROADMAP.md](ROADMAP.md)).
