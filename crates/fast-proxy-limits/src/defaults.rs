@@ -16,3 +16,11 @@ pub const MAX_HEADER_COUNT: usize = 100;
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Bytes of request target (path and query); longer is refused with 414.
 pub const MAX_URI_BYTES: usize = 8 * 1024;
+/// How long a request body may stall (no bytes arrive) once the upstream is
+/// reading it; the request is then answered 408 (ADR 0029).
+pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long writes to a client may stay blocked (it is not reading) before the
+/// connection is closed.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long an upgraded tunnel (WebSocket) may carry no bytes either way.
+pub const TUNNEL_IDLE_TIMEOUT: Duration = Duration::from_secs(3600);

@@ -68,6 +68,13 @@ pub struct ConnectionGuard {
     _permit: ConnectionPermit,
 }
 
+impl ConnectionGuard {
+    /// The metrics the connection reports to (a tunnel counts its own close).
+    pub(crate) fn metrics(&self) -> &Metrics {
+        &self.tracker.metrics
+    }
+}
+
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.tracker.metrics.connection_closed();
@@ -100,6 +107,9 @@ pub struct ConnectionContext {
     pub scheme: &'static str,
     /// Set on the HTTPS listener only.
     pub tls: Option<Arc<TlsConnection>>,
+    /// How long a tunnel from this connection may carry nothing; `None` never
+    /// closes it.
+    pub tunnel_idle: Option<std::time::Duration>,
 }
 
 #[cfg(test)]

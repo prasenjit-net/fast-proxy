@@ -14,6 +14,7 @@ mod listener;
 mod maintenance;
 mod pending_request;
 mod pipeline;
+mod progress_io;
 mod protocol_switch;
 mod redirect;
 mod replay_body;
@@ -61,10 +62,12 @@ mod test_upstream;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod timeout_tests;
+#[cfg(test)]
 mod upgrade_tests;
 
 pub use forward::{Forward, Forwarded, ResponseBody, Target};
-pub use limits::{BodyCap, RequestLimits, ServerLimits};
+pub use limits::{BodyLimits, RequestLimits, ServerLimits};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use replay_body::{BodyObservation, BodyStats};

@@ -192,6 +192,7 @@ async fn a_long_request_target_is_414_and_never_forwarded() {
     let limits = RequestLimits {
         max_uri_bytes: 64,
         max_body_bytes: None,
+        ..RequestLimits::default()
     };
     let proxy = proxy(&upstream, None, (ServerLimits::default(), limits)).await;
     let long = format!("/{}", "a".repeat(64));
@@ -208,6 +209,7 @@ async fn a_declared_body_over_the_routes_cap_is_413_before_any_upstream_work() {
     let limits = RequestLimits {
         max_uri_bytes: 1024,
         max_body_bytes: Some(1_000_000),
+        ..RequestLimits::default()
     };
     // The route's own cap (10) wins over the process default.
     let proxy = proxy(&upstream, Some(10), (ServerLimits::default(), limits)).await;
@@ -247,6 +249,7 @@ async fn a_streamed_body_over_its_cap_is_cut_with_413_and_the_upstream_is_not_bl
     let limits = RequestLimits {
         max_uri_bytes: 1024,
         max_body_bytes: Some(16),
+        ..RequestLimits::default()
     };
     let proxy = Arc::new(proxy(&upstream, None, (ServerLimits::default(), limits)).await);
     let chunk = "a".repeat(10);

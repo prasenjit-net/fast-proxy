@@ -285,6 +285,9 @@ failed (the message carries the proxy's own reason and names each bad field),
 | `limits.max_header_bytes` | `64 KiB` | Request head size (at least 8 KiB); larger is `431` |
 | `limits.max_uri_bytes` | `8 KiB` | Request target (path and query); longer is `414` |
 | `limits.max_body_bytes` | `0` | Body cap for routes that set none; larger is `413` before anything is forwarded, or cut while streaming; `0` is unlimited |
+| `limits.body_read_timeout` | `30s` | A request body that stops arriving this long is answered `408` (the upstream is not blamed) |
+| `limits.send_timeout` | `60s` | A client that stops reading its response this long is disconnected |
+| `limits.tunnel_idle_timeout` | `1h` | An upgraded tunnel (WebSocket) idle both ways this long is closed; `0s` never closes one |
 | `limits.rate_limit_keys` | `100000` | Client keys all rate-limit tables together may hold; a new client finding no room is let through and counted |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |

@@ -53,6 +53,7 @@ mod tests {
         RequestLimits {
             max_uri_bytes: 32,
             max_body_bytes,
+            ..RequestLimits::default()
         }
     }
 

@@ -26,7 +26,9 @@ use crate::sampling_tail::{SamplingSource, SamplingTail};
 use crate::selection::select_endpoint;
 use crate::tracked_body::TrackedBody;
 use crate::trusted_proxies::TrustedProxies;
-use crate::{BodyCap, FixedResponse, Forward, Observability, RequestLimits, ResponseBody, Target};
+use crate::{
+    BodyLimits, FixedResponse, Forward, Observability, RequestLimits, ResponseBody, Target,
+};
 
 /// What the snapshot says should happen to a request.
 enum Resolved<'snapshot> {
@@ -266,8 +268,11 @@ impl<F: Forward> RequestPipeline<F> {
                     self.request_limits,
                     route.max_body_bytes,
                 );
-                if let Ok(Some(cap)) = size {
-                    request.extensions_mut().insert(BodyCap(cap));
+                if let Ok(cap) = size {
+                    request.extensions_mut().insert(BodyLimits {
+                        cap,
+                        read_timeout: self.request_limits.body_read_timeout,
+                    });
                 }
                 // An oversized request never selects (nor counts against) an endpoint.
                 let selection = match size {

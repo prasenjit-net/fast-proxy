@@ -366,6 +366,9 @@ fn server_limits(limits: &LimitsConfig) -> ServerLimits {
         header_read_timeout: limits.header_read_timeout,
         max_header_count: limits.max_header_count,
         max_header_bytes: limits.max_header_bytes,
+        send_timeout: limits.send_timeout,
+        tunnel_idle_timeout: (!limits.tunnel_idle_timeout.is_zero())
+            .then_some(limits.tunnel_idle_timeout),
     }
 }
 
@@ -374,6 +377,7 @@ fn request_limits(limits: &LimitsConfig) -> RequestLimits {
     RequestLimits {
         max_uri_bytes: limits.max_uri_bytes,
         max_body_bytes: (limits.max_body_bytes > 0).then_some(limits.max_body_bytes),
+        body_read_timeout: limits.body_read_timeout,
     }
 }
 

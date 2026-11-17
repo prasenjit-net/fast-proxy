@@ -29,6 +29,16 @@ pub struct LimitsConfig {
     pub max_uri_bytes: usize,
     /// The body cap of routes that set none; 0 is unlimited. Larger bodies get 413.
     pub max_body_bytes: u64,
+    /// How long a request body may stall once the upstream reads it (then 408).
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub body_read_timeout: Duration,
+    /// How long writes to a client that stopped reading may stay blocked.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub send_timeout: Duration,
+    /// How long a tunnel (WebSocket) may carry nothing either way; "0s" never
+    /// closes an idle tunnel.
+    #[serde(deserialize_with = "deserialize_duration")]
+    pub tunnel_idle_timeout: Duration,
     /// How many client keys every rate-limit table together may hold. When it is
     /// reached, idle keys make room; if none is idle a new client is let through
     /// and counted (fail open), so the table cannot be turned against everyone.
@@ -45,6 +55,9 @@ impl Default for LimitsConfig {
             max_header_bytes: defaults::MAX_HEADER_BYTES,
             max_uri_bytes: defaults::MAX_URI_BYTES,
             max_body_bytes: 0,
+            body_read_timeout: defaults::BODY_READ_TIMEOUT,
+            send_timeout: defaults::SEND_TIMEOUT,
+            tunnel_idle_timeout: defaults::TUNNEL_IDLE_TIMEOUT,
             rate_limit_keys: fast_proxy_limits::DEFAULT_KEY_CAPACITY,
         }
     }

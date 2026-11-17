@@ -28,6 +28,8 @@ pub enum FixedResponse {
     PayloadTooLarge,
     /// The request target is longer than the proxy accepts (ADR 0029).
     UriTooLong,
+    /// The request body stopped arriving (ADR 0029).
+    RequestTimeout,
 }
 
 impl FixedResponse {
@@ -40,6 +42,7 @@ impl FixedResponse {
             Self::GatewayTimeout => StatusCode::GATEWAY_TIMEOUT,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UriTooLong => StatusCode::URI_TOO_LONG,
+            Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
         }
     }
 
@@ -54,6 +57,7 @@ impl FixedResponse {
             Self::GatewayTimeout => "gateway_timeout",
             Self::PayloadTooLarge => "payload_too_large",
             Self::UriTooLong => "uri_too_long",
+            Self::RequestTimeout => "request_timeout",
         }
     }
 
@@ -68,6 +72,7 @@ impl FixedResponse {
             Self::GatewayTimeout => "gateway timeout",
             Self::PayloadTooLarge => "request body too large",
             Self::UriTooLong => "request target too long",
+            Self::RequestTimeout => "request body timed out",
         }
     }
 
@@ -142,7 +147,7 @@ mod tests {
 
     use super::*;
 
-    const ALL: [FixedResponse; 9] = [
+    const ALL: [FixedResponse; 10] = [
         FixedResponse::UnknownHost,
         FixedResponse::SubsystemDisabled,
         FixedResponse::NoRoute,
@@ -150,6 +155,7 @@ mod tests {
         FixedResponse::MisdirectedRequest,
         FixedResponse::PayloadTooLarge,
         FixedResponse::UriTooLong,
+        FixedResponse::RequestTimeout,
         FixedResponse::BadGateway,
         FixedResponse::GatewayTimeout,
     ];
@@ -162,7 +168,7 @@ mod tests {
     #[test]
     fn maps_each_kind_to_its_status() {
         let statuses: Vec<u16> = ALL.iter().map(|r| r.status().as_u16()).collect();
-        assert_eq!(statuses, [404, 503, 404, 503, 421, 413, 414, 502, 504]);
+        assert_eq!(statuses, [404, 503, 404, 503, 421, 413, 414, 408, 502, 504]);
     }
 
     #[tokio::test]

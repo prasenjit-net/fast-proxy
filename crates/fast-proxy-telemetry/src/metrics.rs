@@ -380,6 +380,12 @@ impl Metrics {
         self.limits.connection_refused(reason);
     }
 
+    /// Counts a client closed or answered for making no progress; `kind` is a
+    /// fixed name such as `first_byte`, `body`, `send` or `tunnel_idle`.
+    pub fn client_timeout(&self, kind: &'static str) {
+        self.limits.client_timeout(kind);
+    }
+
     pub fn connection_opened(&self) {
         self.active_connections.inc();
     }
@@ -739,6 +745,17 @@ mod tests {
             metrics.maintenance_response("subsystem", "shop", "_none");
         }
         assert_eq!(metrics.traffic_totals().overall().errors, 0);
+    }
+
+    #[test]
+    fn client_timeouts_are_counted_by_kind() {
+        let metrics = Metrics::new();
+        metrics.client_timeout("first_byte");
+        metrics.client_timeout("body");
+        metrics.client_timeout("body");
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_client_timeouts_total{kind="first_byte"} 1"#));
+        assert!(text.contains(r#"fastproxy_client_timeouts_total{kind="body"} 2"#));
     }
 
     #[test]

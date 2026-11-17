@@ -107,6 +107,20 @@ fn validate_limits(limits: &LimitsConfig) -> Result<(), ConfigError> {
             fast_proxy_model::MAX_REQUEST_BODY_BYTES,
         )?;
     }
+    for (name, timeout) in [
+        ("body_read_timeout", limits.body_read_timeout),
+        ("send_timeout", limits.send_timeout),
+    ] {
+        within(name, timeout.as_millis() as u64, 1_000, 3_600_000)?;
+    }
+    if !limits.tunnel_idle_timeout.is_zero() {
+        within(
+            "tunnel_idle_timeout",
+            limits.tunnel_idle_timeout.as_millis() as u64,
+            1_000,
+            7 * 86_400_000,
+        )?;
+    }
     within(
         "rate_limit_keys",
         limits.rate_limit_keys as u64,

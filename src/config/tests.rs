@@ -522,3 +522,31 @@ fn every_limit_parses_and_its_bounds_are_enforced() {
         assert!(err.contains(field), "{bad}: {err}");
     }
 }
+
+#[test]
+fn the_slow_client_timeouts_parse_and_are_bounded() {
+    let config = parse(
+        "[limits]\nbody_read_timeout = \"5s\"\nsend_timeout = \"15s\"\ntunnel_idle_timeout = \"0s\"\n",
+    )
+    .unwrap();
+    config.validate().unwrap();
+    let limits = &config.limits;
+    assert_eq!(limits.body_read_timeout, std::time::Duration::from_secs(5));
+    assert_eq!(limits.send_timeout, std::time::Duration::from_secs(15));
+    assert!(
+        limits.tunnel_idle_timeout.is_zero(),
+        "0s turns the tunnel rule off"
+    );
+    for (bad, field) in [
+        ("body_read_timeout = \"500ms\"", "limits.body_read_timeout"),
+        ("send_timeout = \"2h\"", "limits.send_timeout"),
+        (
+            "tunnel_idle_timeout = \"500ms\"",
+            "limits.tunnel_idle_timeout",
+        ),
+    ] {
+        let config = parse(&format!("[limits]\n{bad}\n")).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains(field), "{bad}: {err}");
+    }
+}

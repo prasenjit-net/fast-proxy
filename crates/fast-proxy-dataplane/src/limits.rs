@@ -17,6 +17,10 @@ pub struct ServerLimits {
     pub max_header_count: usize,
     /// A request head larger than this is refused with 431.
     pub max_header_bytes: usize,
+    /// How long writes to a client may stay blocked before it is closed.
+    pub send_timeout: Duration,
+    /// How long a tunnel may carry nothing either way; `None` never closes it.
+    pub tunnel_idle_timeout: Option<Duration>,
 }
 
 impl Default for ServerLimits {
@@ -29,6 +33,8 @@ impl Default for ServerLimits {
             header_read_timeout: defaults::HEADER_READ_TIMEOUT,
             max_header_count: defaults::MAX_HEADER_COUNT,
             max_header_bytes: defaults::MAX_HEADER_BYTES,
+            send_timeout: defaults::SEND_TIMEOUT,
+            tunnel_idle_timeout: Some(defaults::TUNNEL_IDLE_TIMEOUT),
         }
     }
 }
@@ -40,6 +46,8 @@ pub struct RequestLimits {
     pub max_uri_bytes: usize,
     /// The body cap of a route that sets none; `None` is unlimited.
     pub max_body_bytes: Option<u64>,
+    /// How long a request body may stall once the upstream is reading it.
+    pub body_read_timeout: Duration,
 }
 
 impl Default for RequestLimits {
@@ -47,11 +55,15 @@ impl Default for RequestLimits {
         Self {
             max_uri_bytes: defaults::MAX_URI_BYTES,
             max_body_bytes: None,
+            body_read_timeout: defaults::BODY_READ_TIMEOUT,
         }
     }
 }
 
-/// The body cap the pipeline settled for one request, carried in its
-/// extensions to the forwarder, which counts the body against it.
+/// What the pipeline settled for one request's body, carried in its extensions
+/// to the forwarder: the most bytes it may have, and how long it may stall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BodyCap(pub u64);
+pub struct BodyLimits {
+    pub cap: Option<u64>,
+    pub read_timeout: Duration,
+}

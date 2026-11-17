@@ -21,12 +21,12 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 use crate::connections::ConnectionContext;
 use crate::headers::{self, ClientInfo};
 use crate::protocol_switch::{into_client_response, switch_protocols};
-use crate::replay_body::{exceeds_body_cap, BodyOwner, BodyStats, ReplayBody};
+use crate::replay_body::{client_body_fault, BodyOwner, BodyStats, ClientBodyFault, ReplayBody};
 use crate::retry_policy::{retry_reason, AttemptFailure};
 use crate::selection::select_endpoint;
 use crate::trusted_proxies::TrustedProxies;
 use crate::upstream_errors::{failure_of, kind_for, outcome_of_error, outcome_of_status};
-use crate::{BodyCap, FixedResponse, Forward, Forwarded, ResponseBody, Target};
+use crate::{BodyLimits, FixedResponse, Forward, Forwarded, ResponseBody, Target};
 
 type HttpClient = Client<HttpsConnector<HttpConnector>, ReplayBody>;
 
@@ -163,9 +163,9 @@ enum AttemptEnd {
         kind: UpstreamErrorKind,
         failure: FailureKind,
     },
-    /// The client's body went past its cap: the client's doing, so the
-    /// endpoint is not blamed and nothing is retried.
-    BodyCapExceeded,
+    /// The client's body went past its cap or stalled: the client's doing, so
+    /// the endpoint is not blamed and nothing is retried.
+    ClientBody(ClientBodyFault),
 }
 
 impl UpstreamClient {
@@ -237,9 +237,10 @@ impl UpstreamClient {
                     failure: FailureKind::ResponseTimeout,
                 }
             }
-            Ok(Err(err)) if exceeds_body_cap(&err) => {
-                tracing::debug!(upstream = %chosen.endpoint.addr, "request body over its cap");
-                AttemptEnd::BodyCapExceeded
+            Ok(Err(err)) if client_body_fault(&err).is_some() => {
+                let fault = client_body_fault(&err).unwrap_or(ClientBodyFault::OverCap);
+                tracing::debug!(upstream = %chosen.endpoint.addr, "client body: {fault}");
+                AttemptEnd::ClientBody(fault)
             }
             Ok(Err(err)) => {
                 tracing::warn!(upstream = %chosen.endpoint.addr, "upstream request failed: {err}");
@@ -418,8 +419,8 @@ impl Forward for UpstreamClient {
         );
         headers::apply_request_id(&mut head.headers, target.request_id);
 
-        let cap = head.extensions.get::<BodyCap>().map(|cap| cap.0);
-        let owner = BodyOwner::new(body, target.request_body, cap);
+        let body_limits = head.extensions.get::<BodyLimits>().copied();
+        let owner = BodyOwner::new(body, target.request_body, body_limits);
         let client = self.client_for(
             route.connect_timeout,
             upstream.client_tls.as_ref(),
@@ -509,9 +510,15 @@ impl Forward for UpstreamClient {
                         }
                     }
                 }
-                AttemptEnd::BodyCapExceeded => {
-                    let response =
-                        FixedResponse::PayloadTooLarge.render(target.request_id, target.wants_json);
+                AttemptEnd::ClientBody(fault) => {
+                    let fixed = match fault {
+                        ClientBodyFault::OverCap => FixedResponse::PayloadTooLarge,
+                        ClientBodyFault::Stalled => {
+                            self.metrics.client_timeout("body");
+                            FixedResponse::RequestTimeout
+                        }
+                    };
+                    let response = fixed.render(target.request_id, target.wants_json);
                     return finished(
                         response,
                         (chosen.index, attempts),

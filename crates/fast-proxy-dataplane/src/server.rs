@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::connections::{ConnectionContext, ConnectionGuard, ConnectionTracker};
+use crate::progress_io::{self, Deadlines, ProgressIo};
 use crate::{BoundListener, Forward, Http2Limits, RequestPipeline, ServerLimits, TlsPlane};
 
 /// hyper's own header-count limit: setting another value moves its header
@@ -181,6 +182,7 @@ async fn accept_loop<F: Forward>(
                     force_close: signals.force_close.clone(),
                     scheme: "http",
                     tls: None,
+                    tunnel_idle: signals.limits.tunnel_idle_timeout,
                 };
                 tokio::spawn(serve_connection(
                     stream,
@@ -227,6 +229,7 @@ async fn tls_accept_loop<F: Forward>(
                     force_close: signals.force_close.clone(),
                     scheme: "https",
                     tls: None,
+                    tunnel_idle: signals.limits.tunnel_idle_timeout,
                 };
                 let shutdown = signals.shutdown.clone();
                 tokio::spawn(async move {
@@ -303,6 +306,15 @@ async fn serve_connection<F: Forward, S: AsyncRead + AsyncWrite + Unpin + Send +
     http2: Option<Http2Limits>,
 ) {
     let force_close = context.force_close.clone();
+    let metrics = pipeline.metrics();
+    let stream = ProgressIo::new(stream);
+    let progress = stream.progress();
+    // hyper bounds the head and idle keep-alive; these are what it does not.
+    let deadlines = Deadlines {
+        first_byte: Some(limits.header_read_timeout),
+        send: Some(limits.send_timeout),
+        idle: None,
+    };
     let service = service_fn(move |mut request| {
         let pipeline = pipeline.clone();
         request.extensions_mut().insert(context.clone());
@@ -333,6 +345,11 @@ async fn serve_connection<F: Forward, S: AsyncRead + AsyncWrite + Unpin + Send +
 
     let result = tokio::select! {
         result = connection.as_mut() => result,
+        stall = progress_io::watch(progress, deadlines) => {
+            tracing::debug!(%peer, stall = stall.label(), "closing a stalled connection");
+            metrics.client_timeout(stall.label());
+            return;
+        }
         () = shutdown.cancelled() => {
             // Finish the request in flight (idle connections close at once),
             // but never past the drain deadline.
