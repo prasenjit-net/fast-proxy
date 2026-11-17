@@ -44,7 +44,7 @@ pub fn spawn_endpoint_bridge(state: SharedState) {
                         endpoint: event.endpoint,
                         change,
                         detail,
-                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        timestamp_ms: crate::clock::now_ms(),
                     });
                     state.activity("health", message);
                 }
