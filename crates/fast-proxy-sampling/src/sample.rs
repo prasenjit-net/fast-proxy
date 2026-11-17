@@ -45,6 +45,9 @@ pub struct SampleResponse {
     pub body: Option<SampleBody>,
     /// Why there is no body: `off`, `budget`, `content_type`, `upgrade`.
     pub body_omitted: Option<String>,
+    /// The proxy limit that refused the request, when one did (M7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +157,7 @@ impl Sample {
                 bytes: raw.outcome.bytes_out,
                 body: response_body.and_then(|(body, _)| body),
                 body_omitted: body_omitted.map(String::from),
+                refused: raw.outcome.refused.map(String::from),
             },
             total_ms: raw.outcome.elapsed_ms,
             upstream: SampleUpstream {

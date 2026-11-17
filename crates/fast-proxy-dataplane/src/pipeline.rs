@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
+use fast_proxy_limits::Admission;
 use fast_proxy_routing::{
     redirect_target, CompiledMaintenance, CompiledRoute, CompiledSubsystem, Lookup, Snapshot,
     SnapshotHolder, ACME_CHALLENGE_PREFIX,
@@ -18,10 +19,12 @@ use crate::acme_challenge;
 use crate::connections::{ConnectionContext, TlsConnection};
 use crate::maintenance::{self, evaluate, BypassedScopes, ScopeOutcome, BYPASS_HEADER};
 use crate::pending_request::PendingRequest;
+use crate::rate_limit;
 use crate::redirect::{hsts_value, render_redirect};
 use crate::request_id::{header_value, request_id_for, REQUEST_ID};
 use crate::request_size;
 use crate::responses::accepts_json;
+use crate::responses::ProxyRefusal;
 use crate::sampling_tail::{SamplingSource, SamplingTail};
 use crate::selection::select_endpoint;
 use crate::tracked_body::TrackedBody;
@@ -160,6 +163,7 @@ impl<F: Forward> RequestPipeline<F> {
             upstream_time: None,
             bytes_out: 0,
             maintenance: None,
+            refused: None,
         };
         // If the client leaves before there is a response, dropping this
         // reports the request as cancelled (499) instead of losing it.
@@ -262,25 +266,51 @@ impl<F: Forward> RequestPipeline<F> {
                 known.route = route.prefix.clone();
                 let upstream = &route.upstream;
                 bypassed.strip_secrets(request.headers_mut());
-                let size = request_size::check(
-                    request.uri(),
-                    request.headers(),
-                    self.request_limits,
-                    route.max_body_bytes,
-                );
+                // The rate limit first, then the size: both before any endpoint.
+                let rate = rate_limit::admit(route, request.headers(), client);
+                let size = match rate {
+                    Some(Admission::Limited { retry_after }) => {
+                        self.observability
+                            .metrics
+                            .rate_limited(subsystem.name.as_str(), &route.prefix);
+                        Err((FixedResponse::TooManyRequests, Some(retry_after)))
+                    }
+                    other => {
+                        if other == Some(Admission::TableFull) {
+                            self.observability.metrics.rate_limit_table_full();
+                        }
+                        request_size::check(
+                            request.uri(),
+                            request.headers(),
+                            self.request_limits,
+                            route.max_body_bytes,
+                        )
+                        .map_err(|refusal| (refusal, None))
+                    }
+                };
                 if let Ok(cap) = size {
                     request.extensions_mut().insert(BodyLimits {
                         cap,
                         read_timeout: self.request_limits.body_read_timeout,
                     });
                 }
-                // An oversized request never selects (nor counts against) an endpoint.
+                // A refused request never selects (nor counts against) an endpoint.
                 let selection = match size {
                     Ok(_) => select_endpoint(upstream, request.headers(), client_addr.ip(), None),
                     Err(_) => None,
                 };
                 match (size, selection) {
-                    (Err(refusal), _) => refusal.render(&request_id, wants_json),
+                    (Err((refusal, wait)), _) => {
+                        let mut response = refusal.render(&request_id, wants_json);
+                        if let Some(wait) = wait {
+                            let (name, value) = rate_limit::retry_after(wait);
+                            response.headers_mut().insert(name, value);
+                        }
+                        response
+                    }
+                    (Ok(_), None) if upstream.balancer.is_at_capacity(&upstream.candidates) => {
+                        FixedResponse::EndpointCapacity.render(&request_id, wants_json)
+                    }
                     (Ok(_), None) => {
                         FixedResponse::NoHealthyUpstream.render(&request_id, wants_json)
                     }
@@ -341,6 +371,16 @@ impl<F: Forward> RequestPipeline<F> {
                 }
             }
         };
+
+        // A refusal by one of the proxy's limits, wherever it was made, is
+        // logged, counted and given to the sampler with its reason.
+        if let Some(ProxyRefusal(reason)) = response.extensions().get::<ProxyRefusal>().copied() {
+            pending.fields_mut().refused = Some(reason);
+            self.observability.metrics.request_refused(reason);
+            if let Some(tail) = pending.sampling_mut() {
+                tail.refused = Some(reason);
+            }
+        }
 
         // A request that passed through maintenance says so, and is counted.
         if let Some(value) = bypassed.header_value() {

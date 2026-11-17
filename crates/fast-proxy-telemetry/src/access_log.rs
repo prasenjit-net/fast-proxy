@@ -45,6 +45,9 @@ pub struct DataPlaneFields {
     /// The maintenance scope that answered the request (`global`, `subsystem`
     /// or `route`), when one did.
     pub maintenance: Option<String>,
+    /// The limit that refused the request (`rate_limited`, `payload_too_large`,
+    /// ...), when one did.
+    pub refused: Option<&'static str>,
 }
 
 /// One finished request, as written to the access log.
@@ -106,6 +109,9 @@ impl AccessRecord<'_> {
             ));
             if let Some(scope) = data.maintenance.as_deref() {
                 line.push_str(&format!(" maintenance={}", escape_log_field(scope)));
+            }
+            if let Some(reason) = data.refused {
+                line.push_str(&format!(" refused={reason}"));
             }
         }
         if let Some(actor) = self.actor {
@@ -246,6 +252,7 @@ mod tests {
             upstream_time: Some(Duration::from_micros(1200)),
             bytes_out: 456,
             maintenance: None,
+            refused: None,
         }
     }
 
@@ -258,6 +265,23 @@ mod tests {
         line.split(' ')
             .filter_map(|part| part.split_once('='))
             .collect()
+    }
+
+    #[test]
+    fn a_data_line_names_the_refusing_limit_only_when_one_refused() {
+        let plain = data_fields();
+        let refused = DataPlaneFields {
+            refused: Some("rate_limited"),
+            ..data_fields()
+        };
+        let mut record = admin_record("/");
+        record.plane = Plane::Data;
+        record.data_plane = Some(&plain);
+        assert!(!record.format_line(at()).contains("refused="));
+        record.data_plane = Some(&refused);
+        assert!(record
+            .format_line(at())
+            .contains(" refused=rate_limited total_ms="));
     }
 
     #[test]

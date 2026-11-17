@@ -30,6 +30,7 @@ pub(crate) fn sample(at_ms: i64) -> Sample {
             bytes: 0,
             body: None,
             body_omitted: None,
+            refused: None,
         },
         total_ms: 3000,
         upstream: SampleUpstream {

@@ -16,6 +16,7 @@ mod pending_request;
 mod pipeline;
 mod progress_io;
 mod protocol_switch;
+mod rate_limit;
 mod redirect;
 mod replay_body;
 mod request_id;
@@ -52,6 +53,8 @@ mod observability_tests;
 #[cfg(test)]
 mod passive_health_tests;
 #[cfg(test)]
+mod rate_limit_tests;
+#[cfg(test)]
 mod retry_tests;
 #[cfg(test)]
 mod sampling_tests;
@@ -71,7 +74,7 @@ pub use limits::{BodyLimits, RequestLimits, ServerLimits};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use replay_body::{BodyObservation, BodyStats};
-pub use responses::FixedResponse;
+pub use responses::{FixedResponse, ProxyRefusal};
 pub use server::{DataPlane, DrainReport};
 pub use tls_plane::{Http2Limits, TlsPlane, TlsPlaneError, TlsPlaneSettings};
 pub use tracked_body::Observability;

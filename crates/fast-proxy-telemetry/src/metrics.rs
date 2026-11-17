@@ -386,6 +386,23 @@ impl Metrics {
         self.limits.client_timeout(kind);
     }
 
+    /// Counts a request a limit refused; `reason` is a fixed name such as
+    /// `rate_limited` or `payload_too_large`.
+    pub fn request_refused(&self, reason: &'static str) {
+        self.limits.request_refused(reason);
+    }
+
+    /// Counts a 429 from the rate-limit policy of `route` in `subsystem`
+    /// (configuration names, never request values).
+    pub fn rate_limited(&self, subsystem: &str, route: &str) {
+        self.limits.rate_limited(subsystem, route);
+    }
+
+    /// Counts a new client let through because the key table was full.
+    pub fn rate_limit_table_full(&self) {
+        self.limits.rate_limit_table_full();
+    }
+
     pub fn connection_opened(&self) {
         self.active_connections.inc();
     }
@@ -745,6 +762,18 @@ mod tests {
             metrics.maintenance_response("subsystem", "shop", "_none");
         }
         assert_eq!(metrics.traffic_totals().overall().errors, 0);
+    }
+
+    #[test]
+    fn refusals_and_rate_limits_are_counted() {
+        let metrics = Metrics::new();
+        metrics.request_refused("rate_limited");
+        metrics.rate_limited("shop", "/api");
+        metrics.rate_limit_table_full();
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_requests_refused_total{reason="rate_limited"} 1"#));
+        assert!(text.contains(r#"fastproxy_rate_limited_total{route="/api",subsystem="shop"} 1"#));
+        assert!(text.contains("fastproxy_rate_limit_table_full_total 1"));
     }
 
     #[test]

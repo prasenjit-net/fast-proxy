@@ -227,6 +227,7 @@ fn raw(n: u32) -> RawSample {
             bytes_in: 0,
             bytes_out: 0,
             client_cancelled: false,
+            refused: None,
         },
         attempts: Vec::new(),
         response_headers: Vec::new(),
