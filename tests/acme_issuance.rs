@@ -261,10 +261,11 @@ async fn a_valid_certificate_is_never_ordered_again_not_even_after_a_restart() {
     let mut runner = rig.runner();
     runner.run_once(None).await;
     let wait = runner.run_once(None).await;
-    assert_eq!(
-        wait,
-        Duration::from_secs(3600),
-        "nothing due before the check interval"
+    // The interval is counted from the pass's start, so the real time the pass
+    // took (a millisecond on a busy machine) may come off it.
+    assert!(
+        (Duration::from_secs(3599)..=Duration::from_secs(3600)).contains(&wait),
+        "nothing due before the check interval: {wait:?}"
     );
     // A new runner (a restart) opens the stored account and orders nothing.
     rig.runner().run_once(None).await;
