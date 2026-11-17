@@ -430,12 +430,16 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
 
 ### Workstream U: Admin UI
 
-- [ ] **U1 (M) Rate limits on the subsystem and route pages.** A form (rate, period, burst, key) with "per instance"
+- [x] **U1 (M) Rate limits on the subsystem and route pages.** A form (rate, period, burst, key) with "per instance"
   next to the number (L4), validation in `lib/validation.ts`, server errors inline. Read-only for a viewer.
-- [ ] **U2 (S) Body cap and endpoint cap fields** on the route and group forms.
-- [ ] **U3 (S) A Limits panel** on the dashboard: connections against their caps, refusals by reason, the key
+- [x] **U2 (S) Body cap and endpoint cap fields** on the route and group forms.
+- [x] **U3 (S) A Limits panel** on the dashboard: connections against their caps, refusals by reason, the key
   table's fill, from `/api/limits` and the live stats.
-- [ ] **U4 (S) Vitest tests** for each, with `renderPage` and `mockApi`.
+- [x] **U4 (S) Vitest tests** for each, with `renderPage` and `mockApi`.
+  *Built in PR7 (`m7/pr7-admin-ui`).* `components/rateLimit/RateLimitControl.tsx` (a badge saying what applies, the
+  route's own or its subsystem's, and a dialog to set or remove it), `lib/rateLimitValidation.ts`,
+  `components/LimitsCard.tsx` on the dashboard (refreshed every 10 s; warns when the key table is 80% full or let a new
+  client through), the body cap on the route form and the request cap in the group form's advanced section.
 
 ### Workstream F: Fuzzing and supply chain
 
@@ -594,7 +598,7 @@ stack stays short:
 5. **PR4** D2: the slow-client timeouts (built; split from rate limiting to keep each PR reviewable).
 6. **PR5** D4, D5: rate limiting in the pipeline, exact endpoint caps (`try_track`), refusal reasons (built).
 7. **PR6** A1 to A4: the admin API, the CLI and the walkthrough (built; split from the UI).
-8. **PR7** U1 to U4: the admin UI.
+8. **PR7** U1 to U4: the admin UI (built).
 9. **PR8** F1 to F3: fuzzing.
 10. **PR9** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
 11. **PR10** SR1 to SR3: threat model, review, fixes.

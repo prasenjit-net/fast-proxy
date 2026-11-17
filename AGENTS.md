@@ -142,7 +142,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   checks that use the server's camelCase field names), and `navigation.ts`.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
 - `ui/src/components/` contains reusable UI components; `forms/` has one form per
-  resource and `subsystem/` the detail page's sections.
+  resource, `subsystem/` the detail page's sections, and `rateLimit/` the rate-limit control
+  (`LimitsCard` is the dashboard's limits panel).
 - `ui/src/pages/` contains route pages.
 - `ui/src/styles/index.css` contains Tailwind entrypoint and theme tokens.
 
