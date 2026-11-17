@@ -76,11 +76,24 @@ pub fn start_with_config(
             return Err(format!("exited at startup ({status})"));
         }
         if std::net::TcpStream::connect(admin).is_ok() {
-            return Ok(running);
+            return still_running(running);
         }
         thread::sleep(Duration::from_millis(50));
     }
     Err("did not start listening".into())
+}
+
+/// A parallel test can briefly hold the port picked for this proxy, so a
+/// connection may reach that listener while this proxy fails to bind and exits.
+/// A proxy still running a moment after the port answered is the one that bound it.
+fn still_running(mut running: Running) -> Result<Running, String> {
+    thread::sleep(Duration::from_millis(300));
+    match running.child.try_wait().unwrap() {
+        Some(status) => Err(format!(
+            "exited at startup ({status}); the port was someone else's"
+        )),
+        None => Ok(running),
+    }
 }
 
 pub fn start_ok(dir: &Path, env: &[(&str, &str)]) -> Running {

@@ -25,7 +25,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `security_headers.rs`, `tls_server.rs` (the admin listener over TLS), `api/` (one
   file per resource: subsystems, hosts, upstreams, routes, certificates, tokens, maintenance,
   audit, sampling (settings and overrides, readable by a viewer), samples (the sampled requests, admin only), acme
-  (the overview and statuses, readable by a viewer; a forced renewal is a write), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  (the overview and statuses, readable by a viewer; a forced renewal is a write), rate_limits (the policy of a
+  subsystem or route), limits (`GET /api/limits`: the process limits, key fill and refusals), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-auth/` is token and secret handling with no HTTP and no database:
   generation, SHA-256 hashing, constant-time comparison (`subtle`), roles, the failure
@@ -72,7 +73,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   (fixed 404/503/502/504), `selection` (pick an endpoint per request),
   `upstream_client` (pooled forwarding, the retry loop, passive outcomes),
   `retry_policy` (pure retry rules), `replay_body` (a request body shared across
-  attempts), `pending_request` (reports a request cancelled by its client as
+  attempts, counted against its `BodyCap`), `limits` (`ServerLimits`, `RequestLimits`), `request_size` (the
+  target and declared-length checks), `progress_io` (the stall watchdog: first byte, send, tunnel idle), `rate_limit` (a route's policy check
+  and `Retry-After`), `pending_request` (reports a request cancelled by its client as
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
@@ -111,7 +114,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
   clients); never use it outside `dev-dependencies` and tests.
 - `src/cli/` and `src/commands/` are the subcommands (`maintenance`, `reload`, `status`,
-  `audit`, `samples list|export`, `acme status|renew`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
+  `audit`, `samples list|export`, `acme status|renew`, `limits`, `rate-limit show|set|clear`, `status --local`
+  (no token: a health check), `config validate`, and the offline `token` commands); exit code 0 success, 1 the
   proxy refused or a check failed, 2 usage or connection errors.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
@@ -127,8 +131,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `sampling_cluster.rs` are M6's. `acme_challenges.rs`, `acme_issuance.rs` (the runner against the in-process test CA
   with a moved clock), `acme_binary.rs` (the real binary, the CLI and a key scan) and
   `acme_cluster.rs` (two processes, the lease holder killed) are M4's; `common/acme_binary.rs`
-  holds their config helpers. `schema_upgrade.rs` starts the real binary on a database of the
-  previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
+  holds their config helpers. `cli_limits.rs` drives `limits` and `rate-limit` against the real
+  binary (M7). `schema_upgrade.rs` starts the real binary on a database of the previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
   The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
   `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
@@ -138,7 +142,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   checks that use the server's camelCase field names), and `navigation.ts`.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
 - `ui/src/components/` contains reusable UI components; `forms/` has one form per
-  resource and `subsystem/` the detail page's sections.
+  resource, `subsystem/` the detail page's sections, and `rateLimit/` the rate-limit control
+  (`LimitsCard` is the dashboard's limits panel).
 - `ui/src/pages/` contains route pages.
 - `ui/src/styles/index.css` contains Tailwind entrypoint and theme tokens.
 
@@ -168,6 +173,12 @@ These invariants hold across the codebase; do not break them without an ADR in `
   snapshot swaps by endpoint id and address (`compile(.., &registry)`); never
   keep it in config or in a global map. Endpoint ids are stable and rollback
   preserves them.
+- **Process limits are checked before upstream work** (ADR 0029): connection caps when a connection is
+  accepted (before TLS), the head limits in hyper, the target and declared body length before an endpoint is
+  chosen. A body cut at its cap is the client's doing: `413`, never an upstream failure, never retried.
+- **A limit's refusal is recorded once, by the pipeline**: a fixed refusal response carries `ProxyRefusal`, and
+  the pipeline writes the reason to the access log (` refused=`), `fastproxy_requests_refused_total{reason}` and the
+  sample, wherever the refusal was made.
 - **Retries are conservative:** a connect failure may be retried for any method,
   everything else only for idempotent ones; never after a body byte was read
   (`BodyOwner::is_replayable`), never for upgrades, always within the group's
