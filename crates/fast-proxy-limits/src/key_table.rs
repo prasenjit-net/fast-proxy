@@ -46,7 +46,7 @@ impl KeyBudget {
 
     fn try_take(&self) -> bool {
         self.used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 (used < self.capacity).then_some(used + 1)
             })
             .is_ok()

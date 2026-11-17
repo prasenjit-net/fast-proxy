@@ -65,3 +65,10 @@ capacity with a million distinct clients.
   against a full table 19 ns each, all admitted and counted.
 - `CompileInputs` carries the `RateLimitRuntime` into `compile_with`; the snapshot keeps it for the next
   compile.
+
+## As built (M7 PR5)
+
+- The pipeline runs `rate_limit::admit` after maintenance and before the size check; a refusal is a fixed `429`
+  marked `ProxyRefusal("rate_limited")`, with `Retry-After` in whole seconds (rounded up, at least 1), counted by
+  subsystem and route and in `fastproxy_requests_refused_total{reason}`, and logged ` refused=rate_limited`.
+- A header-keyed policy's header is redacted in samples, whether or not its name looks secret.
