@@ -4,9 +4,9 @@
 //! cluster generation, which the proxy's sync poll follows), writes an audit
 //! entry with the actor `cli`, and respects the last-admin protection.
 
+use super::remote::time_text;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::time::{Duration, UNIX_EPOCH};
 
 use fast_proxy_auth::{GeneratedSecret, PlaintextToken};
 use fast_proxy_model::{Role, TokenId, TokenName};
@@ -182,11 +182,6 @@ fn state_of(row: &TokenRow) -> &'static str {
     } else {
         "active"
     }
-}
-
-fn time_text(ms: i64) -> String {
-    let at = UNIX_EPOCH + Duration::from_millis(u64::try_from(ms).unwrap_or(0));
-    humantime::format_rfc3339_seconds(at).to_string()
 }
 
 #[cfg(test)]

@@ -109,7 +109,7 @@ pub struct MaintenanceOn {
     #[command(flatten)]
     pub scope: ScopeArgs,
     /// How long it lasts, such as 30m or 2h (default: until turned off)
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::config::parse_duration)]
     pub ttl: Option<Duration>,
     /// Shown to visitors
     #[arg(long, default_value = "")]
@@ -179,7 +179,7 @@ pub struct SampleFilters {
     #[arg(long)]
     pub min_ms: Option<u32>,
     /// Only samples from this long ago until now, such as 30m or 2h
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = crate::config::parse_duration)]
     pub since: Option<Duration>,
 }
 
@@ -256,7 +256,7 @@ pub struct RateLimitSet {
     #[arg(long)]
     pub rate: u32,
     /// The period, such as 1s, 1m or 1h
-    #[arg(long, default_value = "1s", value_parser = humantime::parse_duration)]
+    #[arg(long, default_value = "1s", value_parser = crate::config::parse_duration)]
     pub per: Duration,
     /// Requests allowed at once (default: the rate)
     #[arg(long)]
