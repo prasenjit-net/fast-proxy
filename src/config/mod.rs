@@ -21,6 +21,7 @@ use serde::Deserialize;
 pub use acme::{AcmeConfig, LETS_ENCRYPT_STAGING};
 pub use admin::{AdminAuth, AdminConfig, AdminTlsConfig};
 pub use data_plane::DataPlaneConfig;
+pub use duration::parse_duration;
 pub use error::ConfigError;
 pub use limits::LimitsConfig;
 pub use logging::LoggingConfig;

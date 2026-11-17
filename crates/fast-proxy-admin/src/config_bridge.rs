@@ -17,7 +17,7 @@ pub fn spawn_config_bridge(state: SharedState) {
                     state.broadcast(Event::ConfigChanged {
                         version: change.version,
                         summary: change.summary.clone(),
-                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        timestamp_ms: crate::clock::now_ms(),
                     });
                     state.activity("config", change.summary);
                 }

@@ -28,7 +28,7 @@ async fn record(app: &TestApp, id: i64, change: impl FnOnce(&mut AcmeStatus)) {
 }
 
 fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
+    crate::clock::now_ms()
 }
 
 #[tokio::test]
