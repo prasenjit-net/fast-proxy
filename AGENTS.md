@@ -135,6 +135,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   binary (M7). `schema_upgrade.rs` starts the real binary on a database of the previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
   The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
   `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
+- `fuzz/` is the cargo-fuzz crate (nightly, outside the workspace; M7 F1, ADR 0032): fourteen targets,
+  `fuzz/run.sh SECONDS [TARGET...]`, hand-written `seeds/`, a fixed snapshot in `src/lib.rs`. Private
+  functions are reached through the `fuzzing` feature of `fast-proxy-dataplane` and `fast-proxy-admin`
+  (never public API). A crash input is committed as a unit test in the crate that owns the function.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
   (measured with `oha` against the `bench_backend` example in the data plane crate).
 - `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,

@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 tokio = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
+time = { workspace = true }
 prometheus = "0.14"
 
 [dev-dependencies]
