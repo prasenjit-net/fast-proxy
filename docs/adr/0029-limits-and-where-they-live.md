@@ -71,3 +71,32 @@ between keep-alive requests, and whether `http1().max_headers` covers the header
 Every refusal is a fixed response with a reason in the access log, a counter and a sample (the
 sampler sees them as 4xx). The defaults are generous, and the body cap is off, so an upgrade does
 not refuse traffic it used to forward.
+
+## As built (M7 PR3) and spike G2
+
+- **What hyper 1.11 already bounds** (measured with `header_read_timeout` at 1 s): a keep-alive connection idle
+  between requests is closed after the header timeout, so there is no separate `idle_timeout`. It does **not**
+  close a connection that never sends a byte, a body that stalls, or a client that never reads: PR4 adds a
+  first-byte deadline, a per-chunk body timeout and a send-stall timeout for those.
+- **Header limits:** hyper answers `431` for more than `max_headers` fields (default 100) and for a head larger than
+  its buffer. Another `max_headers` value moves its header buffer to the heap (about 5% per request), so it is set
+  only when it differs from 100. hyper panics for a buffer under 8 KiB, so `max_header_bytes` is at least that.
+  Over a too-large head hyper may reset the connection before the client reads the `431`.
+- **Framing:** hyper refuses a non-chunked `Transfer-Encoding`, `Transfer-Encoding` on HTTP/1.0 and conflicting
+  `Content-Length`s with `400`, and drops `Content-Length` (and keep-alive) when `Transfer-Encoding` is present, so
+  the forwarded request never carries both (tested).
+- **Connection caps:** `ConnectionCounter` in `fast-proxy-limits`, per peer address (not a prefix: the cap is about
+  one host's sockets), with its permit held by the connection's guard so a tunnel keeps its place.
+- **Body caps:** a declared length over the cap is refused before an endpoint is chosen; a streamed body is cut by
+  `ReplayBody` (`ClientBodyFault::OverCap`), answered `413`, never counted as an upstream failure and never retried.
+
+## As built (M7 PR4): the slow-client timeouts
+
+- `ProgressIo` wraps every client stream (after TLS) and records bytes read, the last activity and since when writes
+  have been blocked, in relaxed atomics. `watch` checks them on a coarse tick (a quarter of the shortest rule, 50 ms
+  to 1 s) and the connection's task returns, closing it, on the first stall: no byte within `header_read_timeout`
+  (`first_byte`) or writes blocked past `send_timeout` (`send`). Both sides of a tunnel share one record, so traffic
+  either way keeps it open; it closes after `tunnel_idle_timeout` (`tunnel_idle`).
+- A request body that stops arriving while the upstream reads it fails with `ClientBodyFault::Stalled` from a timer
+  inside `ReplayBody`, reset by every frame; the forwarder answers 408 and does not blame the endpoint (`body`).
+- Cost (spike G2 (b)): -0.27% requests/s at 64 connections, inside the 1% budget.
