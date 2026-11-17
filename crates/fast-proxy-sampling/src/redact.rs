@@ -296,9 +296,13 @@ impl Redactor {
     /// is visible says nothing yet, but the next bytes would be a secret, so
     /// the partial name is dropped.
     fn drop_partial_name(&self, mut text: String) -> (String, bool) {
+        // Step past the whole separator: it may be more than one byte (a
+        // replacement character from a cut or invalid UTF-8 sequence).
         let run_start = text
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-            .map_or(0, |at| at + 1);
+            .char_indices()
+            .rev()
+            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .map_or(0, |(at, c)| at + c.len_utf8());
         let run = text[run_start..].to_ascii_lowercase();
         let partial = run.len() >= 2
             && self
