@@ -443,12 +443,25 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
 
 ### Workstream F: Fuzzing and supply chain
 
-- [ ] **F1 (M) `fuzz/` crate** with the targets of 5.4, seed corpora, and a README on running them locally.
+- [x] **F1 (M) `fuzz/` crate** with the targets of 5.4, seed corpora, and a README on running them locally.
   Some functions are private today; make them reachable to the fuzz crate behind a `fuzzing` feature, so none
   becomes public API.
+  *Built in PR8 (`m7/pr8-fuzzing`).* All fourteen targets, each asserting a property where one exists (a
+  pattern's written form parses back, an untrusted peer is the client, no hop-by-hop header survives, a forward's
+  URI is well formed, a key gets at most its burst at one instant). `fast-proxy-dataplane` and `fast-proxy-admin`
+  have a `fuzzing` feature with a `fuzzing` module (the pipeline's resolve step, now generic over the body type;
+  the size checks; the head scan; every admin write body with its handler's validation). The binary's config
+  model is included by path. The request-path targets run against one fixed snapshot without HTTPS redirects
+  (they need a certificate store). Inputs pick known hosts and header names most of the time: without that, a
+  million runs never reached a forwarded request. Text targets split at a NUL so seeds are written by hand; the
+  `pem` seeds hold certificates only, never a key.
 - [ ] **F2 (S) CI.** A Linux job that runs each target for 60 s on every pull request, and a nightly scheduled
   workflow that runs 20 minutes each and opens an issue with the crash input on failure. A crash input is committed
   as a unit test in the crate that owns the function.
+  *Built in PR8.* `fuzz/run.sh SECONDS [TARGET...]` is what CI and people run. The pull-request job builds once
+  and runs each target 60 s; it also checks that the nightly matrix names every target. `fuzz-nightly.yml` runs
+  the fourteen in parallel for 20 minutes and opens an issue with the input, base64, on a crash. Clippy also runs
+  with `--all-features`, so the `fuzzing` modules are linted.
 - [ ] **F3 (S) The 1-hour runs** before 1.0 (exit criterion 7), recorded in the outcome section.
 - [x] **F4 (S) `cargo deny`** with `deny.toml` (L14) as a CI gate. Fix or justify each finding in the file.
   *Built in PR1.* The first run found two advisories, both fixed rather than ignored: the bundled SQLite
@@ -599,7 +612,7 @@ stack stays short:
 6. **PR5** D4, D5: rate limiting in the pipeline, exact endpoint caps (`try_track`), refusal reasons (built).
 7. **PR6** A1 to A4: the admin API, the CLI and the walkthrough (built; split from the UI).
 8. **PR7** U1 to U4: the admin UI (built).
-9. **PR8** F1 to F3: fuzzing.
+9. **PR8** F1, F2: fuzzing (built; F3 is the 1-hour runs before 1.0).
 10. **PR9** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
 11. **PR10** SR1 to SR3: threat model, review, fixes.
 12. **PR11** PK1 to PK4: image, release workflow, upgrade test, changelog.

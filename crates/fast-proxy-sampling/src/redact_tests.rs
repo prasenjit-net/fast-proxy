@@ -214,6 +214,19 @@ fn form_fields_are_blanked_with_percent_and_plus_decoding() {
     );
 }
 
+/// Found by the `redactor` fuzz target: a cut text body whose tail follows a
+/// multi-byte character (here the replacement for the invalid byte 0xdb) made
+/// the partial-name check slice inside that character and panic.
+#[test]
+fn a_cut_body_ending_after_a_multi_byte_character_is_judged_without_panicking() {
+    let r = redactor();
+    let out = r.body("text/plain", &[1, 0, 0, b'=', 0xdb, b'p', b'a'], true);
+    assert!(out.text.ends_with('\u{fffd}'), "{:?}", out.text);
+    assert!(out.truncated, "the partial name `pa` is dropped");
+    let accented = r.body("text/plain", "café=été passw".as_bytes(), true);
+    assert_eq!(accented.text, "café=été ");
+}
+
 #[test]
 fn a_form_cut_before_its_equals_sign_drops_the_unsafe_tail() {
     let r = redactor();

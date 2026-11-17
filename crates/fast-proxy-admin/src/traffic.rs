@@ -172,7 +172,7 @@ impl Sampler {
             &self.previous,
             &current,
             self.last_tick.elapsed(),
-            chrono::Utc::now().timestamp_millis(),
+            crate::clock::now_ms(),
         );
         self.previous = current;
         self.last_tick = Instant::now();
