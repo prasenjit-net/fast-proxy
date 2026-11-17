@@ -13,8 +13,8 @@ static PROCESS_PREFIX: OnceLock<String> = OnceLock::new();
 impl RequestId {
     /// A new id, unique within this process: its start time and a counter.
     pub fn next() -> Self {
-        let prefix = PROCESS_PREFIX
-            .get_or_init(|| format!("{:x}", chrono::Utc::now().timestamp_millis().unsigned_abs()));
+        let prefix =
+            PROCESS_PREFIX.get_or_init(|| format!("{:x}", crate::clock::now_ms().unsigned_abs()));
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         Self(format!("{prefix}-{n:x}"))
     }

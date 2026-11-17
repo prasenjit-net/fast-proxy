@@ -36,7 +36,7 @@ async fn stream(socket: &mut WebSocket, state: &SharedState) {
 
     let hello = Event::Hello {
         message: format!("Connected to {} v{}", state.ui.app_name, state.version),
-        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        timestamp_ms: crate::clock::now_ms(),
     };
     if send(socket, &hello).await.is_err() {
         return;
