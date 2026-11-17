@@ -73,7 +73,7 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `upstream_client` (pooled forwarding, the retry loop, passive outcomes),
   `retry_policy` (pure retry rules), `replay_body` (a request body shared across
   attempts, counted against its `BodyCap`), `limits` (`ServerLimits`, `RequestLimits`), `request_size` (the
-  target and declared-length checks), `pending_request` (reports a request cancelled by its client as
+  target and declared-length checks), `progress_io` (the stall watchdog: first byte, send, tunnel idle), `pending_request` (reports a request cancelled by its client as
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.

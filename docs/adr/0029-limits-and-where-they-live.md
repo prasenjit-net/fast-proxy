@@ -88,4 +88,15 @@ not refuse traffic it used to forward.
 - **Connection caps:** `ConnectionCounter` in `fast-proxy-limits`, per peer address (not a prefix: the cap is about
   one host's sockets), with its permit held by the connection's guard so a tunnel keeps its place.
 - **Body caps:** a declared length over the cap is refused before an endpoint is chosen; a streamed body is cut by
-  `ReplayBody` with `BodyCapExceeded`, answered `413`, never counted as an upstream failure and never retried.
+  `ReplayBody` (`ClientBodyFault::OverCap`), answered `413`, never counted as an upstream failure and never retried.
+
+## As built (M7 PR4): the slow-client timeouts
+
+- `ProgressIo` wraps every client stream (after TLS) and records bytes read, the last activity and since when writes
+  have been blocked, in relaxed atomics. `watch` checks them on a coarse tick (a quarter of the shortest rule, 50 ms
+  to 1 s) and the connection's task returns, closing it, on the first stall: no byte within `header_read_timeout`
+  (`first_byte`) or writes blocked past `send_timeout` (`send`). Both sides of a tunnel share one record, so traffic
+  either way keeps it open; it closes after `tunnel_idle_timeout` (`tunnel_idle`).
+- A request body that stops arriving while the upstream reads it fails with `ClientBodyFault::Stalled` from a timer
+  inside `ReplayBody`, reset by every frame; the forwarder answers 408 and does not blame the endpoint (`body`).
+- Cost (spike G2 (b)): -0.27% requests/s at 64 connections, inside the 1% budget.

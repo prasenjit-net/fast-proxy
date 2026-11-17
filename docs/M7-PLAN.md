@@ -307,7 +307,9 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   send-stall timeout. (c) `max_headers` answers 431 (default 100); setting another value moves hyper's header buffer
   to the heap (about 5% per request), so it is set only when it differs. hyper also refuses a non-chunked
   `Transfer-Encoding`, `Transfer-Encoding` on HTTP/1.0 and two different `Content-Length`s with 400, and drops
-  `Content-Length` when `Transfer-Encoding` is present. (b) is measured with PR4's wrapper.
+  `Content-Length` when `Transfer-Encoding` is present. (b) Measured in PR4 (release build, `oha -c 64`, three 8 s
+  rounds, one macOS machine): median 95,449 requests/s without `ProgressIo` and 95,190 with it, -0.27%, inside the 1%
+  budget and the rounds' own spread.
 - [x] **G3 (S) Spike: the key table under contention.** GCRA over the sharded table on 16 threads with 1, 1,000
   and 1,000,000 distinct keys. Record the per-request cost and the eviction behavior when full, and compare a
   `DashMap` against the hand-sharded table. Budget: under 100 ns per check at 1,000 keys. Record in ADR 0030.
@@ -368,7 +370,13 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
   global cap, and the metric `fastproxy_connections_refused_total{reason}`.
   *Built in PR3.* `ConnectionCounter` (limits crate) by total and by peer address; `ConnectionTracker::admit` holds
   its permit in the `ConnectionGuard`, so an upgraded tunnel keeps its place. `DataPlane::start_with_limits`.
-- [ ] **D2 (M) Timeouts (L9).** *Moved to PR4, reshaped by G2* (no `idle_timeout`; a first-byte deadline instead).
+- [x] **D2 (M) Timeouts (L9).** *Built in PR4 (`m7/pr4-timeouts`), reshaped by G2* (no `idle_timeout`; a first-byte
+  deadline instead). `ProgressIo` wraps every client stream and records reads and blocked writes in atomics; a
+  per-connection `watch` closes a connection with no byte after `header_read_timeout` or writes blocked past
+  `send_timeout`, and the same wrapper on both sides of a tunnel closes one idle past `tunnel_idle_timeout`. A body
+  stall is a timer inside `ReplayBody` (`ClientBodyFault::Stalled`), answered 408 without blaming the endpoint.
+  `fastproxy_client_timeouts_total{kind}` counts `first_byte`, `send`, `body` and `tunnel_idle`. New `[limits]` keys:
+  `body_read_timeout` (30 s), `send_timeout` (60 s), `tunnel_idle_timeout` (1 h, `0s` off).
   The `[limits]` timeouts replace the constants. `ProgressIo` for body and send
   progress (shaped by G2), the idle timeout, and the tunnel idle timeout in `protocol_switch.rs`. Each expiry is
   counted (`fastproxy_client_timeouts_total{kind}`), and a body timeout before the response is a fixed `408`.
@@ -563,7 +571,8 @@ stack stays short:
    the defaults table goes with LM1.
 3. **PR2** LM1 to LM3, S1, R1, B1: the limits crate, model, schema 7 with its migration, compile. No behavior yet.
 4. **PR3** LM3 (rest), D1, D3: connection caps, size limits and framing (built; split from the timeouts after G2).
-5. **PR4** D2, D4, D5: the slow-client timeouts, rate limiting, refusal reasons.
+5. **PR4** D2: the slow-client timeouts (built; split from rate limiting to keep each PR reviewable).
+6. **PR5** D4, D5: rate limiting in the pipeline, exact endpoint caps (`try_track`), refusal reasons.
 6. **PR5** A1 to A4, U1 to U4: API, CLI, UI.
 7. **PR6** F1 to F3: fuzzing.
 8. **PR7** P1 to P5, Q1, Q2: benchmarks, load and soak, tuning, exit-criteria tests.
