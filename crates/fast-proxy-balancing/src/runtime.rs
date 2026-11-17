@@ -73,7 +73,7 @@ impl EndpointRuntime {
     /// requests can never pass the cap together (ADR 0031); `None` when full.
     pub fn try_track(self: &Arc<Self>, cap: u32) -> Option<InFlightGuard> {
         self.in_flight
-            .fetch_update(Relaxed, Relaxed, |in_flight| {
+            .try_update(Relaxed, Relaxed, |in_flight| {
                 (in_flight < cap).then_some(in_flight + 1)
             })
             .ok()?;

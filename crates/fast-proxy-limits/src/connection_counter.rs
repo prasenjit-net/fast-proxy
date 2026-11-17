@@ -56,7 +56,7 @@ impl ConnectionCounter {
     /// The connection stays counted until the permit drops.
     pub fn try_open(self: &Arc<Self>, peer: IpAddr) -> Result<ConnectionPermit, ConnectionRefusal> {
         self.total
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |open| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |open| {
                 (open < self.caps.total).then_some(open + 1)
             })
             .map_err(|_| ConnectionRefusal::Total)?;
