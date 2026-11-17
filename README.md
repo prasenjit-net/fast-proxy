@@ -87,8 +87,9 @@ change is recorded so it can be rolled back.
   lets in-flight requests and open WebSockets finish for up to
   `data_plane.shutdown_grace`.
 - **Observability.** Prometheus metrics at `/metrics`, one access-log line per
-  request, live traffic stats and a dashboard with upstream health, a live status
-  view per upstream, and a resolver that shows exactly where a given host and
+  request, live traffic stats and a dashboard with upstream health and the limits
+  (connections against their cap, the rate-limit key table, refusals by reason), a
+  live status view per upstream, and a resolver that shows exactly where a given host and
   path would be sent and which endpoints would take it.
 
 ## Quick start

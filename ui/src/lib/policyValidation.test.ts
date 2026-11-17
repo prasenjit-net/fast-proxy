@@ -13,8 +13,19 @@ const with_ = (patch: Partial<PolicyValues>): PolicyValues => ({ ...ok, ...patch
 
 describe("validatePolicy", () => {
   it("turns the server's defaults into the server's default policy", () => {
-    const { health, passive, retryBudget, lb, failurePolicy, tls } = upstream();
-    expect(validatePolicy(ok).value).toEqual({ lb, failurePolicy, health, passive, retryBudget, tls });
+    const { health, passive, retryBudget, lb, failurePolicy, tls, maxRequests } = upstream();
+    expect(validatePolicy(ok).value).toEqual({ lb, failurePolicy, health, passive, retryBudget, tls, maxRequests });
+  });
+
+  it("leaves the request cap off when empty and bounds it when given", () => {
+    expect(validatePolicy(ok).value?.maxRequests).toBeNull();
+    expect(validatePolicy(with_({ maxRequests: " 50 " })).value?.maxRequests).toBe(50);
+    expect(validatePolicy(with_({ maxRequests: "100000" })).value?.maxRequests).toBe(100_000);
+    for (const bad of ["0", "100001", "x", "1.5"]) {
+      expect(validatePolicy(with_({ maxRequests: bad })).errors.maxRequests, bad).toBeDefined();
+    }
+    expect(policyValuesFrom(upstream({ maxRequests: 7 })).maxRequests).toBe("7");
+    expect(policyValuesFrom(upstream()).maxRequests).toBe("");
   });
 
   it("round-trips an existing group's policy through the form values", () => {

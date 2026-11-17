@@ -46,7 +46,12 @@ export interface PolicyValues {
   tlsVerify: boolean;
   tlsServerName: string;
   tlsCa: string;
+  /** Requests in flight per endpoint; empty is unlimited. */
+  maxRequests: string;
 }
+
+/** The largest per-endpoint request cap the server accepts. */
+export const MAX_REQUESTS_PER_ENDPOINT = 100_000;
 
 /** The server's defaults, so a new group works with no further input. */
 export function defaultPolicyValues(): PolicyValues {
@@ -73,6 +78,7 @@ export function defaultPolicyValues(): PolicyValues {
     tlsVerify: true,
     tlsServerName: "",
     tlsCa: "",
+    maxRequests: "",
   };
 }
 
@@ -102,6 +108,7 @@ export function policyValuesFrom(policy: UpstreamPolicy): PolicyValues {
     tlsVerify: policy.tls.verify,
     tlsServerName: policy.tls.serverName,
     tlsCa: policy.tls.ca,
+    maxRequests: policy.maxRequests === null ? "" : String(policy.maxRequests),
   };
 }
 
@@ -220,6 +227,10 @@ export function validatePolicy(values: PolicyValues): Validated<UpstreamPolicy> 
       minPerSec: inRange(errors, "retryBudget.minPerSec", values.retryMinPerSec, 0, 1000),
     },
     tls: validateUpstreamTls(values, errors),
+    maxRequests:
+      values.maxRequests.trim() === ""
+        ? null
+        : inRange(errors, "maxRequests", values.maxRequests, 1, MAX_REQUESTS_PER_ENDPOINT),
   };
   return Object.keys(errors).length > 0 ? { errors } : { errors, value: policy };
 }

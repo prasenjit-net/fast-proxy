@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { envelope, subsystemDetail, upstream } from "../test/fixtures";
+import { envelope, rateLimit, subsystemDetail, upstream } from "../test/fixtures";
 import { apiError, mockApi, type Reply } from "../test/mockApi";
 import { renderPage } from "../test/renderPage";
 import SubsystemDetailPage from "./SubsystemDetail";
@@ -153,6 +153,7 @@ describe("SubsystemDetailPage", () => {
       passive: { consecutiveFailures: 3, baseEjectionMs: 10000, maxEjectionMs: 300000, maxEjectionPercent: 50 },
       retryBudget: { percent: 20, minPerSec: 10 },
       tls: { enabled: false, verify: true, serverName: "", ca: "" },
+      maxRequests: null,
     };
 
     it("checks the form before sending, naming every problem", async () => {
@@ -286,6 +287,8 @@ describe("SubsystemDetailPage", () => {
       expect(dialog().getByLabelText("Load balancing")).toHaveValue("round_robin");
       expect(dialog().queryByLabelText("First endpoint address")).not.toBeInTheDocument();
       await userEvent.selectOptions(dialog().getByLabelText("Load balancing"), "p2c_ewma");
+      await userEvent.click(dialog().getByText(/Advanced: health checks/));
+      await userEvent.type(dialog().getByLabelText("Requests at once per endpoint"), "50");
       await userEvent.click(dialog().getByRole("button", { name: "Save upstream" }));
 
       expect(await screen.findByText("Updated upstream backend")).toBeInTheDocument();
@@ -293,6 +296,7 @@ describe("SubsystemDetailPage", () => {
         name: "backend",
         ...defaults,
         lb: { algorithm: "p2c_ewma", hashKey: "client_ip" },
+        maxRequests: 50,
       });
     });
 
@@ -357,6 +361,7 @@ describe("SubsystemDetailPage", () => {
       await userEvent.click(form.getByRole("checkbox", { name: "Keep the client's Host header" }));
       await userEvent.clear(form.getByLabelText("Connect timeout (ms)"));
       await userEvent.type(form.getByLabelText("Connect timeout (ms)"), "1500");
+      await userEvent.type(form.getByLabelText("Largest request body (bytes)"), "1048576");
       await userEvent.click(form.getByRole("button", { name: "Add route" }));
 
       expect(await screen.findByText("Added route /shop/")).toBeInTheDocument();
@@ -370,6 +375,7 @@ describe("SubsystemDetailPage", () => {
         responseTimeoutMs: 30000,
         retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
         enabled: true,
+        maxBodyBytes: 1_048_576,
       });
     });
 
@@ -470,8 +476,10 @@ describe("SubsystemDetailPage", () => {
       expect(api.called("PUT", "/api/subsystems/1/routes/7")).toHaveLength(0);
     });
 
-    it("switches a route off with its other settings unchanged", async () => {
-      const { api } = renderDetail({ "PUT /api/subsystems/1/routes/7": { body: envelope({}, 5) } });
+    it("switches a route off with its other settings unchanged, never sending its rate limit", async () => {
+      const detail = subsystemDetail();
+      detail.routes[0] = { ...detail.routes[0], maxBodyBytes: 4096, rateLimit: rateLimit() };
+      const { api } = renderDetail({ "PUT /api/subsystems/1/routes/7": { body: envelope({}, 5) } }, detail);
       const row = (await screen.findByText("/api")).closest("tr") as HTMLElement;
       await userEvent.click(within(row).getByRole("checkbox"));
 
@@ -486,6 +494,7 @@ describe("SubsystemDetailPage", () => {
         responseTimeoutMs: 2000,
         retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
         enabled: false,
+        maxBodyBytes: 4096,
       });
     });
 

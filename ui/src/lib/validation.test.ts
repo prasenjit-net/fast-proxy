@@ -60,6 +60,7 @@ describe("validateRoute", () => {
     retryIdempotentOn5xx: true,
     retryOnTimeout: false,
     enabled: true,
+    maxBodyBytes: "",
   };
 
   it("builds the request body", () => {
@@ -73,7 +74,16 @@ describe("validateRoute", () => {
       responseTimeoutMs: 30000,
       retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
       enabled: true,
+      maxBodyBytes: null,
     });
+  });
+
+  it("leaves the body cap to the process when empty and bounds it when given", () => {
+    expect(validateRoute({ ...ok, maxBodyBytes: "1048576" }).value?.maxBodyBytes).toBe(1_048_576);
+    expect(validateRoute({ ...ok, maxBodyBytes: String(2 ** 40) }).value?.maxBodyBytes).toBe(2 ** 40);
+    for (const bad of ["0", String(2 ** 40 + 1), "1m", "-1"]) {
+      expect(validateRoute({ ...ok, maxBodyBytes: bad }).errors.maxBodyBytes, bad).toBeDefined();
+    }
   });
 
   it.each(["", "api", "/a?x=1", "/a#f", "/a b", "/a//b", "/a/../b", "/./a", "/a\\b"])(

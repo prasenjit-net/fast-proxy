@@ -9,6 +9,8 @@ import type {
   HttpsSettings,
   MaintenanceScope,
   RevisionPage,
+  LimitsStatus,
+  RateLimit,
   Route,
   SampleDetail,
   SampleSummary,
@@ -58,6 +60,7 @@ export const upstream = (overrides: Partial<Upstream> = {}): Upstream => ({
   },
   retryBudget: { percent: 20, minPerSec: 10 },
   tls: { enabled: false, verify: true, serverName: "", ca: "" },
+  maxRequests: null,
   endpoints: [endpoint()],
   ...overrides,
 });
@@ -98,6 +101,41 @@ export const route = (overrides: Partial<Route> = {}): Route => ({
   responseTimeoutMs: 30000,
   retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
   enabled: true,
+  maxBodyBytes: null,
+  rateLimit: null,
+  ...overrides,
+});
+
+/** Ten requests a minute per client. */
+export const rateLimit = (overrides: Partial<RateLimit> = {}): RateLimit => ({
+  rate: 10,
+  periodSecs: 60,
+  burst: 10,
+  key: "client",
+  header: null,
+  ipv6Prefix: 64,
+  ...overrides,
+});
+
+/** This instance's limits at their defaults, with nothing refused yet. */
+export const limitsStatus = (overrides: Partial<LimitsStatus> = {}): LimitsStatus => ({
+  settings: {
+    maxConnections: 10_000,
+    maxConnectionsPerClient: 256,
+    headerReadTimeoutMs: 10_000,
+    bodyReadTimeoutMs: 30_000,
+    sendTimeoutMs: 60_000,
+    tunnelIdleTimeoutMs: 3_600_000,
+    maxHeaderCount: 100,
+    maxHeaderBytes: 65_536,
+    maxUriBytes: 8_192,
+    maxBodyBytes: null,
+  },
+  rateLimitKeys: { used: 0, capacity: 100_000 },
+  connectionsRefused: [],
+  requestsRefused: [],
+  clientTimeouts: [],
+  rateLimitTableFull: 0,
   ...overrides,
 });
 
@@ -183,6 +221,7 @@ export const subsystemDetail = (overrides: Partial<SubsystemDetail> = {}): Subsy
     }),
     route(),
   ],
+  rateLimit: null,
   ...overrides,
 });
 
