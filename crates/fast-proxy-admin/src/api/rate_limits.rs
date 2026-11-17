@@ -75,7 +75,7 @@ pub struct RateLimitRequest {
 }
 
 impl RateLimitRequest {
-    fn into_policy(self) -> AppResult<RateLimitPolicy> {
+    pub(super) fn into_policy(self) -> AppResult<RateLimitPolicy> {
         let mut errors = FieldErrors::default();
         let key = match (
             self.key.as_deref().unwrap_or(CLIENT),

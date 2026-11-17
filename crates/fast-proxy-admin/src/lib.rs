@@ -3,6 +3,9 @@
 mod access_middleware;
 mod acme_bridge;
 mod api;
+/// Entry points for the fuzz targets (ADR 0032); only with the `fuzzing` feature.
+#[cfg(feature = "fuzzing")]
+pub use api::fuzzing;
 mod clock;
 mod config_bridge;
 mod endpoint_bridge;

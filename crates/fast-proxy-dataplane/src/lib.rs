@@ -8,6 +8,8 @@
 mod acme_challenge;
 mod connections;
 mod forward;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 mod headers;
 mod limits;
 mod listener;

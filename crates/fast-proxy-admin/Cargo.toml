@@ -5,6 +5,10 @@ edition = "2021"
 description = "Axum admin plane for fast-proxy: REST API, WebSocket push, and the embedded UI"
 publish = false
 
+[features]
+# Entry points for the fuzz targets in `fuzz/` (ADR 0032); never public API.
+fuzzing = []
+
 [dependencies]
 fast-proxy-acme = { path = "../fast-proxy-acme" }
 fast-proxy-acme-service = { path = "../fast-proxy-acme-service" }

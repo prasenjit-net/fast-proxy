@@ -1,0 +1,12 @@
+[data_plane]
+listen = "0.0.0.0:8000"
+trusted_proxies = ["10.0.0.0/8"]
+
+[limits]
+max_connections = 100
+header_read_timeout = "5s"
+max_body_bytes = 1048576
+
+[data_plane.acme]
+enabled = true
+allowed_domains = ["*.example.com"]

@@ -11,6 +11,8 @@ mod detail;
 mod effective_state;
 mod endpoints;
 mod envelope;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 mod hosts;
 mod https_dto;
 mod input;

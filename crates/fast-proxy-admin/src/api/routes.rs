@@ -68,7 +68,7 @@ fn default_response_timeout() -> u64 {
 
 impl RouteRequest {
     /// The route's fields and its body cap, validated together.
-    fn into_fields(self) -> AppResult<(RouteFields, Option<u64>)> {
+    pub(super) fn into_fields(self) -> AppResult<(RouteFields, Option<u64>)> {
         let mut errors = FieldErrors::default();
         if let Some(max) = self.max_body_bytes {
             errors.check(check_max_body_bytes("maxBodyBytes", max));

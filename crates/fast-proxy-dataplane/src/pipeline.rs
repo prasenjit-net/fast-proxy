@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// What the snapshot says should happen to a request.
-enum Resolved<'snapshot> {
+pub(crate) enum Resolved<'snapshot> {
     /// An ACME HTTP-01 challenge this proxy holds: answered before anything
     /// else, never forwarded or sampled.
     AcmeChallenge {
@@ -475,9 +475,9 @@ fn is_misdirected(subsystem: &CompiledSubsystem, tls: &TlsConnection) -> bool {
 
 /// Routes a request. `connection` is the TLS state of the connection, the
 /// port redirects point at, and the effective client address.
-fn resolve<'snapshot>(
+pub(crate) fn resolve<'snapshot, B>(
     snapshot: &'snapshot Snapshot,
-    request: &Request<Incoming>,
+    request: &Request<B>,
     (tls, https_port, client): (Option<&TlsConnection>, u16, std::net::IpAddr),
 ) -> (Resolved<'snapshot>, BypassedScopes) {
     let path = request.uri().path();
@@ -610,7 +610,7 @@ fn resolve<'snapshot>(
 
 /// The request's host: the `Host` header, else the URI authority (absolute
 /// form), else empty, which matches no subsystem.
-fn host_of(request: &Request<Incoming>) -> &str {
+fn host_of<B>(request: &Request<B>) -> &str {
     request
         .headers()
         .get(header::HOST)
