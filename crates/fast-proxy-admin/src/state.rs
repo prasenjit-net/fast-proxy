@@ -87,7 +87,7 @@ impl AdminState {
             latest_traffic: RwLock::new(None),
             ws_clients: AtomicUsize::new(0),
             started: Instant::now(),
-            started_at_ms: chrono::Utc::now().timestamp_millis(),
+            started_at_ms: crate::clock::now_ms(),
             access_log,
             metrics,
             endpoint_events,
@@ -108,7 +108,7 @@ impl AdminState {
     pub fn sampling_changed(&self, change: &'static str) {
         self.broadcast(Event::SamplingChanged {
             change,
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            timestamp_ms: crate::clock::now_ms(),
         });
     }
 
@@ -120,7 +120,7 @@ impl AdminState {
     /// Tells every client a certificate changed, with a matching activity entry.
     /// Only the certificate's name is sent, never key material.
     pub fn certificate_changed(&self, change: &'static str, certificate: &str) {
-        let timestamp_ms = chrono::Utc::now().timestamp_millis();
+        let timestamp_ms = crate::clock::now_ms();
         self.broadcast(Event::CertState {
             change,
             certificate: certificate.to_string(),
@@ -138,7 +138,7 @@ impl AdminState {
         self.broadcast(Event::TokenChanged {
             change,
             token: token.to_string(),
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            timestamp_ms: crate::clock::now_ms(),
         });
         self.activity("token", format!("token {change}: {token}"));
     }
@@ -158,7 +158,7 @@ impl AdminState {
             route: change.route.map(str::to_string),
             active: change.active,
             expires_at_ms: change.expires_at_ms,
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            timestamp_ms: crate::clock::now_ms(),
         });
         self.activity("maintenance", format!("maintenance {verb}: {target}"));
     }
@@ -168,7 +168,7 @@ impl AdminState {
         self.broadcast(Event::Activity {
             kind: kind.to_string(),
             message: message.into(),
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            timestamp_ms: crate::clock::now_ms(),
         });
     }
 }

@@ -16,7 +16,7 @@ pub fn spawn_acme_bridge(state: SharedState) {
                     state: status.state.as_str(),
                     next_attempt_at_ms: status.next_attempt_at_ms,
                     last_error: status.last_error,
-                    timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    timestamp_ms: crate::clock::now_ms(),
                 }),
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return,

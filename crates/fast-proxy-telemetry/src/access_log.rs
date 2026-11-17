@@ -2,9 +2,24 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use time::OffsetDateTime;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
+
+/// `2026-08-03T10:15:42.000Z`: UTC to the millisecond.
+fn log_timestamp(at: OffsetDateTime) -> String {
+    let at = at.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second(),
+        at.millisecond()
+    )
+}
 
 /// Which plane served the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,8 +92,8 @@ impl AccessRecord<'_> {
     /// that served the request, or the last one tried), `attempts`,
     /// `request_id`, `upstream_ms`, `bytes_out`, `proto` (`http/1.1`, `h2`) and
     /// `tls` (the TLS version, `-` on plain HTTP); fields that do not apply are `-`.
-    fn format_line(&self, at: DateTime<Utc>) -> String {
-        let timestamp = at.format("%Y-%m-%dT%H:%M:%S%.3fZ");
+    fn format_line(&self, at: OffsetDateTime) -> String {
+        let timestamp = log_timestamp(at);
         let uri = escape_log_field(self.uri);
         let mut line = format!(
             "{} - [{timestamp}] \"{} {uri} {}\" {} plane={}",
@@ -161,7 +176,7 @@ impl AccessLog {
 
     /// Writes one record to the console and queues it for the file.
     pub fn record(&self, record: &AccessRecord<'_>) {
-        let line = record.format_line(Utc::now());
+        let line = record.format_line(OffsetDateTime::now_utc());
         tracing::info!(target: "access", "{line}");
         if let Some(writer) = &self.writer {
             // The writer only stops when the log is dropped.
@@ -216,7 +231,6 @@ fn escape_log_field(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
 
     use super::*;
 
@@ -249,8 +263,12 @@ mod tests {
         }
     }
 
-    fn at() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 8, 3, 10, 15, 42).unwrap()
+    fn at() -> OffsetDateTime {
+        time::Date::from_calendar_date(2026, time::Month::August, 3)
+            .unwrap()
+            .with_hms(10, 15, 42)
+            .unwrap()
+            .assume_utc()
     }
 
     /// Splits the key=value tail of a line into a lookup.
@@ -279,7 +297,7 @@ mod tests {
 
     #[test]
     fn an_admin_line_names_the_actor_only_when_there_is_one() {
-        let at = Utc.with_ymd_and_hms(2026, 8, 3, 10, 15, 42).unwrap();
+        let at = at();
         let mut record = admin_record("/api/status");
         assert!(!record.format_line(at).contains("actor="));
         record.actor = Some("ci deploy");
