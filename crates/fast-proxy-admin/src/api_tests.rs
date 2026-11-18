@@ -1266,14 +1266,18 @@ async fn upstream_status_shows_effective_state_load_and_probes_per_endpoint() {
         .next()
         .unwrap()
         .candidates;
+    // In a fresh process (nextest runs each test in one) the clock reads 0 here,
+    // which `note_probe` stores as 1, since 0 means "never probed".
+    let probed_at = fast_proxy_balancing::monotonic_ms().max(1);
     candidates[1].runtime.record_probe(false, 1, 1);
-    candidates[1]
-        .runtime
-        .note_probe(false, fast_proxy_balancing::monotonic_ms());
+    candidates[1].runtime.note_probe(false, probed_at);
     candidates[0].runtime.record_latency(2_500, 0);
     let _busy = candidates[0].runtime.track();
 
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    // Measured, not assumed from the sleep: a timer can fire a little early
+    // (Windows), so the age is checked against the clock the handler reads.
+    let age_before_request = fast_proxy_balancing::monotonic_ms() - probed_at;
     let (status, body) = app.get(&format!("{base}/status")).await;
     assert_eq!(status, StatusCode::OK);
     let data = &body["data"];
@@ -1290,7 +1294,8 @@ async fn upstream_status_shows_effective_state_load_and_probes_per_endpoint() {
     assert_eq!(endpoints[1]["reason"], "failed health checks");
     assert_eq!(endpoints[1]["lastProbe"]["ok"], false);
     assert!(
-        endpoints[1]["lastProbe"]["agoMs"].as_u64().unwrap() >= 30,
+        age_before_request > 0
+            && endpoints[1]["lastProbe"]["agoMs"].as_u64().unwrap() >= age_before_request,
         "the probe is reported as old as it is"
     );
     assert!(endpoints[1]["ewmaMs"].is_null());
