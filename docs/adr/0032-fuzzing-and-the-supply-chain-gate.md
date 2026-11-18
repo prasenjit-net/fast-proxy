@@ -34,8 +34,10 @@ Status: the supply-chain gate (L14) is **built** in M7 PR1 (`m7/pr1-decisions`);
   builds, `cargo test` and Windows are untouched. Targets call pure functions only (M7-PLAN
   section 5.4, fourteen targets from host patterns to the redactor and the limiter). Functions
   that are private today become reachable behind a `fuzzing` feature, never as public API.
-- Each target runs 60 s on every pull request (Linux), and 20 minutes nightly; a nightly crash
-  opens an issue with its input. A crash input is committed as a unit test in the crate that owns
+- Each target runs 20 s on every pull request (Linux), and 20 minutes nightly; a nightly crash
+  opens an issue with its input. (60 s at first; cut to 20 s because fourteen targets run one after
+  another and made this the slowest CI job. Shallow bugs show in well under a second, the gcra one
+  did, and the nightly run is for deep ones.) A crash input is committed as a unit test in the crate that owns
   the function. Before 1.0, every target runs one CPU hour without a crash or timeout.
 
 ## Consequences
