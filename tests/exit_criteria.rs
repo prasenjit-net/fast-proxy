@@ -118,9 +118,8 @@ fn rolling_back_restores_the_earlier_behavior() {
 fn the_configuration_survives_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     let backend = start_backend("persistent");
-    let (data_port, admin_port) = (free_port(), free_port());
     {
-        let proxy = start_proxy_on(dir.path(), data_port, admin_port);
+        let proxy = start_proxy(dir.path());
         create_site(&proxy, "shop", "shop.example.com", backend);
         assert_eq!(
             through_proxy(&proxy, "shop.example.com", "/").1,
@@ -128,7 +127,8 @@ fn the_configuration_survives_a_restart() {
         );
     } // dropped: the process is killed
 
-    let proxy = start_proxy_on(dir.path(), data_port, admin_port);
+    // Fresh ports: the database in `dir` is what must survive.
+    let proxy = start_proxy(dir.path());
     assert_eq!(
         through_proxy(&proxy, "shop.example.com", "/").1,
         "persistent /"
@@ -192,11 +192,14 @@ fn an_invalid_trusted_proxy_aborts_startup() {
 fn ctrl_c_lets_an_in_flight_request_finish_and_then_exits() {
     let dir = tempfile::tempdir().unwrap();
     let mut proxy = start_proxy(dir.path());
-    let backend = start_slow_backend("slow", Duration::from_millis(800));
+    let (backend, arrived) = start_counting_slow_backend("slow", Duration::from_millis(800));
     create_site(&proxy, "shop", "shop.example.com", backend);
 
     let client = request_in_background(&proxy);
-    thread::sleep(Duration::from_millis(250));
+    assert!(
+        wait_until(|| arrived.load(std::sync::atomic::Ordering::SeqCst) == 1),
+        "the request reached the backend"
+    );
     interrupt(&proxy);
 
     assert_eq!(
@@ -214,11 +217,14 @@ fn ctrl_c_lets_an_in_flight_request_finish_and_then_exits() {
 fn a_request_that_outlives_the_grace_period_is_cut_off() {
     let dir = tempfile::tempdir().unwrap();
     let mut proxy = start_on_free_ports(dir.path(), "shutdown_grace = \"300ms\"", "");
-    let backend = start_slow_backend("never", Duration::from_secs(20));
+    let (backend, arrived) = start_counting_slow_backend("never", Duration::from_secs(20));
     create_site(&proxy, "shop", "shop.example.com", backend);
 
     let client = request_in_background(&proxy);
-    thread::sleep(Duration::from_millis(250));
+    assert!(
+        wait_until(|| arrived.load(std::sync::atomic::Ordering::SeqCst) == 1),
+        "the request reached the backend"
+    );
     let interrupted_at = Instant::now();
     interrupt(&proxy);
 

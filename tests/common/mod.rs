@@ -7,6 +7,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -50,17 +52,27 @@ pub fn answer(mut stream: TcpStream, name: &str) {
 
 /// A backend that waits `delay` before answering.
 pub fn start_slow_backend(name: &'static str, delay: Duration) -> u16 {
+    start_counting_slow_backend(name, delay).0
+}
+
+/// Like [`start_slow_backend`], also counting the connections that reached it,
+/// so a test can wait until a request is really in flight instead of guessing
+/// with a sleep.
+pub fn start_counting_slow_backend(name: &'static str, delay: Duration) -> (u16, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let arrived = Arc::new(AtomicUsize::new(0));
+    let counter = arrived.clone();
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
+            counter.fetch_add(1, Ordering::SeqCst);
             thread::spawn(move || {
                 thread::sleep(delay);
                 answer(stream, name);
             });
         }
     });
-    port
+    (port, arrived)
 }
 
 pub mod console;
@@ -112,16 +124,9 @@ pub fn spawn_with_args(config: &Path, args: &[&str]) -> Child {
         .unwrap()
 }
 
+/// Starts the proxy on fresh ports, retrying on new ones if a port was taken.
 pub fn start_proxy(dir: &Path) -> Proxy {
     start_on_free_ports(dir, "", "")
-}
-
-pub fn start_proxy_on(dir: &Path, data_port: u16, admin_port: u16) -> Proxy {
-    start_proxy_with(dir, data_port, admin_port, "")
-}
-
-pub fn start_proxy_with(dir: &Path, data_port: u16, admin_port: u16, extra_config: &str) -> Proxy {
-    start_proxy_with_tail(dir, data_port, admin_port, extra_config, "")
 }
 
 /// Starts on freshly picked ports. A "free" port can be taken by a parallel
@@ -136,18 +141,6 @@ pub fn start_on_free_ports(dir: &Path, extra_config: &str, tail: &str) -> Proxy 
         }
     }
     panic!("the proxy would not start on any of 5 port pairs: {last_error}");
-}
-
-/// Like [`start_proxy_with`], appending `tail` (extra config sections) to the file.
-pub fn start_proxy_with_tail(
-    dir: &Path,
-    data_port: u16,
-    admin_port: u16,
-    extra_config: &str,
-    tail: &str,
-) -> Proxy {
-    try_start(dir, data_port, admin_port, extra_config, tail)
-        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 pub fn try_start(
@@ -351,8 +344,11 @@ pub fn metric(proxy: &Proxy, prefix: &str) -> Option<f64> {
         .and_then(|value| value.parse().ok())
 }
 
+/// Polls `condition` until it holds; `false` after 20 s. The limit is generous
+/// on purpose: it costs nothing when the condition comes true, and a loaded CI
+/// machine (Windows especially) can take seconds to write or report something.
 pub fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         if condition() {
             return true;
