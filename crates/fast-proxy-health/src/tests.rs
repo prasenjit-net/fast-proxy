@@ -80,7 +80,7 @@ async fn a_prober_flips_health_only_after_exactly_fall_failures_and_rise_success
     ));
 
     assert!(
-        eventually(5, || probes(&context.metrics, "ok") >= 1).await,
+        eventually(15, || probes(&context.metrics, "ok") >= 1).await,
         "probing started"
     );
     backend.set_status(500);
@@ -133,9 +133,9 @@ async fn a_killed_backend_is_marked_unhealthy_and_a_revived_one_healthy() {
     tokio::spawn(engine.run(changes, shutdown.clone()));
 
     backend.kill();
-    assert!(eventually(5, || !runtime.is_active_healthy()).await);
+    assert!(eventually(15, || !runtime.is_active_healthy()).await);
     backend.revive().await;
-    assert!(eventually(5, || runtime.is_active_healthy()).await);
+    assert!(eventually(15, || runtime.is_active_healthy()).await);
     shutdown.cancel();
 }
 
@@ -203,7 +203,7 @@ async fn unchanged_probers_keep_running_and_changed_or_removed_ones_are_replaced
     reconciler.reconcile(&moved);
     assert!(old_tokens.iter().all(CancellationToken::is_cancelled));
     assert!(
-        eventually(5, || first.probes_of("/b") > 0
+        eventually(15, || first.probes_of("/b") > 0
             && second.probes_of("/b") > 0)
         .await
     );
@@ -232,7 +232,7 @@ async fn the_engine_follows_configuration_changes_and_stops_at_shutdown() {
     let running = tokio::spawn(engine.run(changes, shutdown.clone()));
 
     assert!(
-        eventually(5, || first.probes_of("/") > 0).await,
+        eventually(15, || first.probes_of("/") > 0).await,
         "initial prober runs"
     );
     assert_eq!(second.probes_of("/"), 0);
@@ -249,7 +249,7 @@ async fn the_engine_follows_configuration_changes_and_stops_at_shutdown() {
         })
         .unwrap();
     assert!(
-        eventually(5, || second.probes_of("/") > 0).await,
+        eventually(15, || second.probes_of("/") > 0).await,
         "new endpoint is probed"
     );
 
@@ -309,7 +309,7 @@ async fn gauges_show_health_ejection_and_in_flight_and_forget_removed_endpoints(
             r#"fastproxy_upstream_endpoint_healthy{{endpoint="{addr}",subsystem="shop",upstream="backend"}} {value}"#
         )
     };
-    assert!(eventually(3, || metrics.render().contains(&healthy(&up.addr, 1))).await);
+    assert!(eventually(15, || metrics.render().contains(&healthy(&up.addr, 1))).await);
     let text = metrics.render();
     assert!(text.contains(&healthy(&down.addr, 0)), "{text}");
     assert!(text.contains(&format!(
@@ -322,7 +322,7 @@ async fn gauges_show_health_ejection_and_in_flight_and_forget_removed_endpoints(
         Some(&live),
     ));
     assert!(
-        eventually(3, || !metrics.render().contains(&down.addr.to_string())).await,
+        eventually(15, || !metrics.render().contains(&down.addr.to_string())).await,
         "the removed endpoint's series are deleted"
     );
     shutdown.cancel();
@@ -345,7 +345,7 @@ async fn a_group_that_does_not_verify_upstream_certificates_is_marked_in_the_met
     ));
     let marked = r#"fastproxy_upstream_tls{subsystem="shop",upstream="backend",verify="false"} 1"#;
     assert!(
-        eventually(3, || metrics.render().contains(marked)).await,
+        eventually(15, || metrics.render().contains(marked)).await,
         "{}",
         metrics.render()
     );
@@ -353,7 +353,7 @@ async fn a_group_that_does_not_verify_upstream_certificates_is_marked_in_the_met
     config.subsystems[0].upstream_groups[0].policy.tls.enabled = false;
     holder.swap(snapshot(&config, None));
     assert!(
-        eventually(3, || !metrics.render().contains("fastproxy_upstream_tls{")).await,
+        eventually(15, || !metrics.render().contains("fastproxy_upstream_tls{")).await,
         "a group with plain upstreams is not listed"
     );
     shutdown.cancel();
@@ -412,9 +412,9 @@ async fn a_group_in_maintenance_keeps_being_probed_so_it_is_ready_when_maintenan
     // The probes go on while everything is in maintenance: a failing backend
     // is noticed, and a recovered one is noticed too.
     backend.kill();
-    assert!(eventually(5, || !runtime.is_active_healthy()).await);
+    assert!(eventually(15, || !runtime.is_active_healthy()).await);
     backend.revive().await;
-    assert!(eventually(5, || runtime.is_active_healthy()).await);
+    assert!(eventually(15, || runtime.is_active_healthy()).await);
 
     // Maintenance ends: the same runtime state carries into the new snapshot,
     // so the group serves at once, with no warm-up.

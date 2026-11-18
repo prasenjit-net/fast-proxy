@@ -373,10 +373,10 @@ fn disabling_takes_an_endpoint_out_enabling_brings_it_back_and_the_state_survive
     }
     assert_eq!(backends[2].hits(), 0, "a disabled endpoint gets nothing");
 
-    // Restart on the same ports and the same database.
-    let (data, admin_addr) = (proxy.data.port(), proxy.admin.port());
+    // Restart on the same database (on fresh ports: a port just let go can be
+    // slow to bind again, and another test may take it).
     drop(proxy);
-    let proxy = start_proxy_on(dir.path(), data, admin_addr);
+    let proxy = start_proxy(dir.path());
     assert_eq!(
         effective_state(&proxy, sub, up, backends[2].port),
         "disabled"
