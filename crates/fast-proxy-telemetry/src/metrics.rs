@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::acme_metrics::{AcmeChallengeOutcome, AcmeMetrics, AcmeOrderOutcome};
 use crate::admin_metrics::{AdminMetrics, AdminResult, AuditResult};
+use crate::limits_metrics::LimitsMetrics;
 use crate::maintenance_metrics::{MaintenanceMetrics, MaintenanceReading, RESPONSES_METRIC};
 use crate::sampling_metrics::{SampleDropReason, SamplerReading, SamplingMetrics};
 use crate::tls_metrics::{
@@ -107,6 +108,7 @@ pub struct Metrics {
     sampling: SamplingMetrics,
     admin: AdminMetrics,
     acme: AcmeMetrics,
+    limits: LimitsMetrics,
 }
 
 /// Metric names and label sets are fixed at compile time and registered
@@ -149,8 +151,10 @@ impl Metrics {
         let sampling = SamplingMetrics::new(&registry);
         let admin = AdminMetrics::new(&registry);
         let acme = AcmeMetrics::new(&registry);
+        let limits = LimitsMetrics::new(&registry);
         Self {
             acme,
+            limits,
             upstream,
             tls,
             maintenance,
@@ -370,6 +374,40 @@ impl Metrics {
     }
 
     /// Counts one more open client connection.
+    /// Counts a connection closed on accept because a cap was reached;
+    /// `reason` is a fixed name such as `max_connections`.
+    pub fn connection_refused(&self, reason: &'static str) {
+        self.limits.connection_refused(reason);
+    }
+
+    /// Counts a client closed or answered for making no progress; `kind` is a
+    /// fixed name such as `first_byte`, `body`, `send` or `tunnel_idle`.
+    pub fn client_timeout(&self, kind: &'static str) {
+        self.limits.client_timeout(kind);
+    }
+
+    /// Counts a request a limit refused; `reason` is a fixed name such as
+    /// `rate_limited` or `payload_too_large`.
+    pub fn request_refused(&self, reason: &'static str) {
+        self.limits.request_refused(reason);
+    }
+
+    /// Counts a 429 from the rate-limit policy of `route` in `subsystem`
+    /// (configuration names, never request values).
+    pub fn rate_limited(&self, subsystem: &str, route: &str) {
+        self.limits.rate_limited(subsystem, route);
+    }
+
+    /// What the limits refused so far, for `GET /api/limits`.
+    pub fn limit_counts(&self) -> crate::LimitCounts {
+        self.limits.counts()
+    }
+
+    /// Counts a new client let through because the key table was full.
+    pub fn rate_limit_table_full(&self) {
+        self.limits.rate_limit_table_full();
+    }
+
     pub fn connection_opened(&self) {
         self.active_connections.inc();
     }
@@ -729,6 +767,42 @@ mod tests {
             metrics.maintenance_response("subsystem", "shop", "_none");
         }
         assert_eq!(metrics.traffic_totals().overall().errors, 0);
+    }
+
+    #[test]
+    fn refusals_and_rate_limits_are_counted() {
+        let metrics = Metrics::new();
+        metrics.request_refused("rate_limited");
+        metrics.rate_limited("shop", "/api");
+        metrics.rate_limit_table_full();
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_requests_refused_total{reason="rate_limited"} 1"#));
+        assert!(text.contains(r#"fastproxy_rate_limited_total{route="/api",subsystem="shop"} 1"#));
+        assert!(text.contains("fastproxy_rate_limit_table_full_total 1"));
+    }
+
+    #[test]
+    fn client_timeouts_are_counted_by_kind() {
+        let metrics = Metrics::new();
+        metrics.client_timeout("first_byte");
+        metrics.client_timeout("body");
+        metrics.client_timeout("body");
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_client_timeouts_total{kind="first_byte"} 1"#));
+        assert!(text.contains(r#"fastproxy_client_timeouts_total{kind="body"} 2"#));
+    }
+
+    #[test]
+    fn refused_connections_are_counted_by_reason() {
+        let metrics = Metrics::new();
+        metrics.connection_refused("max_connections");
+        metrics.connection_refused("max_connections_per_client");
+        metrics.connection_refused("max_connections_per_client");
+        let text = metrics.render();
+        assert!(text.contains(r#"fastproxy_connections_refused_total{reason="max_connections"} 1"#));
+        assert!(text.contains(
+            r#"fastproxy_connections_refused_total{reason="max_connections_per_client"} 2"#
+        ));
     }
 
     #[test]

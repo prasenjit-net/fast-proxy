@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 fast-proxy-auth = { path = "../fast-proxy-auth" }
 fast-proxy-balancing = { path = "../fast-proxy-balancing" }
+fast-proxy-limits = { path = "../fast-proxy-limits" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 fast-proxy-routing = { path = "../fast-proxy-routing" }
 fast-proxy-store = { path = "../fast-proxy-store" }
@@ -25,3 +26,6 @@ fast-proxy-sampling = { path = "../fast-proxy-sampling" }
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 base64 = "0.22"
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

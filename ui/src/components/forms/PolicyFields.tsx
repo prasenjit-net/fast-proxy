@@ -122,7 +122,7 @@ export default function PolicyFields(props: PolicyFieldsProps) {
         className="rounded-md border border-line px-3 py-2"
       >
         <summary className="cursor-pointer text-[0.88rem] font-medium">
-          Advanced: health checks, ejection and retry budget
+          Advanced: health checks, ejection, retry budget and request cap
         </summary>
         <div className="mt-3 flex flex-col gap-4">
           <FormField label="Active health check" htmlFor={id("health-check")}>
@@ -184,6 +184,15 @@ export default function PolicyFields(props: PolicyFieldsProps) {
               <NumberField id={id("fall")} label="Failed probes to mark unhealthy" value={values.fall} onChange={(v) => onChange({ fall: v })} error={error("health.fall")} />
             </div>
           ) : null}
+
+          <NumberField
+            id={id("max-requests")}
+            label="Requests at once per endpoint"
+            value={values.maxRequests}
+            onChange={(v) => onChange({ maxRequests: v })}
+            error={error("maxRequests")}
+            hint="A full endpoint is skipped; when all are full the answer is 503. Empty is unlimited."
+          />
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <NumberField

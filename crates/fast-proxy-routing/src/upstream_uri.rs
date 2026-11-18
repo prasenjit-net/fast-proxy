@@ -76,6 +76,8 @@ mod tests {
             connect_timeout: Duration::from_secs(5),
             response_timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
+            rate_limit: None,
+            max_body_bytes: None,
             upstream: Arc::new(
                 CompiledUpstream::build(
                     &UpstreamGroupConfig {

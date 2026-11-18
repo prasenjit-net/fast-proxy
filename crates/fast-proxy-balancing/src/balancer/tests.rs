@@ -215,3 +215,88 @@ fn debug_output_does_not_panic() {
     );
     assert!(text.contains("Balancer"));
 }
+
+#[test]
+fn an_endpoint_at_the_request_cap_is_skipped_by_every_algorithm() {
+    let mut rng = Rng::seeded(3);
+    for algorithm in ALGORITHMS {
+        let endpoints = candidates(&[1, 1, 1]);
+        let balancer =
+            balancer(algorithm, FailurePolicy::FailOpen, &endpoints).with_max_requests(Some(2));
+        let _held: Vec<_> = (0..2).map(|_| endpoints[1].runtime.track()).collect();
+        for key in 0..60 {
+            let chosen = balancer
+                .select(&endpoints, &ctx(key), None, &mut rng, 10)
+                .unwrap();
+            assert_ne!(chosen.index, 1, "{algorithm:?} chose the full endpoint");
+            assert!(!chosen.panic);
+        }
+        assert!(balancer.is_at_capacity(&endpoints), "{algorithm:?}");
+    }
+}
+
+#[test]
+fn a_full_group_refuses_even_when_it_fails_open() {
+    let mut rng = Rng::seeded(5);
+    for algorithm in ALGORITHMS {
+        let endpoints = candidates(&[1, 1]);
+        let balancer =
+            balancer(algorithm, FailurePolicy::FailOpen, &endpoints).with_max_requests(Some(1));
+        let _held: Vec<_> = endpoints.iter().map(|e| e.runtime.track()).collect();
+        assert_eq!(
+            balancer.select(&endpoints, &ctx(1), None, &mut rng, 10),
+            None,
+            "{algorithm:?}: panic mode never overrides a cap"
+        );
+        assert!(balancer.is_at_capacity(&endpoints));
+    }
+}
+
+#[test]
+fn without_a_cap_nothing_is_ever_at_capacity() {
+    let endpoints = candidates(&[1]);
+    let balancer = balancer(
+        LbAlgorithm::RoundRobin,
+        FailurePolicy::FailClosed,
+        &endpoints,
+    );
+    let _held: Vec<_> = (0..1000).map(|_| endpoints[0].runtime.track()).collect();
+    let mut rng = Rng::seeded(1);
+    assert!(balancer
+        .select(&endpoints, &ctx(1), None, &mut rng, 10)
+        .is_some());
+    assert!(!balancer.is_at_capacity(&endpoints));
+    assert_eq!(balancer.max_requests(), None);
+}
+
+#[test]
+fn try_track_never_lets_concurrent_requests_past_the_cap() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    const CAP: u32 = 4;
+    let runtime = Arc::new(crate::EndpointRuntime::new());
+    let most = Arc::new(AtomicU32::new(0));
+    let workers: Vec<_> = (0..16)
+        .map(|_| {
+            let (runtime, most) = (runtime.clone(), most.clone());
+            std::thread::spawn(move || {
+                for _ in 0..2_000 {
+                    if let Some(guard) = runtime.try_track(CAP) {
+                        most.fetch_max(runtime.in_flight(), Ordering::Relaxed);
+                        drop(guard);
+                    }
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    assert!(most.load(Ordering::Relaxed) <= CAP);
+    assert!(most.load(Ordering::Relaxed) >= 1);
+    assert_eq!(runtime.in_flight(), 0, "every guard gave its place back");
+    let full: Vec<_> = (0..CAP).map(|_| runtime.try_track(CAP).unwrap()).collect();
+    assert!(runtime.try_track(CAP).is_none());
+    drop(full);
+}

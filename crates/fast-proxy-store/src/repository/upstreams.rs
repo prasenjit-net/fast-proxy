@@ -1,4 +1,4 @@
-use fast_proxy_model::{SubsystemId, UpstreamGroupId, MAX_ENDPOINTS_PER_GROUP};
+use fast_proxy_model::{check_max_requests, SubsystemId, UpstreamGroupId, MAX_ENDPOINTS_PER_GROUP};
 use rusqlite::Connection;
 
 use super::{ca_bundles, endpoints, ensure_subsystem, expect_changed, policy_columns, touch};
@@ -102,6 +102,26 @@ pub fn update(
         params.as_slice(),
     )?;
     expect_changed(changed, &format!("upstream {}", group_id.0))?;
+    touch(conn, subsystem_id)
+}
+
+/// Sets the most requests one endpoint of the group may have in flight; `None`
+/// is unlimited (ADR 0031). Kept apart from [`update`] so an edit that does not
+/// know about the cap leaves it alone.
+pub fn set_max_requests(
+    conn: &Connection,
+    subsystem_id: SubsystemId,
+    group_id: UpstreamGroupId,
+    max: Option<u32>,
+) -> Result<(), StoreError> {
+    if let Some(max) = max {
+        check_max_requests(max)?;
+    }
+    let changed = conn.execute(
+        "UPDATE upstream_group SET max_requests = ?1 WHERE id = ?2 AND subsystem_id = ?3",
+        rusqlite::params![max, group_id.0, subsystem_id.0],
+    )?;
+    expect_changed(changed, &format!("upstream group {}", group_id.0))?;
     touch(conn, subsystem_id)
 }
 

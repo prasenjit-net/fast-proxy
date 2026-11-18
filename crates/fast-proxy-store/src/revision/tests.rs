@@ -829,3 +829,82 @@ mod outside_config {
         }
     }
 }
+
+#[test]
+fn rollback_restores_rate_limits_body_caps_and_request_caps() {
+    use std::time::Duration;
+
+    use fast_proxy_model::{RateLimitHeader, RateLimitKey, RateLimitPolicy};
+
+    use crate::repository::rate_limits;
+
+    let policy = |rate, key| RateLimitPolicy {
+        rate,
+        period: Duration::from_secs(60),
+        burst: 3,
+        key,
+        ipv6_prefix: 56,
+    };
+    let header = RateLimitKey::Header(RateLimitHeader::parse("h", "x-api-key").unwrap());
+    let mut db = db();
+    let shop = seed(&mut db, "shop", "shop.example.com"); // v1
+    let route = db.load_all().unwrap().subsystems[0].routes[0].id;
+    commit(&mut db, "limits", |c| {
+        rate_limits::set(c, shop.subsystem, None, &policy(100, RateLimitKey::Client))?;
+        rate_limits::set(c, shop.subsystem, Some(route), &policy(10, header.clone()))?;
+        routes::set_max_body_bytes(c, shop.subsystem, route, Some(1 << 20))?;
+        upstreams::set_max_requests(c, shop.subsystem, shop.group, Some(64))
+    })
+    .unwrap(); // v2
+    let limited = db.load_all().unwrap();
+    commit(&mut db, "loosened", |c| {
+        rate_limits::clear(c, shop.subsystem, None)?;
+        rate_limits::set(
+            c,
+            shop.subsystem,
+            Some(route),
+            &policy(1000, RateLimitKey::Client),
+        )?;
+        routes::set_max_body_bytes(c, shop.subsystem, route, None)?;
+        upstreams::set_max_requests(c, shop.subsystem, shop.group, None)
+    })
+    .unwrap(); // v3
+
+    restore_as_new_revision(&mut db, 2);
+    let restored = db.load_all().unwrap();
+    assert_eq!(restored, limited);
+    let subsystem = &restored.subsystems[0];
+    assert_eq!(
+        subsystem.rate_limit,
+        Some(policy(100, RateLimitKey::Client))
+    );
+    assert_eq!(subsystem.routes[0].rate_limit, Some(policy(10, header)));
+    assert_eq!(subsystem.routes[0].max_body_bytes, Some(1 << 20));
+    assert_eq!(subsystem.upstream_groups[0].policy.max_requests, Some(64));
+
+    restore_as_new_revision(&mut db, 1);
+    let before_limits = &db.load_all().unwrap().subsystems[0];
+    assert_eq!(before_limits.rate_limit, None);
+    assert_eq!(before_limits.routes[0].max_body_bytes, None);
+    assert_eq!(before_limits.upstream_groups[0].policy.max_requests, None);
+}
+
+#[test]
+fn an_edit_that_does_not_know_the_caps_leaves_them_alone() {
+    let mut db = db();
+    let shop = seed(&mut db, "shop", "shop.example.com");
+    let route = db.load_all().unwrap().subsystems[0].routes[0].id;
+    commit(&mut db, "caps", |c| {
+        routes::set_max_body_bytes(c, shop.subsystem, route, Some(4096))?;
+        upstreams::set_max_requests(c, shop.subsystem, shop.group, Some(8))
+    })
+    .unwrap();
+    commit(&mut db, "edits", |c| {
+        routes::update(c, shop.subsystem, route, &route_fields("/", shop.group))?;
+        upstreams::update(c, shop.subsystem, shop.group, &upstream_fields("backend"))
+    })
+    .unwrap();
+    let subsystem = &db.load_all().unwrap().subsystems[0];
+    assert_eq!(subsystem.routes[0].max_body_bytes, Some(4096));
+    assert_eq!(subsystem.upstream_groups[0].policy.max_requests, Some(8));
+}

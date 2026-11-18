@@ -21,12 +21,12 @@ use hyper_util::rt::{TokioExecutor, TokioTimer};
 use crate::connections::ConnectionContext;
 use crate::headers::{self, ClientInfo};
 use crate::protocol_switch::{into_client_response, switch_protocols};
-use crate::replay_body::{BodyOwner, BodyStats, ReplayBody};
+use crate::replay_body::{client_body_fault, BodyOwner, BodyStats, ClientBodyFault, ReplayBody};
 use crate::retry_policy::{retry_reason, AttemptFailure};
 use crate::selection::select_endpoint;
 use crate::trusted_proxies::TrustedProxies;
 use crate::upstream_errors::{failure_of, kind_for, outcome_of_error, outcome_of_status};
-use crate::{FixedResponse, Forward, Forwarded, ResponseBody, Target};
+use crate::{BodyLimits, FixedResponse, Forward, Forwarded, ResponseBody, Target};
 
 type HttpClient = Client<HttpsConnector<HttpConnector>, ReplayBody>;
 
@@ -163,6 +163,9 @@ enum AttemptEnd {
         kind: UpstreamErrorKind,
         failure: FailureKind,
     },
+    /// The client's body went past its cap or stalled: the client's doing, so
+    /// the endpoint is not blamed and nothing is retried.
+    ClientBody(ClientBodyFault),
 }
 
 impl UpstreamClient {
@@ -234,6 +237,11 @@ impl UpstreamClient {
                     failure: FailureKind::ResponseTimeout,
                 }
             }
+            Ok(Err(err)) if client_body_fault(&err).is_some() => {
+                let fault = client_body_fault(&err).unwrap_or(ClientBodyFault::OverCap);
+                tracing::debug!(upstream = %chosen.endpoint.addr, "client body: {fault}");
+                AttemptEnd::ClientBody(fault)
+            }
             Ok(Err(err)) => {
                 tracing::warn!(upstream = %chosen.endpoint.addr, "upstream request failed: {err}");
                 let kind = kind_for(err.is_connect(), &err);
@@ -294,6 +302,49 @@ impl UpstreamClient {
             candidate: &upstream.candidates[selection.index],
         })
     }
+}
+
+/// Counts an attempt in flight on `chosen`. Under a request cap (ADR 0031) the
+/// place is taken atomically; when another request took the last one after
+/// `chosen` was selected, another endpoint is chosen (this is not a retry), and
+/// `None` means every endpoint that may take the request is full.
+fn reserve<'a>(
+    target: &Target<'a>,
+    head: &http::request::Parts,
+    chosen: &mut Chosen<'a>,
+) -> Option<InFlightGuard> {
+    let upstream = &target.route.upstream;
+    let Some(cap) = upstream.balancer.max_requests() else {
+        return Some(chosen.candidate.runtime.track());
+    };
+    let (index, guard) = reserve_slot(&upstream.candidates, cap, chosen.index, |full| {
+        select_endpoint(upstream, &head.headers, target.client_addr.ip(), Some(full))
+            .map(|selection| selection.index)
+    })?;
+    *chosen = Chosen {
+        index,
+        endpoint: &upstream.endpoints[index],
+        candidate: &upstream.candidates[index],
+    };
+    Some(guard)
+}
+
+/// Takes a place under `cap` on `candidates[index]`, asking `reselect` for
+/// another endpoint (given the full one) each time a place is gone; at most one
+/// try per endpoint, so a selector that keeps naming a full one cannot loop.
+fn reserve_slot(
+    candidates: &[Candidate],
+    cap: u32,
+    mut index: usize,
+    mut reselect: impl FnMut(usize) -> Option<usize>,
+) -> Option<(usize, InFlightGuard)> {
+    for _ in 0..candidates.len() {
+        if let Some(guard) = candidates[index].runtime.try_track(cap) {
+            return Some((index, guard));
+        }
+        index = reselect(index)?;
+    }
+    None
 }
 
 /// What the retry rules need to know about a failed attempt.
@@ -411,7 +462,8 @@ impl Forward for UpstreamClient {
         );
         headers::apply_request_id(&mut head.headers, target.request_id);
 
-        let owner = BodyOwner::new(body, target.request_body);
+        let body_limits = head.extensions.get::<BodyLimits>().copied();
+        let owner = BodyOwner::new(body, target.request_body, body_limits);
         let client = self.client_for(
             route.connect_timeout,
             upstream.client_tls.as_ref(),
@@ -438,7 +490,16 @@ impl Forward for UpstreamClient {
         let endpoint_of = |chosen: Chosen<'_>| u16::try_from(chosen.index).unwrap_or(u16::MAX);
         loop {
             attempts += 1;
-            let in_flight = chosen.candidate.runtime.track();
+            let Some(in_flight) = reserve(&target, &head, &mut chosen) else {
+                let response =
+                    FixedResponse::EndpointCapacity.render(target.request_id, target.wants_json);
+                return finished(
+                    response,
+                    (chosen.index, attempts - 1),
+                    None,
+                    Seen::new(log, false, &owner),
+                );
+            };
             let Some(attempt) = build_attempt(&head, &target, chosen, owner.attempt()) else {
                 tracing::warn!(route = route.id.0, "cannot build an upstream URI");
                 let response = self.failed(&target, UpstreamErrorKind::Other);
@@ -456,19 +517,22 @@ impl Forward for UpstreamClient {
                         failure: None,
                         upstream_status: Some(response.status().as_u16()),
                     });
-                    let response = match client_upgrade {
+                    // A tunnel keeps the attempt's own place on the endpoint
+                    // for as long as it lives, so it counts once.
+                    let (response, in_flight) = match client_upgrade {
                         Some(client_upgrade)
                             if response.status() == StatusCode::SWITCHING_PROTOCOLS =>
                         {
-                            let tunnel = chosen.candidate.runtime.track();
-                            switch_protocols(response, client_upgrade, context, tunnel)
+                            let tunnel =
+                                switch_protocols(response, client_upgrade, context, in_flight);
+                            (tunnel, None)
                         }
-                        _ => into_client_response(response),
+                        _ => (into_client_response(response), Some(in_flight)),
                     };
                     return finished(
                         response,
                         (chosen.index, attempts),
-                        Some(in_flight),
+                        in_flight,
                         Seen::new(log, false, &owner),
                     );
                 }
@@ -500,6 +564,22 @@ impl Forward for UpstreamClient {
                             );
                         }
                     }
+                }
+                AttemptEnd::ClientBody(fault) => {
+                    let fixed = match fault {
+                        ClientBodyFault::OverCap => FixedResponse::PayloadTooLarge,
+                        ClientBodyFault::Stalled => {
+                            self.metrics.client_timeout("body");
+                            FixedResponse::RequestTimeout
+                        }
+                    };
+                    let response = fixed.render(target.request_id, target.wants_json);
+                    return finished(
+                        response,
+                        (chosen.index, attempts),
+                        None,
+                        Seen::new(log, false, &owner),
+                    );
                 }
                 AttemptEnd::Failed { kind, failure } => {
                     log.push(Attempt {
@@ -591,5 +671,56 @@ mod tests {
         client.client_for(Duration::from_secs(1), None, "");
         client.client_for(Duration::from_secs(2), None, "");
         assert_eq!(client.clients.lock().unwrap().len(), 2);
+    }
+
+    fn candidates(count: usize) -> Vec<Candidate> {
+        (0..count)
+            .map(|_| Candidate {
+                runtime: Arc::new(EndpointRuntime::new()),
+                weight: 1,
+                admin_enabled: true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_place_taken_after_selection_moves_the_request_to_another_endpoint() {
+        let endpoints = candidates(2);
+        // Another request took endpoint 0's only place after it was chosen.
+        let _taken = endpoints[0].runtime.try_track(1).unwrap();
+        let (index, guard) = reserve_slot(&endpoints, 1, 0, |_| Some(1)).unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(endpoints[1].runtime.in_flight(), 1);
+        assert!(endpoints[1].runtime.try_track(1).is_none(), "now full");
+        drop(guard);
+        assert_eq!(endpoints[1].runtime.in_flight(), 0);
+    }
+
+    #[test]
+    fn when_every_endpoint_is_full_there_is_no_place() {
+        let endpoints = candidates(2);
+        let _held: Vec<_> = endpoints
+            .iter()
+            .map(|e| e.runtime.try_track(1).unwrap())
+            .collect();
+        assert!(reserve_slot(&endpoints, 1, 0, |full| Some(1 - full)).is_none());
+        assert!(reserve_slot(&endpoints, 1, 0, |_| None).is_none());
+        assert!(
+            endpoints.iter().all(|e| e.runtime.in_flight() == 1),
+            "a refusal takes nothing"
+        );
+    }
+
+    #[test]
+    fn a_selector_that_keeps_naming_a_full_endpoint_cannot_loop() {
+        let endpoints = candidates(3);
+        let _taken = endpoints[2].runtime.try_track(1).unwrap();
+        let mut asked = 0;
+        let reserved = reserve_slot(&endpoints, 1, 2, |_| {
+            asked += 1;
+            Some(2)
+        });
+        assert!(reserved.is_none());
+        assert!(asked <= 3);
     }
 }

@@ -37,6 +37,7 @@ const ADVANCED_FIELDS = [
   "passive.maxEjectionMs",
   "passive.maxEjectionPercent",
   "retryBudget.percent",
+  "maxRequests",
   "retryBudget.minPerSec",
 ];
 

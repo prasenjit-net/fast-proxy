@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError, SamplingConfig};
+use super::{AdminAuth, AdminTlsConfig, AppConfig, ConfigError, LimitsConfig, SamplingConfig};
 
 /// Checks cross-field rules and makes sure the state directory exists.
 pub fn validate(config: &AppConfig) -> Result<(), ConfigError> {
@@ -55,7 +55,78 @@ pub fn check(config: &AppConfig) -> Result<(), ConfigError> {
     validate_admin(config)?;
     validate_tls(config)?;
     super::validate_acme::check(config)?;
-    validate_sampling(&config.sampling)
+    validate_sampling(&config.sampling)?;
+    validate_limits(&config.limits)
+}
+
+/// Checks `[limits]`. hyper refuses a head buffer under 8 KiB, and a request
+/// target must fit in the head.
+fn validate_limits(limits: &LimitsConfig) -> Result<(), ConfigError> {
+    let within = |name: &str, value: u64, min: u64, max: u64| {
+        if (min..=max).contains(&value) {
+            return Ok(());
+        }
+        invalid(format!("limits.{name} must be between {min} and {max}"))
+    };
+    within(
+        "max_connections",
+        limits.max_connections as u64,
+        1,
+        1_000_000,
+    )?;
+    within(
+        "max_connections_per_client",
+        limits.max_connections_per_client as u64,
+        0,
+        limits.max_connections as u64,
+    )?;
+    within(
+        "header_read_timeout",
+        limits.header_read_timeout.as_millis() as u64,
+        1_000,
+        300_000,
+    )?;
+    within("max_header_count", limits.max_header_count as u64, 1, 1_000)?;
+    within(
+        "max_header_bytes",
+        limits.max_header_bytes as u64,
+        8 * 1024,
+        1 << 20,
+    )?;
+    within(
+        "max_uri_bytes",
+        limits.max_uri_bytes as u64,
+        256,
+        limits.max_header_bytes as u64,
+    )?;
+    if limits.max_body_bytes != 0 {
+        within(
+            "max_body_bytes",
+            limits.max_body_bytes,
+            1,
+            fast_proxy_model::MAX_REQUEST_BODY_BYTES,
+        )?;
+    }
+    for (name, timeout) in [
+        ("body_read_timeout", limits.body_read_timeout),
+        ("send_timeout", limits.send_timeout),
+    ] {
+        within(name, timeout.as_millis() as u64, 1_000, 3_600_000)?;
+    }
+    if !limits.tunnel_idle_timeout.is_zero() {
+        within(
+            "tunnel_idle_timeout",
+            limits.tunnel_idle_timeout.as_millis() as u64,
+            1_000,
+            7 * 86_400_000,
+        )?;
+    }
+    within(
+        "rate_limit_keys",
+        limits.rate_limit_keys as u64,
+        1_000,
+        50_000_000,
+    )
 }
 
 /// Checks `[admin]`: the admin plane may leave loopback only with authentication

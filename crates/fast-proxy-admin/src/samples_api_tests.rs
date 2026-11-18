@@ -36,6 +36,7 @@ fn sample(n: i64, instance: &str, subsystem: &str) -> Sample {
             bytes: 0,
             body: None,
             body_omitted: Some("off".into()),
+            refused: None,
         },
         total_ms: 30,
         upstream: SampleUpstream {

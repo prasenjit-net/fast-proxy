@@ -146,6 +146,7 @@ mod tests {
             bytes_in: 100,
             bytes_out: 500,
             client_cancelled: false,
+            refused: None,
         }
     }
 

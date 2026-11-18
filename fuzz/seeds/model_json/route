@@ -1,0 +1,1 @@
+{"prefix":"/api","upstreamGroupId":1,"stripPrefix":true,"upstreamPrefix":"/v2","maxBodyBytes":1048576,"retry":{"maxAttempts":2}}

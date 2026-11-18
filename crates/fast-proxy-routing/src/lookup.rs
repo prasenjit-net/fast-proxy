@@ -116,6 +116,7 @@ mod tests {
                     state: EndpointState::Enabled,
                 }],
             }],
+            rate_limit: None,
             routes: prefixes
                 .iter()
                 .enumerate()
@@ -130,6 +131,8 @@ mod tests {
                     response_timeout: std::time::Duration::from_secs(30),
                     retry: RetryPolicy::default(),
                     enabled: true,
+                    rate_limit: None,
+                    max_body_bytes: None,
                 })
                 .collect(),
         }

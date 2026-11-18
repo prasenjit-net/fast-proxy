@@ -7,3 +7,6 @@ publish = false
 
 [dependencies]
 fast-proxy-model = { path = "../fast-proxy-model" }
+
+[lints]
+workspace = true

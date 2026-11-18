@@ -25,7 +25,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `security_headers.rs`, `tls_server.rs` (the admin listener over TLS), `api/` (one
   file per resource: subsystems, hosts, upstreams, routes, certificates, tokens, maintenance,
   audit, sampling (settings and overrides, readable by a viewer), samples (the sampled requests, admin only), acme
-  (the overview and statuses, readable by a viewer; a forced renewal is a write), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
+  (the overview and statuses, readable by a viewer; a forced renewal is a write), rate_limits (the policy of a
+  subsystem or route), limits (`GET /api/limits`: the process limits, key fill and refusals), session, reload), `ws.rs`, `events.rs`, `error.rs` (shared API error
   envelope), `static_assets.rs` (embedded SPA from `ui/dist`), `state.rs`.
 - `crates/fast-proxy-auth/` is token and secret handling with no HTTP and no database:
   generation, SHA-256 hashing, constant-time comparison (`subtle`), roles, the failure
@@ -56,7 +57,9 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `CompiledMaintenance::check`, used by the data plane and the resolver alike. No I/O.
 - `crates/fast-proxy-store/` is SQLite persistence: `Database` (sync core, all
   writes via `Database::write`), `Store` (async handle on a dedicated thread),
-  `repository/` (one file per resource), `revision/`. The data plane must never
+  `repository/` (one file per resource), `revision/`, and `migrations/` (one SQL step
+  per schema version, run at open after a copy of the file; ADR 0028). `schema.sql` is
+  the schema of a new database; `migrations/fixtures/` holds released schemas. The data plane must never
   use it.
 - `crates/fast-proxy-config-service/` is the only writer: `ConfigService::apply`
   validates (compiles) a change, persists it with its revision and its audit row in one
@@ -70,14 +73,24 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   (fixed 404/503/502/504), `selection` (pick an endpoint per request),
   `upstream_client` (pooled forwarding, the retry loop, passive outcomes),
   `retry_policy` (pure retry rules), `replay_body` (a request body shared across
-  attempts), `pending_request` (reports a request cancelled by its client as
+  attempts, counted against its `BodyCap`), `limits` (`ServerLimits`, `RequestLimits`), `request_size` (the
+  target and declared-length checks), `progress_io` (the stall watchdog: first byte, send, tunnel idle), `rate_limit` (a route's policy check
+  and `Retry-After`), `pending_request` (reports a request cancelled by its client as
   499), `protocol_switch` (upgrades), `headers` (hop-by-hop, `X-Forwarded-*`), `connections` (open
   connection tracking for draining). `DataPlane::stopped(grace)` drains. It reads
   snapshots only and never depends on the store.
 - `crates/fast-proxy-sampling/` is request sampling with no HTTP and no database (M6): the decision
   (`decide`), `LatencyWindow`, `ClientErrors`, `StormGuard`, `RateLimiter`, the `Redactor`, the `Sample`
   encoding and `SampleQuery`, the `Batcher`, and the `Sampler` handle with its worker thread and the `SampleSink`
-  trait. The data plane depends on it; it depends on `model` only. Its token bucket (`bucket.rs`) ignores a clock reading slightly older than the stored one, so concurrent callers cannot refill it.
+  trait. The data plane depends on it; it depends on `model` and `limits` only. Its token bucket lives in
+  `fast-proxy-limits` (`bucket.rs`) and ignores a clock reading slightly older than the stored one, so concurrent
+  callers cannot refill it.
+- `crates/fast-proxy-limits/` is request limits with no I/O and no HTTP (M7, ADRs 0029 to 0031): `Gcra` (rate
+  limiting from one stored time per key, nanoseconds from `monotonic_ns()`), `KeyTable` (sharded, bounded by a
+  `KeyBudget` every table shares; a full table admits and reports `TableFull`), `KeyHasher` (seeded; IPv6 cut to the
+  policy's prefix), `RateLimitRuntime` (tables by `PolicyIdentity`, carried across snapshot swaps like endpoint
+  state) and the token `bucket` the sampler uses. Rate-limit policies are `Config` (a rollback restores them);
+  routing compiles each route's effective policy (its own, else its subsystem's) into `CompiledRateLimit`.
 - `crates/fast-proxy-sample-service/` stores samples in the shared database (M6): `SampleWriter` (the sampler's sink,
   on its own connection, no revision), `Pruner` (retention by age, rows and bytes; every instance runs one) and
   `SampleReader` (what the admin plane reads; every instance's samples). Samples are telemetry, not configuration: they
@@ -101,7 +114,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `crates/fast-proxy-test-pki/` is test support only (an in-memory CA, TLS test
   clients); never use it outside `dev-dependencies` and tests.
 - `src/cli/` and `src/commands/` are the subcommands (`maintenance`, `reload`, `status`,
-  `audit`, `samples list|export`, `acme status|renew`, `config validate`, and the offline `token` commands); exit code 0 success, 1 the
+  `audit`, `samples list|export`, `acme status|renew`, `limits`, `rate-limit show|set|clear`, `status --local`
+  (no token: a health check), `config validate`, and the offline `token` commands); exit code 0 success, 1 the
   proxy refused or a check failed, 2 usage or connection errors.
 - `docs/adr/` records design decisions; `docs/getting-started.md` is the manual
   curl walkthrough (keep it working when the API changes).
@@ -117,9 +131,14 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `sampling_cluster.rs` are M6's. `acme_challenges.rs`, `acme_issuance.rs` (the runner against the in-process test CA
   with a moved clock), `acme_binary.rs` (the real binary, the CLI and a key scan) and
   `acme_cluster.rs` (two processes, the lease holder killed) are M4's; `common/acme_binary.rs`
-  holds their config helpers. Tests that deliver real signals are `#[cfg(unix)]`.
+  holds their config helpers. `cli_limits.rs` drives `limits` and `rate-limit` against the real
+  binary (M7). `schema_upgrade.rs` starts the real binary on a database of the previous schema. Tests that deliver real signals are `#[cfg(unix)]`.
   The `[sampling]` section of `config.toml` (`enabled`, `queue_depth`, `batch_size`, `batch_interval`,
   `prune_interval`, `body_budget_bytes`) is process settings; what is sampled lives in the database.
+- `fuzz/` is the cargo-fuzz crate (nightly, outside the workspace; M7 F1, ADR 0032): fourteen targets,
+  `fuzz/run.sh SECONDS [TARGET...]`, hand-written `seeds/`, a fixed snapshot in `src/lib.rs`. Private
+  functions are reached through the `fuzzing` feature of `fast-proxy-dataplane` and `fast-proxy-admin`
+  (never public API). A crash input is committed as a unit test in the crate that owns the function.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
   (measured with `oha` against the `bench_backend` example in the data plane crate).
 - `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,
@@ -127,7 +146,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   checks that use the server's camelCase field names), and `navigation.ts`.
 - `ui/src/context/` contains Theme, Toast, Config, and WebSocket live data providers.
 - `ui/src/components/` contains reusable UI components; `forms/` has one form per
-  resource and `subsystem/` the detail page's sections.
+  resource, `subsystem/` the detail page's sections, and `rateLimit/` the rate-limit control
+  (`LimitsCard` is the dashboard's limits panel).
 - `ui/src/pages/` contains route pages.
 - `ui/src/styles/index.css` contains Tailwind entrypoint and theme tokens.
 
@@ -135,6 +155,10 @@ Cargo workspace; the root package is the `fast-proxy` binary.
 
 These invariants hold across the codebase; do not break them without an ADR in `docs/adr/`.
 
+- **No `unsafe` code.** The workspace lint `unsafe_code = "forbid"` applies to every crate
+  (`[lints] workspace = true` in each manifest; `tests/workspace_lints.rs` checks a new crate opts
+  in). A dependency's license, source and advisories pass `cargo deny` (`deny.toml`), and
+  `rusqlite` is one workspace dependency because SQLite is linked once.
 - **The data plane never touches the database.** It only reads the compiled
   `Snapshot` through `SnapshotHolder`. `fast-proxy-dataplane` must not depend on
   `fast-proxy-store`.
@@ -153,11 +177,20 @@ These invariants hold across the codebase; do not break them without an ADR in `
   snapshot swaps by endpoint id and address (`compile(.., &registry)`); never
   keep it in config or in a global map. Endpoint ids are stable and rollback
   preserves them.
+- **Process limits are checked before upstream work** (ADR 0029): connection caps when a connection is
+  accepted (before TLS), the head limits in hyper, the target and declared body length before an endpoint is
+  chosen. A body cut at its cap is the client's doing: `413`, never an upstream failure, never retried.
+- **A limit's refusal is recorded once, by the pipeline**: a fixed refusal response carries `ProxyRefusal`, and
+  the pipeline writes the reason to the access log (` refused=`), `fastproxy_requests_refused_total{reason}` and the
+  sample, wherever the refusal was made.
 - **Retries are conservative:** a connect failure may be retried for any method,
   everything else only for idempotent ones; never after a body byte was read
   (`BodyOwner::is_replayable`), never for upgrades, always within the group's
   retry budget and away from the endpoint that just failed.
-- **Draining and disabled endpoints are never selected**, not even in panic mode.
+- **Draining and disabled endpoints are never selected**, not even in panic mode, and neither is an
+  endpoint at its group's `max_requests` cap (`EndpointRuntime::try_track` counts against the cap atomically).
+- **Rate limits are per instance** (ADR 0030): the tables are process state, never in the database; the
+  configuration says only what the policy is.
 - **The URL rewrite lives in `fast-proxy-routing`** (`build_upstream_uri`) so the
   proxy and the admin resolver cannot disagree.
 - **API errors never leak paths or storage detail**; the detail goes to the log.
@@ -273,11 +306,21 @@ These rules are set by the project owner and apply to every session.
 
 ### Compatibility and migration
 
-- The project is **not deployed anywhere yet**. Do not add backward
-  compatibility, data migrations, deprecation shims, or upgrade paths for
-  config files, DB schemas, APIs, or behavior. Change things directly; for
-  example, edit the initial DB schema in place instead of adding a migration.
-  Revisit this rule only when the owner says the project has been deployed.
+- **Database schema changes are additive and always migrated.** Releases are
+  out (v0.1.1), so an existing database must keep opening after an upgrade.
+  - Add tables, and columns that are nullable or have a default. Do not drop,
+    rename or change the type of an existing table or column unless a migration
+    carries the data over.
+  - Every bump of `SCHEMA_VERSION` (`crates/fast-proxy-store/src/database.rs`,
+    stored in `PRAGMA user_version`) comes with a migration step that upgrades
+    the previous version, in one transaction, and a test that opens a database
+    at the previous version and checks it upgrades with its data intact.
+  - Never edit an already released schema in place.
+  - A field added to the revision JSON (`revision/config_json.rs`) has `#[serde(default)]`, so a
+    revision an older release wrote still restores.
+- For config files, APIs and behavior there is still no backward-compatibility
+  work: no deprecation shims or upgrade paths. Change things directly.
+  Revisit this only when the owner says so.
 
 ## Common Commands
 
@@ -287,6 +330,7 @@ Backend:
 cargo test
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
+cargo deny check      # advisories, licenses, bans, sources (deny.toml); needs cargo-deny
 cargo run
 ```
 
@@ -332,7 +376,7 @@ Development servers:
 
 ## Testing Expectations
 
-- For backend changes, run at least `cargo test`; also run `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` when practical.
+- For backend changes, run at least `cargo test`; also run `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` when practical. After changing dependencies, run `cargo deny check` (CI does on every pull request).
 - For frontend changes, run `cd ui && npm test`; run `cd ui && npm run build` for type-checking and production bundle verification.
 - For changes spanning backend and frontend contracts, test both sides.
 - Report test coverage (see Development Rules) when finishing a task.

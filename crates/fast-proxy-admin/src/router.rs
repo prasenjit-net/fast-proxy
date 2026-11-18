@@ -188,6 +188,37 @@ pub(crate) fn build(state: SharedState) -> (Router, Vec<RouteSpec>) {
             Needs(Write),
             api::clear_route,
         )
+        .get("/api/limits", Needs(Read), api::limits_status)
+        .get(
+            "/api/subsystems/{id}/rate-limit",
+            Needs(Read),
+            api::get_subsystem_rate_limit,
+        )
+        .put(
+            "/api/subsystems/{id}/rate-limit",
+            Needs(Write),
+            api::set_subsystem_rate_limit,
+        )
+        .delete(
+            "/api/subsystems/{id}/rate-limit",
+            Needs(Write),
+            api::clear_subsystem_rate_limit,
+        )
+        .get(
+            "/api/subsystems/{id}/routes/{route_id}/rate-limit",
+            Needs(Read),
+            api::get_route_rate_limit,
+        )
+        .put(
+            "/api/subsystems/{id}/routes/{route_id}/rate-limit",
+            Needs(Write),
+            api::set_route_rate_limit,
+        )
+        .delete(
+            "/api/subsystems/{id}/routes/{route_id}/rate-limit",
+            Needs(Write),
+            api::clear_route_rate_limit,
+        )
         .get("/ws", Ticket(Read), ws::handler)
         .finish();
     // Layers run outermost first: the access log sees every response, the

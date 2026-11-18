@@ -9,6 +9,7 @@ import type { Route, RouteInput, SubsystemDetail } from "../../lib/types";
 import ConfirmDialog from "../ConfirmDialog";
 import SamplingControl from "../sampling/SamplingControl";
 import MaintenanceControl from "../maintenance/MaintenanceControl";
+import RateLimitControl from "../rateLimit/RateLimitControl";
 import RouteForm from "../forms/RouteForm";
 import Modal from "../Modal";
 import Toggle from "../Toggle";
@@ -17,7 +18,7 @@ import WriteOnly from "../WriteOnly";
 type Editing = { kind: "new" } | { kind: "edit"; route: Route };
 
 function inputOf(route: Route): RouteInput {
-  const { id: _id, ...input } = route;
+  const { id: _id, rateLimit: _rateLimit, ...input } = route;
   return input;
 }
 
@@ -106,6 +107,7 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                 <th className="py-2 pr-4 font-medium">Enabled</th>
                 <th className="py-2 pr-4 font-medium">Maintenance</th>
                 <th className="py-2 pr-4 font-medium">Sampling</th>
+                <th className="py-2 pr-4 font-medium">Rate limit</th>
                 <th className="py-2" />
               </tr>
             </thead>
@@ -141,6 +143,14 @@ export default function RoutesSection({ subsystem }: { subsystem: SubsystemDetai
                   </td>
                   <td className="py-2 pr-4">
                     <SamplingControl target={{ routeId: route.id }} label={`route ${route.prefix}`} />
+                  </td>
+                  <td className="py-2 pr-4">
+                    <RateLimitControl
+                      target={{ subsystemId: subsystem.id, routeId: route.id }}
+                      current={route.rateLimit}
+                      inherited={subsystem.rateLimit}
+                      label={`route ${route.prefix}`}
+                    />
                   </td>
                   <td className="py-2 text-right whitespace-nowrap">
                     <WriteOnly>

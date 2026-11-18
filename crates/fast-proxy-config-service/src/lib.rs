@@ -38,6 +38,8 @@ mod acme_tests;
 #[cfg(test)]
 mod operations_tests;
 #[cfg(test)]
+mod rate_limit_tests;
+#[cfg(test)]
 mod sampling_tests;
 #[cfg(test)]
 mod sync_tests;

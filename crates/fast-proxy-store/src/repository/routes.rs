@@ -1,4 +1,4 @@
-use fast_proxy_model::{RouteId, SubsystemId, UpstreamGroupId};
+use fast_proxy_model::{check_max_body_bytes, RouteId, SubsystemId, UpstreamGroupId};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{ensure_subsystem, expect_changed, touch};
@@ -95,6 +95,27 @@ pub fn update(
             route_id.0,
             subsystem_id.0,
         ],
+    )?;
+    expect_changed(changed, &format!("route {}", route_id.0))?;
+    touch(conn, subsystem_id)
+}
+
+/// Sets the largest request body the route accepts; `None` uses the process
+/// default. Kept apart from [`update`] so an edit that does not know about the
+/// cap leaves it alone.
+pub fn set_max_body_bytes(
+    conn: &Connection,
+    subsystem_id: SubsystemId,
+    route_id: RouteId,
+    max: Option<u64>,
+) -> Result<(), StoreError> {
+    if let Some(max) = max {
+        check_max_body_bytes("maxBodyBytes", max)?;
+    }
+    let stored = max.map(|max| i64::try_from(max).unwrap_or(i64::MAX));
+    let changed = conn.execute(
+        "UPDATE route SET max_body_bytes = ?1 WHERE id = ?2 AND subsystem_id = ?3",
+        params![stored, route_id.0, subsystem_id.0],
     )?;
     expect_changed(changed, &format!("route {}", route_id.0))?;
     touch(conn, subsystem_id)

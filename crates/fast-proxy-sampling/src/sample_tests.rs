@@ -32,6 +32,7 @@ fn raw() -> RawSample {
             bytes_in: 812,
             bytes_out: 0,
             client_cancelled: false,
+            refused: None,
         },
         attempts: vec![
             AttemptDetail {
@@ -254,4 +255,34 @@ fn an_empty_export_is_empty() {
     let mut out = Vec::new();
     write_ndjson(&mut out, []).unwrap();
     assert!(out.is_empty());
+}
+
+#[test]
+fn a_refusal_is_kept_with_its_reason_and_older_samples_still_decode() {
+    let mut refused = raw();
+    refused.outcome.refused = Some("rate_limited");
+    let sample = Sample::from_raw(
+        refused,
+        &Redactor::new(&fast_proxy_model::SamplingSettings::default(), &[]),
+        "a",
+    );
+    assert_eq!(sample.response.refused.as_deref(), Some("rate_limited"));
+    let json = serde_json::to_string(&sample).unwrap();
+    assert!(json.contains(r#""refused":"rate_limited""#));
+
+    let plain = Sample::from_raw(
+        raw(),
+        &Redactor::new(&fast_proxy_model::SamplingSettings::default(), &[]),
+        "a",
+    );
+    let stored = serde_json::to_string(&plain).unwrap();
+    assert!(
+        !stored.contains(r#""refused":"#),
+        "nothing written when there is none"
+    );
+    let decoded: Sample = serde_json::from_str(&stored).unwrap();
+    assert_eq!(
+        decoded.response.refused, None,
+        "a sample stored before M7 decodes"
+    );
 }

@@ -91,7 +91,8 @@ impl CompiledUpstream {
             id: group.id,
             name: group.name.clone(),
             policy: group.policy.clone(),
-            balancer: Balancer::new(&group.policy.lb, group.policy.failure, &weights),
+            balancer: Balancer::new(&group.policy.lb, group.policy.failure, &weights)
+                .with_max_requests(group.policy.max_requests),
             retry_budget: RetryBudget::new(group.policy.retry_budget),
             endpoints,
             candidates,

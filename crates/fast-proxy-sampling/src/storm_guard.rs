@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use fast_proxy_model::Trigger;
 
-use crate::bucket::{take, UNSET};
 use crate::facts::FailureKind;
+use fast_proxy_limits::bucket::{take, UNSET};
 
 const SLOTS: usize = 1024;
 

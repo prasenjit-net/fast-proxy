@@ -142,6 +142,8 @@ export interface UpstreamPolicy {
   passive: PassivePolicy;
   retryBudget: RetryBudget;
   tls: UpstreamTls;
+  /** Requests in flight to each endpoint at once; null is unlimited. */
+  maxRequests: number | null;
 }
 
 export interface Upstream extends UpstreamPolicy {
@@ -168,6 +170,60 @@ export interface Route {
   responseTimeoutMs: number;
   retry: RetryPolicy;
   enabled: boolean;
+  /** The largest request body in bytes; null uses the process default. */
+  maxBodyBytes: number | null;
+  /** The route's own rate limit; null means its subsystem's applies. */
+  rateLimit: RateLimit | null;
+}
+
+/** A rate-limit policy (per key, per instance). */
+export interface RateLimit {
+  rate: number;
+  periodSecs: number;
+  burst: number;
+  key: "client" | "header";
+  /** The header keyed on, for a `header` policy. */
+  header: string | null;
+  ipv6Prefix: number;
+}
+
+/** The body of `PUT .../rate-limit`; left out, `burst` is the rate and `key` the client. */
+export interface RateLimitInput {
+  rate: number;
+  periodSecs: number;
+  burst?: number;
+  key?: "client" | "header";
+  header?: string;
+  ipv6Prefix?: number;
+}
+
+/** Whose rate limit: a subsystem's or one of its routes'. */
+export type RateLimitTarget = { subsystemId: number } | { subsystemId: number; routeId: number };
+
+export interface ReasonCount {
+  reason: string;
+  count: number;
+}
+
+/** `GET /api/limits`: this instance's limits and what they refused. */
+export interface LimitsStatus {
+  settings: {
+    maxConnections: number;
+    maxConnectionsPerClient: number | null;
+    headerReadTimeoutMs: number;
+    bodyReadTimeoutMs: number;
+    sendTimeoutMs: number;
+    tunnelIdleTimeoutMs: number | null;
+    maxHeaderCount: number;
+    maxHeaderBytes: number;
+    maxUriBytes: number;
+    maxBodyBytes: number | null;
+  };
+  rateLimitKeys: { used: number; capacity: number };
+  connectionsRefused: ReasonCount[];
+  requestsRefused: ReasonCount[];
+  clientTimeouts: ReasonCount[];
+  rateLimitTableFull: number;
 }
 
 export interface SubsystemDetail {
@@ -182,6 +238,8 @@ export interface SubsystemDetail {
   upstreams: Upstream[];
   /** In match order: longest prefix first. */
   routes: Route[];
+  /** The rate limit of every route without its own. */
+  rateLimit: RateLimit | null;
 }
 
 export interface SubsystemInput {
@@ -208,7 +266,8 @@ export interface UpstreamCreate extends UpstreamSettings {
   endpoints: EndpointInput[];
 }
 
-export type RouteInput = Omit<Route, "id">;
+/** A route as written: its rate limit has its own resource. */
+export type RouteInput = Omit<Route, "id" | "rateLimit">;
 
 // ---- revisions, resolver, status -------------------------------------------
 

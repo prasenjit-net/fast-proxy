@@ -3,9 +3,9 @@
 //! paths (`health.intervalMs`, `endpoints.0.addr`).
 
 use fast_proxy_model::{
-    parse_weight, EndpointAddr, EndpointConfig, EndpointState, FailurePolicy, FieldError,
-    GroupPolicy, HashKey, HealthCheck, HealthKind, LbAlgorithm, LbPolicy, PassiveHealth,
-    RetryBudget, SubsystemId, UpstreamGroupConfig, UpstreamGroupId, UpstreamTls,
+    check_max_requests, parse_weight, EndpointAddr, EndpointConfig, EndpointState, FailurePolicy,
+    FieldError, GroupPolicy, HashKey, HealthCheck, HealthKind, LbAlgorithm, LbPolicy,
+    PassiveHealth, RetryBudget, SubsystemId, UpstreamGroupConfig, UpstreamGroupId, UpstreamTls,
     MAX_ENDPOINTS_PER_GROUP,
 };
 use fast_proxy_store::repository::subsystems;
@@ -89,6 +89,8 @@ pub struct UpstreamDto {
     passive: PassiveDto,
     retry_budget: RetryBudgetDto,
     tls: TlsDto,
+    /// The most requests one endpoint may have in flight; `null` is unlimited.
+    max_requests: Option<u32>,
     pub endpoints: Vec<EndpointDto>,
 }
 
@@ -136,6 +138,7 @@ pub fn upstream_dto(group: &UpstreamGroupConfig) -> UpstreamDto {
             server_name: policy.tls.server_name.clone(),
             ca: policy.tls.ca.clone(),
         },
+        max_requests: policy.max_requests,
         endpoints: group.endpoints.iter().map(endpoint_dto).collect(),
     }
 }
@@ -172,6 +175,9 @@ pub struct UpstreamRequest {
     retry_budget: RetryBudgetRequest,
     #[serde(default)]
     tls: TlsRequest,
+    /// The most requests one endpoint may have in flight; absent or `null` is
+    /// unlimited (ADR 0031).
+    max_requests: Option<u32>,
     /// Required when creating; not allowed when updating.
     endpoints: Option<Vec<EndpointRequest>>,
 }
@@ -290,6 +296,9 @@ fn parse_policy(request: &UpstreamRequest, errors: &mut FieldErrors) -> Option<G
     let passive = parse_passive(&request.passive, errors);
     let budget = parse_retry_budget(&request.retry_budget, errors);
     let tls = parse_tls(&request.tls, errors);
+    if let Some(cap) = request.max_requests {
+        errors.check(check_max_requests(cap));
+    }
     Some(GroupPolicy {
         lb: LbPolicy {
             algorithm: algorithm?,
@@ -300,6 +309,8 @@ fn parse_policy(request: &UpstreamRequest, errors: &mut FieldErrors) -> Option<G
         passive: passive?,
         retry_budget: budget?,
         tls: tls?,
+        // Stored by `upstreams::set_max_requests`, which the handlers call.
+        max_requests: request.max_requests,
     })
 }
 

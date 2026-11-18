@@ -60,6 +60,7 @@ export default function UpstreamCard({ subsystem, upstream }: { subsystem: Subsy
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <h3 className="text-[0.95rem] font-semibold">{upstream.name}</h3>
         <Badge>{algorithm ?? upstream.lb.algorithm}</Badge>
+        {upstream.maxRequests !== null ? <Badge>at most {upstream.maxRequests} at once per endpoint</Badge> : null}
         {status ? (
           <Badge tone={status.healthy === total ? "ok" : status.healthy === 0 ? "err" : "warn"} dot>
             {status.healthy} of {total} healthy

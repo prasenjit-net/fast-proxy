@@ -82,6 +82,9 @@ fn assert_nothing_but_marker(proxy: &Proxy, marker_host: &str) {
 
 fn start_with_marker_site(dir: &std::path::Path) -> Proxy {
     let proxy = start_proxy(dir);
+    // The default baseline keeps one ordinary request in a thousand at random;
+    // a test that expects nothing but the marker must not depend on chance.
+    configure(&proxy, |_| {});
     // A site whose backend is dead: its failures are the marker.
     create_site(&proxy, "marker", "marker.example.com", free_port());
     proxy

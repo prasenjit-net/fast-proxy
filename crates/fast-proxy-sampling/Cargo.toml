@@ -6,9 +6,13 @@ description = "Tail-based request sampling: the decision, rolling latency, the s
 publish = false
 
 [dependencies]
+fast-proxy-limits = { path = "../fast-proxy-limits" }
 fast-proxy-model = { path = "../fast-proxy-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"
+
+[lints]
+workspace = true

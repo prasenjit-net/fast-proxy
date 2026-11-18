@@ -15,8 +15,13 @@ pub enum StoreError {
     /// The input breaks a rule; each entry names the offending field.
     #[error("invalid input: {}", join_fields(.0))]
     Invalid(Vec<FieldError>),
-    /// The database file belongs to a different schema version.
-    #[error("database schema version {found} is not supported (this build uses {expected})")]
+    /// The database file has a schema this build cannot use: newer than its own
+    /// (never downgraded), or older than the oldest it upgrades.
+    #[error(
+        "database schema version {found} is not supported (this build uses {expected} \
+         and upgrades from {oldest} on; it never downgrades)",
+        oldest = crate::migrations::OLDEST_UPGRADABLE
+    )]
     IncompatibleSchema { found: i64, expected: i64 },
     /// Anything unexpected: I/O, SQLite, corrupt stored data, a stopped store thread.
     #[error("storage error: {0}")]

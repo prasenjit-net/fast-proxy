@@ -2,21 +2,31 @@
 name = "fast-proxy"
 version = "0.1.1"
 edition = "2021"
+license = "MIT"
+# Released as binaries and a container image, never to crates.io.
+publish = false
 description = "Fast, realtime-configurable ingress server and reverse proxy: host/prefix routing, TLS + ACME, load balancing, health checks, and live diagnostics"
 
 [workspace]
 members = ["crates/*"]
 default-members = [".", "crates/*"]
 
+# Lints every crate opts into with `[lints] workspace = true` (a test checks they all do).
+# No crate needs `unsafe`; forbidding it keeps memory-safety review to the dependencies.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 # Shared dependency versions; member crates opt in with `{ workspace = true }`.
 [workspace.dependencies]
+# One SQLite for the whole build (it is linked once); `bundled` compiles the C library in.
+rusqlite = { version = "0.43", features = ["bundled"] }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["formatting"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
@@ -31,6 +41,7 @@ fast-proxy-config-service = { path = "crates/fast-proxy-config-service" }
 fast-proxy-dataplane = { path = "crates/fast-proxy-dataplane" }
 fast-proxy-health = { path = "crates/fast-proxy-health" }
 fast-proxy-model = { path = "crates/fast-proxy-model" }
+fast-proxy-limits = { path = "crates/fast-proxy-limits" }
 fast-proxy-routing = { path = "crates/fast-proxy-routing" }
 fast-proxy-sample-service = { path = "crates/fast-proxy-sample-service" }
 fast-proxy-sampling = { path = "crates/fast-proxy-sampling" }
@@ -41,10 +52,10 @@ axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+time = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 toml = "0.8"
-humantime = "2"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-util = "0.7"
@@ -67,3 +78,6 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 lto = true
 strip = true
 codegen-units = 1
+
+[lints]
+workspace = true

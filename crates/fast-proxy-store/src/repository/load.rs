@@ -1,13 +1,15 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use fast_proxy_model::{
-    parse_timeout_ms, parse_weight, Config, EndpointAddr, EndpointConfig, EndpointId,
-    EndpointState, HostPattern, RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig,
-    SubsystemId, SubsystemName, UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
+    check_max_body_bytes, check_max_requests, parse_timeout_ms, parse_weight, Config, EndpointAddr,
+    EndpointConfig, EndpointId, EndpointState, HostPattern, RateLimitPolicy, RetryPolicy,
+    RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemId, SubsystemName,
+    UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix,
 };
 use rusqlite::Connection;
 
-use super::{https_columns, policy_columns};
+use super::{https_columns, policy_columns, rate_limits};
 use crate::StoreError;
 
 /// Reads the whole configuration, ordered by id so the result is deterministic.
@@ -17,7 +19,9 @@ pub fn load_all(conn: &Connection) -> Result<Config, StoreError> {
     for subsystem in &mut subsystems {
         subsystem.hosts = load_hosts(conn, subsystem.id)?;
         subsystem.upstream_groups = load_groups(conn, subsystem.id)?;
-        subsystem.routes = load_routes(conn, subsystem.id)?;
+        let (own_policy, route_policies) = rate_limits::load(conn, subsystem.id)?;
+        subsystem.rate_limit = own_policy;
+        subsystem.routes = load_routes(conn, subsystem.id, route_policies)?;
     }
     Ok(Config { subsystems })
 }
@@ -51,6 +55,7 @@ fn load_subsystems(conn: &Connection) -> Result<Vec<SubsystemConfig>, StoreError
             hosts: Vec::new(),
             upstream_groups: Vec::new(),
             routes: Vec::new(),
+            rate_limit: None,
         })
     })
     .collect()
@@ -66,22 +71,28 @@ fn load_hosts(conn: &Connection, id: SubsystemId) -> Result<Vec<HostPattern>, St
 
 fn load_groups(conn: &Connection, id: SubsystemId) -> Result<Vec<UpstreamGroupConfig>, StoreError> {
     let mut statement = conn.prepare(&format!(
-        "SELECT id, name, {} FROM upstream_group WHERE subsystem_id = ?1 ORDER BY id",
+        "SELECT id, name, max_requests, {} FROM upstream_group WHERE subsystem_id = ?1 ORDER BY id",
         policy_columns::SELECT_LIST
     ))?;
     let rows = statement.query_map([id.0], |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
-            policy_columns::read(row, 2)?,
+            row.get::<_, Option<u32>>(2)?,
+            policy_columns::read(row, 3)?,
         ))
     })?;
     rows.map(|row| {
-        let (group_id, name, policy) = row?;
+        let (group_id, name, max_requests, policy) = row?;
+        let mut policy = policy?;
+        if let Some(cap) = max_requests {
+            check_max_requests(cap).map_err(|err| corrupt("request cap", err))?;
+        }
+        policy.max_requests = max_requests;
         Ok(UpstreamGroupConfig {
             id: UpstreamGroupId(group_id),
             name,
-            policy: policy?,
+            policy,
             endpoints: load_endpoints(conn, UpstreamGroupId(group_id))?,
         })
     })
@@ -116,11 +127,16 @@ fn load_endpoints(
     .collect()
 }
 
-fn load_routes(conn: &Connection, id: SubsystemId) -> Result<Vec<RouteConfig>, StoreError> {
+/// The subsystem's routes, each with its own rate-limit policy from `route_policies`.
+fn load_routes(
+    conn: &Connection,
+    id: SubsystemId,
+    mut route_policies: HashMap<i64, RateLimitPolicy>,
+) -> Result<Vec<RouteConfig>, StoreError> {
     let mut statement = conn.prepare(
         "SELECT id, prefix, upstream_group_id, strip_prefix, upstream_prefix, preserve_host,
                 connect_timeout_ms, response_timeout_ms, retry_max_attempts,
-                retry_idempotent_on_5xx, retry_on_timeout, enabled
+                retry_idempotent_on_5xx, retry_on_timeout, enabled, max_body_bytes
          FROM route WHERE subsystem_id = ?1 ORDER BY id",
     )?;
     let rows = statement.query_map([id.0], |row| {
@@ -138,7 +154,7 @@ fn load_routes(conn: &Connection, id: SubsystemId) -> Result<Vec<RouteConfig>, S
                 row.get::<_, bool>(9)?,
                 row.get::<_, bool>(10)?,
             ),
-            row.get::<_, bool>(11)?,
+            (row.get::<_, bool>(11)?, row.get::<_, Option<i64>>(12)?),
         ))
     })?;
     rows.map(|row| {
@@ -152,8 +168,16 @@ fn load_routes(conn: &Connection, id: SubsystemId) -> Result<Vec<RouteConfig>, S
             connect,
             response,
             retry,
-            on,
+            (on, max_body),
         ) = row?;
+        let max_body_bytes = max_body
+            .map(|max| {
+                let max = u64::try_from(max).unwrap_or(0);
+                check_max_body_bytes("max_body_bytes", max)
+                    .map(|()| max)
+                    .map_err(|err| corrupt("body cap", err))
+            })
+            .transpose()?;
         Ok(RouteConfig {
             id: RouteId(route_id),
             prefix: RoutePrefix::parse(&prefix).map_err(|err| corrupt("route prefix", err))?,
@@ -166,6 +190,8 @@ fn load_routes(conn: &Connection, id: SubsystemId) -> Result<Vec<RouteConfig>, S
             response_timeout: stored_timeout("response_timeout_ms", response)?,
             retry: stored_retry(retry)?,
             enabled: on,
+            rate_limit: route_policies.remove(&route_id),
+            max_body_bytes,
         })
     })
     .collect()

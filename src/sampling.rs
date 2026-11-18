@@ -160,8 +160,9 @@ fn reading(sampler: &Sampler, pruner: &PrunerStats) -> SamplerReading {
     }
 }
 
-/// The redactor for the settings and the maintenance scopes of `snapshot`: the
-/// operator's additions, and the bypass header of every scope (a secret).
+/// The redactor for the settings, maintenance scopes and rate limits of
+/// `snapshot`: the operator's additions, the bypass header of every scope (a
+/// secret), and the header a rate-limit policy keys on (usually an API key).
 pub(crate) fn redactor_for(snapshot: &Snapshot) -> Redactor {
     let scopes = snapshot
         .maintenance
@@ -174,10 +175,17 @@ pub(crate) fn redactor_for(snapshot: &Snapshot) -> Redactor {
                     .flat_map(|route| route.maintenance.iter()),
             )
         }));
-    let bypass_headers: Vec<String> = scopes
-        .filter_map(|scope| scope.bypass_header_name().map(str::to_string))
+    let rate_limit_keys = snapshot
+        .subsystems
+        .values()
+        .flat_map(|subsystem| subsystem.routes.iter())
+        .filter_map(|route| route.rate_limit.as_ref()?.key_header());
+    let secret_headers: Vec<String> = scopes
+        .filter_map(|scope| scope.bypass_header_name())
+        .chain(rate_limit_keys)
+        .map(str::to_string)
         .collect();
-    Redactor::new(&snapshot.sampling_settings, &bypass_headers)
+    Redactor::new(&snapshot.sampling_settings, &secret_headers)
 }
 
 #[cfg(test)]
@@ -258,6 +266,7 @@ mod tests {
                     state: EndpointState::Enabled,
                 }],
             }],
+            rate_limit: None,
             routes: vec![RouteConfig {
                 id: RouteId(7),
                 prefix: RoutePrefix::parse("/").unwrap(),
@@ -269,6 +278,8 @@ mod tests {
                 response_timeout: Duration::from_secs(30),
                 retry: RetryPolicy::default(),
                 enabled: true,
+                rate_limit: None,
+                max_body_bytes: None,
             }],
         }
     }
@@ -310,6 +321,38 @@ mod tests {
     }
 
     #[test]
+    fn the_header_a_rate_limit_keys_on_is_redacted() {
+        let mut site = fast_proxy_dataplane_test_site();
+        site.routes[0].rate_limit = Some(fast_proxy_model::RateLimitPolicy {
+            rate: 10,
+            period: Duration::from_secs(1),
+            burst: 10,
+            key: fast_proxy_model::RateLimitKey::Header(
+                fast_proxy_model::RateLimitHeader::parse("h", "X-Customer").unwrap(),
+            ),
+            ipv6_prefix: fast_proxy_model::DEFAULT_IPV6_PREFIX,
+        });
+        let snapshot = compile_full(
+            1,
+            &fast_proxy_model::Config {
+                subsystems: vec![site],
+            },
+            &RuntimeRegistry::new(),
+            &TlsInputs::off(),
+            &MaintenanceInputs::none(),
+            &SamplingInputs::none(),
+            &fast_proxy_routing::AcmeInputs::none(),
+        )
+        .unwrap();
+        assert!(redactor_for(&snapshot).is_sensitive_header("x-customer"));
+        let without = redactor_for(&snapshot_with(Vec::new(), SamplingSettings::default()));
+        assert!(
+            !without.is_sensitive_header("x-customer"),
+            "not a built-in name: only the policy makes it secret"
+        );
+    }
+
+    #[test]
     fn with_no_scopes_only_the_settings_apply() {
         let redactor = redactor_for(&snapshot_with(Vec::new(), SamplingSettings::default()));
         assert!(redactor.is_sensitive_header("cookie"));
@@ -343,6 +386,7 @@ mod tests {
                 bytes_in: 0,
                 bytes_out: 0,
                 client_cancelled: false,
+                refused: None,
             },
             attempts: Vec::new(),
             response_headers: Vec::new(),

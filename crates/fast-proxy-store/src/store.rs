@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 
 use tokio::sync::oneshot;
 
-use crate::{Database, StoreError};
+use crate::{Database, SchemaUpgrade, StoreError};
 
 type Job = Box<dyn FnOnce(&mut Database) + Send>;
 
@@ -15,6 +15,7 @@ type Job = Box<dyn FnOnce(&mut Database) + Send>;
 pub struct Store {
     jobs: Option<mpsc::Sender<Job>>,
     thread: Option<JoinHandle<()>>,
+    schema_upgrade: Option<SchemaUpgrade>,
 }
 
 impl Store {
@@ -28,7 +29,13 @@ impl Store {
         Self::start(Database::open_in_memory()?)
     }
 
+    /// What opening the database did to its schema (see [`Database::schema_upgrade`]).
+    pub fn schema_upgrade(&self) -> Option<&SchemaUpgrade> {
+        self.schema_upgrade.as_ref()
+    }
+
     fn start(mut database: Database) -> Result<Self, StoreError> {
+        let schema_upgrade = database.schema_upgrade().cloned();
         let (jobs, inbox) = mpsc::channel::<Job>();
         let thread = std::thread::Builder::new()
             .name("fast-proxy-store".into())
@@ -40,6 +47,7 @@ impl Store {
         Ok(Self {
             jobs: Some(jobs),
             thread: Some(thread),
+            schema_upgrade,
         })
     }
 

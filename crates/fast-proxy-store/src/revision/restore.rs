@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 use super::history;
 use crate::inputs::{EndpointFields, SubsystemFields, UpstreamFields};
 use crate::repository::{
-    ca_bundles, certificates, endpoints, maintenance, sampling, subsystems, upstreams,
+    ca_bundles, certificates, endpoints, maintenance, rate_limits, sampling, subsystems, upstreams,
 };
 use crate::StoreError;
 
@@ -49,6 +49,14 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
                 policy: group.policy.clone(),
             };
             upstreams::insert(conn, Some(group.id), subsystem.id, &fields)?;
+            if group.policy.max_requests.is_some() {
+                upstreams::set_max_requests(
+                    conn,
+                    subsystem.id,
+                    group.id,
+                    group.policy.max_requests,
+                )?;
+            }
             for endpoint in &group.endpoints {
                 let fields = EndpointFields {
                     addr: endpoint.addr.clone(),
@@ -63,8 +71,9 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
                 "INSERT INTO route (id, subsystem_id, prefix, upstream_group_id, strip_prefix,
                                     upstream_prefix, preserve_host, connect_timeout_ms,
                                     response_timeout_ms, retry_max_attempts,
-                                    retry_idempotent_on_5xx, retry_on_timeout, enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                                    retry_idempotent_on_5xx, retry_on_timeout, enabled,
+                                    max_body_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     route.id.0,
                     subsystem.id.0,
@@ -79,8 +88,17 @@ pub fn restore(conn: &Connection, version: u64) -> Result<Config, StoreError> {
                     route.retry.idempotent_on_5xx,
                     route.retry.on_timeout,
                     route.enabled,
+                    route
+                        .max_body_bytes
+                        .map(|max| i64::try_from(max).unwrap_or(i64::MAX)),
                 ],
             )?;
+            if let Some(policy) = &route.rate_limit {
+                rate_limits::insert(conn, subsystem.id, Some(route.id), policy)?;
+            }
+        }
+        if let Some(policy) = &subsystem.rate_limit {
+            rate_limits::insert(conn, subsystem.id, None, policy)?;
         }
     }
     maintenance::reinsert_surviving(conn, &active_maintenance)?;

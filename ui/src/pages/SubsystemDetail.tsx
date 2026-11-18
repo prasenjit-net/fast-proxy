@@ -9,6 +9,7 @@ import MaintenanceSection from "../components/subsystem/MaintenanceSection";
 import RoutesSection from "../components/subsystem/RoutesSection";
 import SubsystemSettings from "../components/subsystem/SubsystemSettings";
 import SamplingControl from "../components/sampling/SamplingControl";
+import RateLimitControl from "../components/rateLimit/RateLimitControl";
 import UpstreamsSection from "../components/subsystem/UpstreamsSection";
 import WriteOnly from "../components/WriteOnly";
 import { useToast } from "../context/ToastContext";
@@ -95,6 +96,17 @@ export default function SubsystemDetailPage() {
               <span className="card-hint">routes can differ; they inherit from here</span>
             </div>
             <SamplingControl target={{ subsystemId: subsystem.id }} label={subsystem.name} />
+          </section>
+          <section className="card">
+            <div className="card-head">
+              <h2>Rate limit</h2>
+              <span className="card-hint">per instance; a route's own limit replaces this one</span>
+            </div>
+            <RateLimitControl
+              target={{ subsystemId: subsystem.id }}
+              current={subsystem.rateLimit}
+              label={subsystem.name}
+            />
           </section>
         </div>
       </div>

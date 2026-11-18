@@ -1,7 +1,8 @@
 //! A lock-free token bucket in one `AtomicU64`: the credit in the high half
 //! and the low 32 bits of the time of the last refill in the low half. The
-//! rate limiter and the storm guard differ only in the unit of credit and the
-//! refill rule, so both use this.
+//! sampler's rate limiter and storm guard differ only in the unit of credit and
+//! the refill rule, so both use this (it moved here from `fast-proxy-sampling`
+//! so the proxy has one implementation of a limiter's clock rules).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -12,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const LATE_ARRIVAL_MS: u32 = 60_000;
 
 /// The state of a bucket nobody has used yet; the first call fills it.
-pub(crate) const UNSET: u64 = u64::MAX;
+pub const UNSET: u64 = u64::MAX;
 
 fn pack(credit: u32, time_low: u32) -> u64 {
     (u64::from(credit) << 32) | u64::from(time_low)
@@ -23,7 +24,7 @@ fn pack(credit: u32, time_low: u32) -> u64 {
 /// stored even when the take fails, so the stored time keeps up with the clock.
 /// `cap` is the most credit the bucket holds and `initial` what an unused
 /// bucket starts with.
-pub(crate) fn take(
+pub fn take(
     state: &AtomicU64,
     now_ms: u64,
     (cap, initial): (u32, u32),

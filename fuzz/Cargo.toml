@@ -1,0 +1,138 @@
+# Fuzz targets (M7 F1, ADR 0032), run with cargo-fuzz on nightly Rust. This crate
+# is outside the workspace on purpose, so stable builds, `cargo test` and Windows
+# never see it. See fuzz/README.md.
+[package]
+name = "fast-proxy-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+http = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+hyper = "1"
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+fast-proxy-acme = { path = "../crates/fast-proxy-acme" }
+fast-proxy-admin = { path = "../crates/fast-proxy-admin", features = ["fuzzing"] }
+fast-proxy-balancing = { path = "../crates/fast-proxy-balancing" }
+fast-proxy-dataplane = { path = "../crates/fast-proxy-dataplane", features = ["fuzzing"] }
+fast-proxy-limits = { path = "../crates/fast-proxy-limits" }
+fast-proxy-model = { path = "../crates/fast-proxy-model" }
+fast-proxy-routing = { path = "../crates/fast-proxy-routing" }
+fast-proxy-sampling = { path = "../crates/fast-proxy-sampling" }
+fast-proxy-tls = { path = "../crates/fast-proxy-tls" }
+
+[lib]
+name = "fast_proxy_fuzz"
+path = "src/lib.rs"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "host_pattern"
+path = "fuzz_targets/host_pattern.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "route_prefix"
+path = "fuzz_targets/route_prefix.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "upstream_uri"
+path = "fuzz_targets/upstream_uri.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "forwarded_for"
+path = "fuzz_targets/forwarded_for.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "framing"
+path = "fuzz_targets/framing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pipeline_resolve"
+path = "fuzz_targets/pipeline_resolve.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_toml"
+path = "fuzz_targets/config_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "model_json"
+path = "fuzz_targets/model_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pem"
+path = "fuzz_targets/pem.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "redactor"
+path = "fuzz_targets/redactor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_head_flags"
+path = "fuzz_targets/request_head_flags.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acme_names"
+path = "fuzz_targets/acme_names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cidr"
+path = "fuzz_targets/cidr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gcra"
+path = "fuzz_targets/gcra.rs"
+test = false
+doc = false
+bench = false
