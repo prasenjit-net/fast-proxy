@@ -72,6 +72,10 @@ pub enum Admission {
 struct Shard {
     times: HashMap<u64, u64>,
     last_sweep: u64,
+    /// The latest time of any key this shard dropped. A key not in the table is
+    /// checked from it, so a clock reading older than a drop (another thread read
+    /// the clock first) cannot win back the burst the dropped key had spent.
+    dropped_until: u64,
 }
 
 /// Keys (already hashed, see [`crate::KeyHasher`]) and their GCRA times.
@@ -108,9 +112,11 @@ impl KeyTable {
                 Verdict::Deny { retry_after } => Admission::Limited { retry_after },
             };
         }
-        // A key never seen is always allowed: its time is now.
-        let Verdict::Allow { next_tat } = gcra.check(0, now) else {
-            return Admission::Allowed;
+        // A key not held starts from the latest time the shard dropped, which a
+        // current reading has always passed: then it is allowed like a new key.
+        let next_tat = match gcra.check(shard.dropped_until, now) {
+            Verdict::Allow { next_tat } => next_tat,
+            Verdict::Deny { retry_after } => return Admission::Limited { retry_after },
         };
         if !self.budget.try_take() && !self.make_room(&mut shard, now) {
             return Admission::TableFull;
@@ -143,7 +149,15 @@ impl KeyTable {
         }
         shard.last_sweep = now.max(1);
         let before = shard.times.len();
-        shard.times.retain(|_, tat| !Gcra::is_idle(*tat, now));
+        let mut dropped_until = shard.dropped_until;
+        shard.times.retain(|_, tat| {
+            let idle = Gcra::is_idle(*tat, now);
+            if idle {
+                dropped_until = dropped_until.max(*tat);
+            }
+            !idle
+        });
+        shard.dropped_until = dropped_until;
         self.budget.release(before - shard.times.len());
         self.budget.try_take()
     }
@@ -253,6 +267,36 @@ mod tests {
         assert_eq!(table.check(&gcra, second, 3 * SECOND), Admission::Allowed);
         assert_eq!(table.len(), 1);
         assert_eq!(budget.used(), 1);
+    }
+
+    /// The gcra fuzz target's crash: a key dropped as idle at a later clock
+    /// reading came back with an older one and got a second burst at an instant
+    /// where it had spent its first.
+    #[test]
+    fn a_dropped_key_gets_no_credit_back_from_an_older_clock_reading() {
+        let budget = KeyBudget::new(2);
+        let table = KeyTable::new(budget.clone());
+        let gcra = one_per_second();
+        // Keys in one shard (the top bits choose it).
+        let (busy, idle, late) = (1, 2, 3);
+        assert_eq!(table.check(&gcra, busy, 0), Admission::Allowed);
+        assert_eq!(table.check(&gcra, idle, 0), Admission::Allowed);
+        // A later reading finds both idle and drops them, freeing a place.
+        assert_eq!(table.check(&gcra, late, 5 * SECOND), Admission::Allowed);
+        assert_eq!(budget.used(), 1);
+        assert_eq!(
+            table.check(&gcra, busy, 0),
+            Admission::Limited {
+                retry_after: Duration::from_secs(1)
+            },
+            "the reading at 0 already spent its burst"
+        );
+        assert_eq!(budget.used(), 1, "a refusal takes no place");
+        assert_eq!(
+            table.check(&gcra, busy, 5 * SECOND),
+            Admission::Allowed,
+            "a current reading is a new key as before"
+        );
     }
 
     #[test]

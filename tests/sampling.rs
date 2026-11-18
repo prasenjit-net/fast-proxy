@@ -291,8 +291,7 @@ fn samples_can_be_exported_and_cleared() {
 #[test]
 fn samples_survive_a_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let (data, admin_port) = (free_port(), free_port());
-    let mut proxy = start_proxy_on(dir.path(), data, admin_port);
+    let mut proxy = start_proxy(dir.path());
     create_site(&proxy, "shop", SHOP, free_port());
     assert_eq!(through_proxy(&proxy, SHOP, "/").0, 502);
     await_samples(&proxy, 1);
@@ -303,7 +302,7 @@ fn samples_survive_a_restart() {
     );
     drop(proxy);
 
-    let proxy = start_proxy_on(dir.path(), data, admin_port);
+    let proxy = start_proxy(dir.path());
     assert_eq!(samples(&proxy).len(), 1);
 }
 

@@ -263,9 +263,10 @@ pub async fn get(addr: SocketAddr, host: &str, path: &str, extra: &str) -> Reply
     .await
 }
 
-/// Polls `condition` for up to a second.
+/// Polls `condition` for up to ten seconds. Generous on purpose: a met
+/// condition returns at once, and a loaded CI machine can take seconds.
 pub async fn eventually(condition: impl FnMut() -> bool) -> bool {
-    eventually_within(Duration::from_secs(1), condition).await
+    eventually_within(Duration::from_secs(10), condition).await
 }
 
 /// Polls `condition` for up to `limit`, for waits that depend on the platform

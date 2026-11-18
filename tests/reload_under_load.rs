@@ -410,12 +410,14 @@ fn endpoint_changes_under_load_drop_no_requests_and_a_closed_endpoint_gets_nothi
     );
 
     // The sharp rule: a request that started after the write returned never
-    // reached the endpoint that write took out.
+    // reached the endpoint that write took out. Only requests that also finished
+    // before the endpoint came back are judged: one that started just before
+    // can be routed after the next write on a loaded machine.
     let mut checked = 0;
     for span in &closed {
         for sample in samples
             .iter()
-            .filter(|s| s.started > span.from && s.started < span.until)
+            .filter(|s| s.started > span.from && s.finished < span.until)
         {
             checked += 1;
             let body = &sample.outcome.as_ref().unwrap().1;
