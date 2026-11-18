@@ -3,11 +3,12 @@
 //! serde, and re-validates everything on the way back in.
 
 use fast_proxy_model::{
-    parse_timeout_ms, parse_weight, CertificateId, Config, EndpointAddr, EndpointConfig,
-    EndpointId, EndpointState, FailurePolicy, FieldError, GroupPolicy, HashKey, HealthCheck,
-    HealthKind, HostPattern, Hsts, HttpsPolicy, LbAlgorithm, LbPolicy, PassiveHealth, RedirectMode,
-    RetryBudget, RetryPolicy, RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemId,
-    SubsystemName, UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix, UpstreamTls,
+    check_max_body_bytes, parse_timeout_ms, parse_weight, CertificateId, Config, EndpointAddr,
+    EndpointConfig, EndpointId, EndpointState, FailurePolicy, FieldError, GroupPolicy, HashKey,
+    HealthCheck, HealthKind, HostPattern, Hsts, HttpsPolicy, LbAlgorithm, LbPolicy, PassiveHealth,
+    RateLimitHeader, RateLimitKey, RateLimitPolicy, RedirectMode, RetryBudget, RetryPolicy,
+    RouteConfig, RouteId, RoutePrefix, SubsystemConfig, SubsystemId, SubsystemName,
+    UpstreamGroupConfig, UpstreamGroupId, UpstreamPrefix, UpstreamTls,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,6 +31,20 @@ struct SubsystemJson {
     hosts: Vec<String>,
     upstream_groups: Vec<GroupJson>,
     routes: Vec<RouteJson>,
+    /// Added in schema 7.
+    #[serde(default)]
+    rate_limit: Option<RateLimitJson>,
+}
+
+/// A rate-limit policy (schema 7).
+#[derive(Serialize, Deserialize)]
+struct RateLimitJson {
+    rate: u32,
+    period_secs: u64,
+    burst: u32,
+    /// `client`, or the name of the header the policy keys on.
+    key: String,
+    ipv6_prefix: u8,
 }
 
 /// The HTTPS settings. The certificate's name is recorded beside its id so a
@@ -43,6 +58,9 @@ struct HttpsJson {
     hsts_enabled: bool,
     hsts_max_age_secs: u32,
     hsts_include_subdomains: bool,
+    /// Added in schema 6: revisions written before it have no such field and
+    /// still restore (off). Every field added later needs the same default.
+    #[serde(default)]
     acme_enabled: bool,
 }
 
@@ -85,6 +103,9 @@ struct PolicyJson {
     tls_verify: bool,
     tls_server_name: String,
     tls_ca: String,
+    /// Added in schema 7.
+    #[serde(default)]
+    max_requests: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,6 +127,12 @@ struct RouteJson {
     response_timeout_ms: u64,
     retry: RetryJson,
     enabled: bool,
+    /// Added in schema 7.
+    #[serde(default)]
+    rate_limit: Option<RateLimitJson>,
+    /// Added in schema 7.
+    #[serde(default)]
+    max_body_bytes: Option<u64>,
 }
 
 /// Serializes a configuration for storage in a revision. `certificate_names`
@@ -212,9 +239,46 @@ fn subsystem_json(
                     on_timeout: route.retry.on_timeout,
                 },
                 enabled: route.enabled,
+                rate_limit: route.rate_limit.as_ref().map(rate_limit_json),
+                max_body_bytes: route.max_body_bytes,
             })
             .collect(),
+        rate_limit: subsystem.rate_limit.as_ref().map(rate_limit_json),
     }
+}
+
+/// How the client key is written; a header key is written `header:<name>`, so
+/// even a header called `client` cannot be mistaken for it.
+const CLIENT_KEY: &str = "client";
+
+fn rate_limit_json(policy: &RateLimitPolicy) -> RateLimitJson {
+    RateLimitJson {
+        rate: policy.rate,
+        period_secs: policy.period.as_secs(),
+        burst: policy.burst,
+        key: match &policy.key {
+            RateLimitKey::Client => CLIENT_KEY.to_string(),
+            RateLimitKey::Header(name) => format!("header:{}", name.as_str()),
+        },
+        ipv6_prefix: policy.ipv6_prefix,
+    }
+}
+
+fn rate_limit_from_json(json: &RateLimitJson) -> Result<RateLimitPolicy, FieldError> {
+    let key = match json.key.strip_prefix("header:") {
+        Some(name) => RateLimitKey::Header(RateLimitHeader::parse("rateLimit.header", name)?),
+        None if json.key == CLIENT_KEY => RateLimitKey::Client,
+        None => return Err(FieldError::new("rateLimit.key", "is not a known key")),
+    };
+    let policy = RateLimitPolicy {
+        rate: json.rate,
+        period: Duration::from_secs(json.period_secs),
+        burst: json.burst,
+        key,
+        ipv6_prefix: json.ipv6_prefix,
+    };
+    policy.validate()?;
+    Ok(policy)
 }
 
 fn subsystem_from_json(
@@ -275,9 +339,23 @@ fn subsystem_from_json(
                     )?,
                     retry: retry_from_json(&route.retry)?,
                     enabled: route.enabled,
+                    rate_limit: route
+                        .rate_limit
+                        .as_ref()
+                        .map(rate_limit_from_json)
+                        .transpose()?,
+                    max_body_bytes: route
+                        .max_body_bytes
+                        .map(|max| check_max_body_bytes("max_body_bytes", max).map(|()| max))
+                        .transpose()?,
                 })
             })
             .collect::<Result<_, fast_proxy_model::FieldError>>()?,
+        rate_limit: json
+            .rate_limit
+            .as_ref()
+            .map(rate_limit_from_json)
+            .transpose()?,
     })
 }
 
@@ -335,6 +413,7 @@ fn policy_json(policy: &GroupPolicy) -> PolicyJson {
         tls_verify: policy.tls.verify,
         tls_server_name: policy.tls.server_name.clone(),
         tls_ca: policy.tls.ca.clone(),
+        max_requests: policy.max_requests,
     }
 }
 
@@ -371,6 +450,7 @@ fn policy_from_json(json: &PolicyJson) -> Result<GroupPolicy, FieldError> {
             server_name: json.tls_server_name.clone(),
             ca: json.tls_ca.clone(),
         },
+        max_requests: json.max_requests,
     };
     policy.validate()?;
     Ok(policy)

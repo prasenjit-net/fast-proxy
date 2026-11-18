@@ -45,6 +45,10 @@ import type {
   MaintenanceScope,
   MaintenanceSet,
   MaintenanceTarget,
+  LimitsStatus,
+  RateLimit,
+  RateLimitInput,
+  RateLimitTarget,
   Token,
   TokenInput,
   WhoAmI,
@@ -65,6 +69,12 @@ function maintenancePath(target: MaintenanceTarget): string {
     case "route":
       return `${subsystem(target.subsystemId)}/routes/${target.routeId}/maintenance`;
   }
+}
+
+/** The rate-limit URL of a subsystem or route. */
+function rateLimitPath(target: RateLimitTarget): string {
+  if ("routeId" in target) return `${subsystem(target.subsystemId)}/routes/${target.routeId}/rate-limit`;
+  return `${subsystem(target.subsystemId)}/rate-limit`;
 }
 
 function auditQuery(filters: AuditFilters, before: number | null): string {
@@ -111,6 +121,12 @@ export const api = {
   createToken: (input: TokenInput) =>
     request<Envelope<CreatedToken>>("/api/tokens", send("POST", input)),
   revokeToken: (id: number) => request<VersionOnly>(`/api/tokens/${id}`, send("DELETE")),
+
+  // limits
+  limits: () => request<Envelope<LimitsStatus>>("/api/limits"),
+  setRateLimit: (target: RateLimitTarget, input: RateLimitInput) =>
+    request<Envelope<RateLimit>>(rateLimitPath(target), send("PUT", input)),
+  clearRateLimit: (target: RateLimitTarget) => request<VersionOnly>(rateLimitPath(target), send("DELETE")),
 
   // maintenance mode
   maintenance: () => request<Envelope<MaintenanceScope[]>>("/api/maintenance"),

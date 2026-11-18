@@ -4,7 +4,7 @@
 
 use std::sync::atomic::AtomicU64;
 
-use crate::bucket::{take, UNSET};
+use fast_proxy_limits::bucket::{take, UNSET};
 
 /// One credit unit is a thousandth of a token, so rates below one token per
 /// millisecond refill smoothly with integer arithmetic.

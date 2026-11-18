@@ -10,6 +10,8 @@ export * from "./policyValidation";
 const SUBSYSTEM_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 600_000;
+/** The largest route body cap the server accepts (1 TiB). */
+export const MAX_REQUEST_BODY_BYTES = 2 ** 40;
 
 function done<T>(errors: FieldErrors, value: T): Validated<T> {
   return Object.keys(errors).length > 0 ? { errors } : { errors, value };
@@ -57,6 +59,8 @@ export interface RouteValues {
   retryIdempotentOn5xx: boolean;
   retryOnTimeout: boolean;
   enabled: boolean;
+  /** Bytes; empty uses the process default. */
+  maxBodyBytes: string;
 }
 
 function timeout(raw: string): number | null {
@@ -100,6 +104,14 @@ export function validateRoute(values: RouteValues): Validated<RouteInput> {
     errors["retry.maxAttempts"] = "Must be a whole number from 1 to 5 (1 means never retry)";
   }
 
+  let maxBodyBytes: number | null = null;
+  if (values.maxBodyBytes.trim() !== "") {
+    maxBodyBytes = wholeNumber(values.maxBodyBytes);
+    if (maxBodyBytes === null || maxBodyBytes < 1 || maxBodyBytes > MAX_REQUEST_BODY_BYTES) {
+      errors.maxBodyBytes = `Must be a whole number of bytes from 1 to ${MAX_REQUEST_BODY_BYTES}, or empty`;
+    }
+  }
+
   return done(errors, {
     prefix,
     upstreamGroupId: upstreamGroupId ?? 0,
@@ -114,5 +126,6 @@ export function validateRoute(values: RouteValues): Validated<RouteInput> {
       onTimeout: values.retryOnTimeout,
     },
     enabled: values.enabled,
+    maxBodyBytes,
   });
 }

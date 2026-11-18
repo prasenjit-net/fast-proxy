@@ -30,6 +30,9 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
   const [retryIdempotentOn5xx, setRetryIdempotentOn5xx] = useState(initial?.retry.idempotentOn5xx ?? true);
   const [retryOnTimeout, setRetryOnTimeout] = useState(initial?.retry.onTimeout ?? false);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [maxBodyBytes, setMaxBodyBytes] = useState(
+    initial?.maxBodyBytes == null ? "" : String(initial.maxBodyBytes),
+  );
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [busy, setBusy] = useState(false);
   const server = useServerErrors();
@@ -50,6 +53,7 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
       retryIdempotentOn5xx,
       retryOnTimeout,
       enabled,
+      maxBodyBytes,
     });
     setClientErrors(result.errors);
     if (!result.value) return;
@@ -161,6 +165,23 @@ export default function RouteForm({ upstreams, initial, submitLabel, onSubmit, o
           />
         </FormField>
       </div>
+
+      <FormField
+        label="Largest request body (bytes)"
+        htmlFor="route-max-body"
+        error={error("maxBodyBytes")}
+        hint="Larger bodies get a 413 and never reach the upstream. Empty uses the proxy's [limits] default."
+      >
+        <input
+          id="route-max-body"
+          className="input"
+          inputMode="numeric"
+          value={maxBodyBytes}
+          placeholder="the proxy's default"
+          onChange={(event) => setMaxBodyBytes(event.target.value)}
+          {...errorProps("route-max-body", error("maxBodyBytes"))}
+        />
+      </FormField>
 
       <fieldset className="flex flex-col gap-3 rounded-md border border-line p-3">
         <legend className="px-1 text-[0.82rem] font-medium">Retries on another endpoint</legend>

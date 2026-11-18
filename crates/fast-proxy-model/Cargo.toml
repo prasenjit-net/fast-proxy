@@ -6,3 +6,6 @@ description = "Domain types and pure validation for fast-proxy configuration (no
 publish = false
 
 [dependencies]
+
+[lints]
+workspace = true

@@ -15,3 +15,6 @@ fast-proxy-test-acme = { path = "../fast-proxy-test-acme" }
 fast-proxy-tls = { path = "../fast-proxy-tls" }
 proptest = "1"
 tokio = { workspace = true }
+
+[lints]
+workspace = true

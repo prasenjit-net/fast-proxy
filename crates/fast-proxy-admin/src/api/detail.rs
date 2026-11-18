@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use super::envelope::Envelope;
 use super::https_dto::{AttachedCertificate, HttpsDto};
+use super::rate_limits::RateLimitDto;
 use super::upstream_dto::{upstream_dto, UpstreamDto};
 use crate::AppResult;
 
@@ -38,6 +39,10 @@ pub struct RouteDto {
     pub response_timeout_ms: u64,
     pub retry: RetryDto,
     pub enabled: bool,
+    /// The largest request body; `null` uses the process default.
+    pub max_body_bytes: Option<u64>,
+    /// The route's own rate limit; `null` uses the subsystem's, if any.
+    pub rate_limit: Option<RateLimitDto>,
 }
 
 /// A subsystem with everything under it.
@@ -54,6 +59,8 @@ pub struct SubsystemDetail {
     pub hosts: Vec<HostDto>,
     pub upstreams: Vec<UpstreamDto>,
     pub routes: Vec<RouteDto>,
+    /// The subsystem's rate limit, shared by its routes that have none.
+    pub rate_limit: Option<RateLimitDto>,
 }
 
 /// A subsystem as shown in lists.
@@ -90,6 +97,8 @@ pub fn route_dto(route: &RouteConfig) -> RouteDto {
             on_timeout: route.retry.on_timeout,
         },
         enabled: route.enabled,
+        max_body_bytes: route.max_body_bytes,
+        rate_limit: route.rate_limit.as_ref().map(RateLimitDto::from),
     }
 }
 
@@ -154,6 +163,7 @@ pub async fn load_detail(
             .collect(),
         upstreams: subsystem.upstream_groups.iter().map(upstream_dto).collect(),
         routes: routes_in_match_order(&subsystem),
+        rate_limit: subsystem.rate_limit.as_ref().map(RateLimitDto::from),
     };
     Ok(Envelope {
         data: detail,

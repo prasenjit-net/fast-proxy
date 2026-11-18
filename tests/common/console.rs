@@ -39,6 +39,26 @@ pub fn start_with_config(
     env: &[(&str, &str)],
     extra_args: &[&str],
 ) -> Result<Running, String> {
+    let (sender, lines) = mpsc::channel();
+    let (child, admin, data) = attempt(dir, (extra_config, env, extra_args), sender)?;
+    Ok(Running {
+        child,
+        admin,
+        data,
+        lines,
+    })
+}
+
+/// The child and its admin and data addresses, once it listens.
+type Started = (Child, std::net::SocketAddr, std::net::SocketAddr);
+
+/// Starts one proxy on fresh ports, sending its console lines to `console`. A
+/// child that does not come up is killed.
+fn attempt(
+    dir: &Path,
+    (extra_config, env, extra_args): (&str, &[(&str, &str)], &[&str]),
+    console: mpsc::Sender<String>,
+) -> Result<Started, String> {
     let data_port = free_port();
     let admin_port = free_port();
     let config = write_config(dir, data_port, admin_port, extra_config);
@@ -55,28 +75,40 @@ pub fn start_with_config(
     }
     let mut child = command.spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
-    let (sender, lines) = mpsc::channel();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if sender.send(line).is_err() {
+            if console.send(line).is_err() {
                 break;
             }
         }
     });
     let admin: std::net::SocketAddr = ([127, 0, 0, 1], admin_port).into();
-    let mut running = Running {
-        child,
-        admin,
-        data: ([127, 0, 0, 1], data_port).into(),
-        lines,
-    };
+    let data: std::net::SocketAddr = ([127, 0, 0, 1], data_port).into();
+    let outcome = wait_listening(&mut child, admin);
+    if outcome.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    outcome.map(|()| (child, admin, data))
+}
+
+/// Waits until `admin` answers and the child is still running a moment later:
+/// a parallel test can briefly hold the port picked for this proxy, so a
+/// connection may reach that listener while this proxy fails to bind and exits.
+fn wait_listening(child: &mut Child, admin: std::net::SocketAddr) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
-        if let Some(status) = running.child.try_wait().unwrap() {
+        if let Some(status) = child.try_wait().unwrap() {
             return Err(format!("exited at startup ({status})"));
         }
         if std::net::TcpStream::connect(admin).is_ok() {
-            return Ok(running);
+            thread::sleep(Duration::from_millis(300));
+            return match child.try_wait().unwrap() {
+                Some(status) => Err(format!(
+                    "exited at startup ({status}); the port was someone else's"
+                )),
+                None => Ok(()),
+            };
         }
         thread::sleep(Duration::from_millis(50));
     }
@@ -94,18 +126,31 @@ pub fn start_ok_with_args(dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Ru
 }
 
 /// Like [`start_ok_with_args`], adding `extra_config` lines to `[data_plane]`.
+/// The console lines of failed attempts are kept: one that lost its port may
+/// already have created the database and printed the bootstrap token, which
+/// the retry will not print again.
 pub fn start_ok_with_config(
     dir: &Path,
     extra_config: &str,
     env: &[(&str, &str)],
     args: &[&str],
 ) -> Running {
+    let (sender, lines) = mpsc::channel();
+    let mut last_error = String::new();
     for _ in 0..5 {
-        if let Ok(running) = start_with_config(dir, extra_config, env, args) {
-            return running;
+        match attempt(dir, (extra_config, env, args), sender.clone()) {
+            Ok((child, admin, data)) => {
+                return Running {
+                    child,
+                    admin,
+                    data,
+                    lines,
+                }
+            }
+            Err(error) => last_error = error,
         }
     }
-    panic!("the proxy would not start");
+    panic!("the proxy would not start: {last_error}");
 }
 
 /// The console lines printed so far.

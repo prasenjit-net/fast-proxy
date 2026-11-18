@@ -1,0 +1,93 @@
+name: Fuzz nightly
+
+# Every fuzz target for 20 minutes, in parallel (M7 F2, ADR 0032). A crash opens
+# an issue carrying the input; fix it and commit the input as a unit test in the
+# crate that owns the function (fuzz/README.md).
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - acme_names
+          - cidr
+          - config_toml
+          - forwarded_for
+          - framing
+          - gcra
+          - host_pattern
+          - model_json
+          - pem
+          - pipeline_resolve
+          - redactor
+          - request_head_flags
+          - route_prefix
+          - upstream_uri
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # nightly
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: fuzz
+          key: fuzz
+
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+
+      - run: fuzz/run.sh 1200 "${{ matrix.target }}"
+
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts
+
+      - name: Open an issue with the crash input
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          crash=$(ls fuzz/artifacts/"$TARGET"/* 2>/dev/null | head -n 1 || true)
+          {
+            echo "The nightly fuzz run of \`$TARGET\` failed: $RUN_URL"
+            echo
+            if [ -n "$crash" ]; then
+              echo "Input \`$(basename "$crash")\`, base64:"
+              echo
+              echo '```'
+              base64 -w 76 "$crash" | head -c 60000
+              echo '```'
+              echo
+              echo "Reproduce: \`base64 -d > crash && cd fuzz && cargo +nightly fuzz run $TARGET ../crash\`."
+            else
+              echo "No crash input was written (a build failure or a timeout)."
+            fi
+            echo "Commit the input as a unit test in the crate that owns the function (fuzz/README.md)."
+          } > body.md
+          gh issue create --title "Fuzz: $TARGET failed in the nightly run" --body-file body.md

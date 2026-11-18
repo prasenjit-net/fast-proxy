@@ -39,7 +39,7 @@ fn enabled_by_default() -> bool {
 impl SubsystemRequest {
     /// Validates the request: the edit to apply, with `https` left `None` when
     /// the request did not carry the object.
-    fn into_edit(self) -> AppResult<SubsystemEdit> {
+    pub(super) fn into_edit(self) -> AppResult<SubsystemEdit> {
         let mut errors = FieldErrors::default();
         let name = errors.check(SubsystemName::parse(&self.name));
         if self.description.chars().count() > MAX_DESCRIPTION_LEN {

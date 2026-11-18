@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_admin::{
-    serve_tls, AdminSecurity, AdminState, ListenerInfo, RuntimeInfo, SecuritySettings,
+    serve_tls, AdminSecurity, AdminState, LimitsInfo, ListenerInfo, RuntimeInfo, SecuritySettings,
     StoredCertificate, TlsInfo,
 };
 use fast_proxy_config_service::{
@@ -14,10 +14,11 @@ use fast_proxy_config_service::{
 };
 use fast_proxy_dataplane::{
     bind, BindError, BoundListener, DataPlane, Http2Limits, ListenerSpec, Observability,
-    RequestPipeline, TlsPlane, TlsPlaneError, TlsPlaneSettings, TrustedProxies, TrustedProxyError,
-    UpstreamClient,
+    RequestLimits, RequestPipeline, ServerLimits, TlsPlane, TlsPlaneError, TlsPlaneSettings,
+    TrustedProxies, TrustedProxyError, UpstreamClient,
 };
 use fast_proxy_health::{run_status_gauges, HealthEngine};
+use fast_proxy_limits::ConnectionCaps;
 use fast_proxy_sample_service::SampleReader;
 use fast_proxy_store::{Store, StoreError};
 use fast_proxy_telemetry::{AccessLog, EndpointEvents, Metrics};
@@ -26,7 +27,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, TlsConfig};
+use crate::config::{AdminAuth, AdminConfig, AdminTlsConfig, AppConfig, LimitsConfig, TlsConfig};
 use crate::sampling::{Sampling, SamplingError};
 
 /// The environment variable that seeds the first admin token (for containers).
@@ -79,10 +80,19 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
 
     let database = data_plane.database_path();
     let store = Store::open(&database)?;
+    if let Some(upgrade) = store.schema_upgrade() {
+        report_schema_upgrade(upgrade);
+    }
     // Both planes report to the same metrics and the same access log.
     let metrics = Arc::new(Metrics::new());
     let config_service = Arc::new(
-        ConfigService::start_with_tls(store, metrics.clone(), tls_settings(&config)).await?,
+        ConfigService::start_with_limits(
+            store,
+            metrics.clone(),
+            tls_settings(&config),
+            config.limits.rate_limit_keys,
+        )
+        .await?,
     );
     if config.admin.auth == AdminAuth::Required {
         ensure_admin_token(&config_service).await?;
@@ -122,6 +132,7 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             .collect(),
         database_path: database.display().to_string(),
         sampling_enabled: config.sampling.enabled,
+        limits: limits_info(&config.limits),
         tls: TlsInfo {
             enabled: config.data_plane.tls.enabled,
             listen: https.as_ref().map(|plane| plane.listener().local_addr()),
@@ -252,9 +263,16 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
             observability,
         )
         .with_https_port(redirect_port(&config.data_plane.tls, https.as_ref()))
-        .with_trusted_proxies(trusted_proxies),
+        .with_trusted_proxies(trusted_proxies)
+        .with_request_limits(request_limits(&config.limits)),
     );
-    let plane = DataPlane::start_with_tls(bound, https, pipeline, data_stop.clone());
+    let plane = DataPlane::start_with_limits(
+        bound,
+        https,
+        pipeline,
+        data_stop.clone(),
+        server_limits(&config.limits),
+    );
 
     for (name, addr) in plane.local_addrs() {
         let scheme = if name == HTTPS_LISTENER {
@@ -337,6 +355,68 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     access_log.flush().await;
     tracing::info!("stopped");
     served.map_err(StartupError::AdminServe)
+}
+
+/// `[limits]` as `GET /api/limits` reports it.
+fn limits_info(limits: &LimitsConfig) -> LimitsInfo {
+    let millis = |time: Duration| u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
+    LimitsInfo {
+        max_connections: limits.max_connections,
+        max_connections_per_client: limits.max_connections_per_client,
+        header_read_timeout_ms: millis(limits.header_read_timeout),
+        body_read_timeout_ms: millis(limits.body_read_timeout),
+        send_timeout_ms: millis(limits.send_timeout),
+        tunnel_idle_timeout_ms: (!limits.tunnel_idle_timeout.is_zero())
+            .then(|| millis(limits.tunnel_idle_timeout)),
+        max_header_count: limits.max_header_count,
+        max_header_bytes: limits.max_header_bytes,
+        max_uri_bytes: limits.max_uri_bytes,
+        max_body_bytes: (limits.max_body_bytes > 0).then_some(limits.max_body_bytes),
+    }
+}
+
+/// The connection and head limits of `[limits]`, as the data plane takes them.
+fn server_limits(limits: &LimitsConfig) -> ServerLimits {
+    ServerLimits {
+        connections: ConnectionCaps {
+            total: limits.max_connections,
+            per_client: limits.max_connections_per_client,
+        },
+        header_read_timeout: limits.header_read_timeout,
+        max_header_count: limits.max_header_count,
+        max_header_bytes: limits.max_header_bytes,
+        send_timeout: limits.send_timeout,
+        tunnel_idle_timeout: (!limits.tunnel_idle_timeout.is_zero())
+            .then_some(limits.tunnel_idle_timeout),
+    }
+}
+
+/// The per-request limits of `[limits]`; a body cap of 0 is unlimited.
+fn request_limits(limits: &LimitsConfig) -> RequestLimits {
+    RequestLimits {
+        max_uri_bytes: limits.max_uri_bytes,
+        max_body_bytes: (limits.max_body_bytes > 0).then_some(limits.max_body_bytes),
+        body_read_timeout: limits.body_read_timeout,
+    }
+}
+
+/// Says once that the database was upgraded, and where the copy taken before it is,
+/// so an operator who must go back to the previous release knows what to restore.
+fn report_schema_upgrade(upgrade: &fast_proxy_store::SchemaUpgrade) {
+    match &upgrade.backup {
+        Some(copy) => tracing::warn!(
+            "upgraded the database schema from version {} to {}; the database as it was \
+             is kept at {} (needed only to go back to the previous release)",
+            upgrade.from,
+            upgrade.to,
+            copy.display()
+        ),
+        None => tracing::warn!(
+            "upgraded the database schema from version {} to {}",
+            upgrade.from,
+            upgrade.to
+        ),
+    }
 }
 
 /// The port a redirect to HTTPS names: `public_port` when set (NAT, containers),

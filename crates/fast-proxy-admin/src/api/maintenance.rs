@@ -278,7 +278,9 @@ async fn route_target(
 
 /// Validates the request and builds the settings. Returns the bypass secret
 /// that was generated, when the request asked for a header without one.
-fn settings_from(body: MaintenanceRequest) -> AppResult<(MaintenanceSettings, Option<String>)> {
+pub(super) fn settings_from(
+    body: MaintenanceRequest,
+) -> AppResult<(MaintenanceSettings, Option<String>)> {
     let mut errors = FieldErrors::default();
     let cidrs: Vec<Cidr> = body
         .bypass

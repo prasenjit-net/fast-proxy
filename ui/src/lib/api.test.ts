@@ -126,6 +126,7 @@ describe("endpoint calls", () => {
     responseTimeoutMs: 2000,
     retry: { maxAttempts: 2, idempotentOn5xx: true, onTimeout: false },
     enabled: true,
+    maxBodyBytes: 1024,
   };
   const settings = {
     name: "backend",
@@ -143,7 +144,9 @@ describe("endpoint calls", () => {
     passive: { consecutiveFailures: 3, baseEjectionMs: 10000, maxEjectionMs: 300000, maxEjectionPercent: 50 },
     retryBudget: { percent: 20, minPerSec: 10 },
     tls: { enabled: false, verify: true, serverName: "", ca: "" },
+    maxRequests: 50,
   };
+  const policy = { rate: 10, periodSecs: 60 };
   const created = { ...settings, endpoints: [{ addr: "127.0.0.1:3000", weight: 1 }] };
   const endpoint = { addr: "127.0.0.1:3001", weight: 2 };
   const subsystem = { name: "shop", enabled: true, description: "" };
@@ -174,6 +177,23 @@ describe("endpoint calls", () => {
     ["createRoute", () => api.createRoute(4, route), "POST", "/api/subsystems/4/routes", route],
     ["updateRoute", () => api.updateRoute(4, 5, route), "PUT", "/api/subsystems/4/routes/5", route],
     ["deleteRoute", () => api.deleteRoute(4, 5), "DELETE", "/api/subsystems/4/routes/5", undefined],
+    ["limits", () => api.limits(), "GET", "/api/limits", undefined],
+    ["setRateLimit (subsystem)", () => api.setRateLimit({ subsystemId: 4 }, policy), "PUT", "/api/subsystems/4/rate-limit", policy],
+    [
+      "setRateLimit (route)",
+      () => api.setRateLimit({ subsystemId: 4, routeId: 5 }, policy),
+      "PUT",
+      "/api/subsystems/4/routes/5/rate-limit",
+      policy,
+    ],
+    ["clearRateLimit (subsystem)", () => api.clearRateLimit({ subsystemId: 4 }), "DELETE", "/api/subsystems/4/rate-limit", undefined],
+    [
+      "clearRateLimit (route)",
+      () => api.clearRateLimit({ subsystemId: 4, routeId: 5 }),
+      "DELETE",
+      "/api/subsystems/4/routes/5/rate-limit",
+      undefined,
+    ],
     ["revisions", () => api.revisions(), "GET", "/api/revisions?limit=25", undefined],
     ["revisions (older page)", () => api.revisions(40), "GET", "/api/revisions?limit=25&before=40", undefined],
     ["revision", () => api.revision(12), "GET", "/api/revisions/12", undefined],

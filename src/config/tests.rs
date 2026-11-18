@@ -445,3 +445,108 @@ mod admin_protection {
         );
     }
 }
+
+#[test]
+fn the_limits_section_defaults_parses_and_is_bounded() {
+    let defaults = parse("").unwrap();
+    assert_eq!(
+        defaults.limits.rate_limit_keys,
+        fast_proxy_limits::DEFAULT_KEY_CAPACITY
+    );
+    let set = parse("[limits]\nrate_limit_keys = 5000\n").unwrap();
+    assert_eq!(set.limits.rate_limit_keys, 5000);
+    set.validate().unwrap();
+    for refused in ["0", "999", "50000001"] {
+        let config = parse(&format!("[limits]\nrate_limit_keys = {refused}\n")).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("limits.rate_limit_keys"), "{refused}: {err}");
+    }
+    assert!(
+        parse("[limits]\nmax_connection = 5\n").is_err(),
+        "unknown keys are refused"
+    );
+}
+
+#[test]
+fn every_limit_parses_and_its_bounds_are_enforced() {
+    let config = parse(
+        "[limits]\nmax_connections = 500\nmax_connections_per_client = 0\n\
+         header_read_timeout = \"5s\"\nmax_header_count = 50\nmax_header_bytes = 16384\n\
+         max_uri_bytes = 4096\nmax_body_bytes = 1048576\n",
+    )
+    .unwrap();
+    config.validate().unwrap();
+    let limits = &config.limits;
+    assert_eq!(
+        (limits.max_connections, limits.max_connections_per_client),
+        (500, 0)
+    );
+    assert_eq!(
+        limits.header_read_timeout,
+        std::time::Duration::from_secs(5)
+    );
+    assert_eq!(
+        (limits.max_header_count, limits.max_header_bytes),
+        (50, 16384)
+    );
+    assert_eq!(
+        (limits.max_uri_bytes, limits.max_body_bytes),
+        (4096, 1 << 20)
+    );
+
+    let defaults = parse("").unwrap();
+    defaults.validate().unwrap();
+    assert_eq!(defaults.limits.max_body_bytes, 0, "unlimited by default");
+
+    for (bad, field) in [
+        ("max_connections = 0", "limits.max_connections"),
+        (
+            "max_connections = 10\nmax_connections_per_client = 11",
+            "limits.max_connections_per_client",
+        ),
+        (
+            "header_read_timeout = \"100ms\"",
+            "limits.header_read_timeout",
+        ),
+        ("max_header_count = 0", "limits.max_header_count"),
+        ("max_header_bytes = 4096", "limits.max_header_bytes"),
+        ("max_uri_bytes = 100", "limits.max_uri_bytes"),
+        (
+            "max_header_bytes = 8192\nmax_uri_bytes = 9000",
+            "limits.max_uri_bytes",
+        ),
+        ("max_body_bytes = 2199023255553", "limits.max_body_bytes"),
+    ] {
+        let config = parse(&format!("[limits]\n{bad}\n")).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains(field), "{bad}: {err}");
+    }
+}
+
+#[test]
+fn the_slow_client_timeouts_parse_and_are_bounded() {
+    let config = parse(
+        "[limits]\nbody_read_timeout = \"5s\"\nsend_timeout = \"15s\"\ntunnel_idle_timeout = \"0s\"\n",
+    )
+    .unwrap();
+    config.validate().unwrap();
+    let limits = &config.limits;
+    assert_eq!(limits.body_read_timeout, std::time::Duration::from_secs(5));
+    assert_eq!(limits.send_timeout, std::time::Duration::from_secs(15));
+    assert!(
+        limits.tunnel_idle_timeout.is_zero(),
+        "0s turns the tunnel rule off"
+    );
+    for (bad, field) in [
+        ("body_read_timeout = \"500ms\"", "limits.body_read_timeout"),
+        ("send_timeout = \"2h\"", "limits.send_timeout"),
+        (
+            "tunnel_idle_timeout = \"500ms\"",
+            "limits.tunnel_idle_timeout",
+        ),
+    ] {
+        let config = parse(&format!("[limits]\n{bad}\n")).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains(field), "{bad}: {err}");
+    }
+}

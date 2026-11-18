@@ -1,0 +1,1 @@
+{"name":"backend","endpoints":[{"addr":"127.0.0.1:3000","weight":2}],"lb":{"algorithm":"consistent_hash","hashKey":"header:x-user"},"maxRequests":50}

@@ -1,34 +1,45 @@
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use fast_proxy_limits::{ConnectionCaps, ConnectionCounter, ConnectionPermit, ConnectionRefusal};
 use fast_proxy_telemetry::Metrics;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 /// Counts open client connections (and upgraded tunnels) across all
-/// listeners, and lets shutdown wait for them to finish.
+/// listeners, admits a new one only within the connection caps, and lets
+/// shutdown wait for them to finish.
 pub struct ConnectionTracker {
     active: AtomicUsize,
+    caps: Arc<ConnectionCounter>,
     idle: Notify,
     metrics: Arc<Metrics>,
 }
 
 impl ConnectionTracker {
-    pub fn new(metrics: Arc<Metrics>) -> Arc<Self> {
+    pub fn new(metrics: Arc<Metrics>, caps: ConnectionCaps) -> Arc<Self> {
         Arc::new(Self {
             active: AtomicUsize::new(0),
+            caps: ConnectionCounter::new(caps),
             idle: Notify::new(),
             metrics,
         })
     }
 
-    /// Registers one connection; it stays counted until the guard drops.
-    pub fn open(self: &Arc<Self>) -> ConnectionGuard {
+    /// Admits a connection from `peer` within the caps; it stays counted (and
+    /// holds its place under the caps) until the guard drops. A refusal is
+    /// counted by its reason, and the caller closes the connection.
+    pub fn admit(self: &Arc<Self>, peer: IpAddr) -> Result<ConnectionGuard, ConnectionRefusal> {
+        let permit = self.caps.try_open(peer).inspect_err(|refusal| {
+            self.metrics.connection_refused(refusal.label());
+        })?;
         self.active.fetch_add(1, Ordering::SeqCst);
         self.metrics.connection_opened();
-        ConnectionGuard {
+        Ok(ConnectionGuard {
             tracker: self.clone(),
-        }
+            _permit: permit,
+        })
     }
 
     pub fn active(&self) -> usize {
@@ -53,6 +64,15 @@ impl ConnectionTracker {
 /// Keeps one connection counted while alive.
 pub struct ConnectionGuard {
     tracker: Arc<ConnectionTracker>,
+    /// Released after the counts below, when the guard is dropped.
+    _permit: ConnectionPermit,
+}
+
+impl ConnectionGuard {
+    /// The metrics the connection reports to (a tunnel counts its own close).
+    pub(crate) fn metrics(&self) -> &Metrics {
+        &self.tracker.metrics
+    }
 }
 
 impl Drop for ConnectionGuard {
@@ -87,6 +107,9 @@ pub struct ConnectionContext {
     pub scheme: &'static str,
     /// Set on the HTTPS listener only.
     pub tls: Option<Arc<TlsConnection>>,
+    /// How long a tunnel from this connection may carry nothing; `None` never
+    /// closes it.
+    pub tunnel_idle: Option<std::time::Duration>,
 }
 
 #[cfg(test)]
@@ -95,12 +118,22 @@ mod tests {
 
     use super::*;
 
+    const PEER: IpAddr = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+    fn tracker() -> Arc<ConnectionTracker> {
+        let caps = ConnectionCaps {
+            total: 100,
+            per_client: 100,
+        };
+        ConnectionTracker::new(Arc::new(Metrics::new()), caps)
+    }
+
     #[test]
     fn counts_open_connections_until_their_guards_drop() {
-        let tracker = ConnectionTracker::new(Arc::new(Metrics::new()));
+        let tracker = tracker();
         assert_eq!(tracker.active(), 0);
-        let first = tracker.open();
-        let second = tracker.open();
+        let first = tracker.admit(PEER).unwrap();
+        let second = tracker.admit(PEER).unwrap();
         assert_eq!(tracker.active(), 2);
         drop(first);
         assert_eq!(tracker.active(), 1);
@@ -110,7 +143,7 @@ mod tests {
 
     #[tokio::test]
     async fn wait_idle_returns_immediately_when_nothing_is_open() {
-        let tracker = ConnectionTracker::new(Arc::new(Metrics::new()));
+        let tracker = tracker();
         tokio::time::timeout(Duration::from_secs(1), tracker.wait_idle())
             .await
             .unwrap();
@@ -118,9 +151,9 @@ mod tests {
 
     #[tokio::test]
     async fn wait_idle_waits_for_the_last_guard() {
-        let tracker = ConnectionTracker::new(Arc::new(Metrics::new()));
-        let first = tracker.open();
-        let second = tracker.open();
+        let tracker = tracker();
+        let first = tracker.admit(PEER).unwrap();
+        let second = tracker.admit(PEER).unwrap();
         let waiter = {
             let tracker = tracker.clone();
             tokio::spawn(async move { tracker.wait_idle().await })
@@ -133,5 +166,31 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn a_connection_over_a_cap_is_refused_and_counted_by_reason() {
+        let metrics = Arc::new(Metrics::new());
+        let caps = ConnectionCaps {
+            total: 3,
+            per_client: 2,
+        };
+        let tracker = ConnectionTracker::new(metrics.clone(), caps);
+        let other: IpAddr = "192.0.2.7".parse().unwrap();
+        let held = [tracker.admit(PEER).unwrap(), tracker.admit(PEER).unwrap()];
+        assert_eq!(
+            tracker.admit(PEER).err(),
+            Some(ConnectionRefusal::PerClient)
+        );
+        let third = tracker.admit(other).unwrap();
+        assert_eq!(tracker.admit(other).err(), Some(ConnectionRefusal::Total));
+        assert_eq!(tracker.active(), 3, "refusals are not counted as open");
+        let text = metrics.render();
+        assert!(text.contains(
+            r#"fastproxy_connections_refused_total{reason="max_connections_per_client"} 1"#
+        ));
+        assert!(text.contains(r#"fastproxy_connections_refused_total{reason="max_connections"} 1"#));
+        drop((held, third));
+        assert!(tracker.admit(other).is_ok(), "places come back on close");
     }
 }

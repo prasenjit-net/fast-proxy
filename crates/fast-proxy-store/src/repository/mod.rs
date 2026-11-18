@@ -12,6 +12,7 @@ mod https_columns;
 pub mod load;
 pub mod maintenance;
 mod policy_columns;
+pub mod rate_limits;
 pub mod routes;
 pub mod samples;
 pub mod sampling;

@@ -78,6 +78,36 @@ lease_ttl = "10m"
 # Fetch each challenge through its public name before the CA checks it.
 self_check = true
 
+[limits]
+# Process limits (restart to change). Rate-limit policies and per-route body caps
+# are set in the admin UI/API and stored in the database.
+# Open client connections across all listeners (--max-connections overrides).
+max_connections = 10000
+# Open connections from one peer address; checked before any TLS handshake.
+# Behind a load balancer every peer is the balancer: set 0 to turn this off.
+max_connections_per_client = 256
+# How long a client may take to send a request head; also how long a
+# keep-alive connection may sit idle between requests.
+header_read_timeout = "10s"
+# Request header fields (more: 431), head bytes (more: 431, at least 8192) and
+# request target bytes (more: 414).
+max_header_count = 100
+max_header_bytes = 65536
+max_uri_bytes = 8192
+# The body cap of routes that set none (larger: 413); 0 is unlimited.
+max_body_bytes = 0
+# A request body that stops arriving for this long is answered 408.
+body_read_timeout = "30s"
+# A client that stops reading its response for this long is disconnected.
+send_timeout = "60s"
+# An upgraded tunnel (WebSocket) carrying nothing either way for this long is
+# closed; "0s" never closes one.
+tunnel_idle_timeout = "1h"
+# How many client keys all rate-limit tables together may hold (about 64 bytes
+# each). When full, idle keys make room; if none is idle, a new client is let
+# through and counted, so a flood of addresses cannot lock everyone out.
+rate_limit_keys = 100000
+
 [admin]
 # The admin plane (UI, REST API, /metrics) has no authentication yet.
 # Keep it on loopback.

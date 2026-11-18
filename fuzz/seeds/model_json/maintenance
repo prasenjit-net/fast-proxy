@@ -1,0 +1,1 @@
+{"message":"down","ttlSecs":600,"bypass":{"cidrs":["10.0.0.0/8"],"header":"x-pass"}}

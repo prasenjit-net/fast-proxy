@@ -24,7 +24,23 @@ pub enum FixedResponse {
     BadGateway,
     /// The upstream did not answer in time.
     GatewayTimeout,
+    /// The request body is larger than the route accepts (ADR 0029).
+    PayloadTooLarge,
+    /// The request target is longer than the proxy accepts (ADR 0029).
+    UriTooLong,
+    /// The request body stopped arriving (ADR 0029).
+    RequestTimeout,
+    /// The client is over its rate limit (ADR 0030); answered with `Retry-After`.
+    TooManyRequests,
+    /// Every endpoint that may take the request is at its request cap (ADR 0031).
+    EndpointCapacity,
 }
+
+/// Marks a response as a refusal by one of the proxy's limits, with the reason:
+/// the pipeline records it in the access log, the metrics and a sample, whichever
+/// layer refused the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProxyRefusal(pub &'static str);
 
 impl FixedResponse {
     pub fn status(self) -> StatusCode {
@@ -34,6 +50,11 @@ impl FixedResponse {
             Self::MisdirectedRequest => StatusCode::MISDIRECTED_REQUEST,
             Self::BadGateway => StatusCode::BAD_GATEWAY,
             Self::GatewayTimeout => StatusCode::GATEWAY_TIMEOUT,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UriTooLong => StatusCode::URI_TOO_LONG,
+            Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
+            Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
+            Self::EndpointCapacity => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -46,6 +67,11 @@ impl FixedResponse {
             Self::MisdirectedRequest => "misdirected_request",
             Self::BadGateway => "bad_gateway",
             Self::GatewayTimeout => "gateway_timeout",
+            Self::PayloadTooLarge => "payload_too_large",
+            Self::UriTooLong => "uri_too_long",
+            Self::RequestTimeout => "request_timeout",
+            Self::TooManyRequests => "rate_limited",
+            Self::EndpointCapacity => "endpoint_capacity",
         }
     }
 
@@ -58,11 +84,30 @@ impl FixedResponse {
             Self::MisdirectedRequest => "this host is not served on this connection",
             Self::BadGateway => "bad gateway",
             Self::GatewayTimeout => "gateway timeout",
+            Self::PayloadTooLarge => "request body too large",
+            Self::UriTooLong => "request target too long",
+            Self::RequestTimeout => "request body timed out",
+            Self::TooManyRequests => "too many requests",
+            Self::EndpointCapacity => "upstream at capacity",
+        }
+    }
+
+    /// The reason a limit refused the request, for the responses that are
+    /// refusals; `None` for every other fixed response.
+    pub fn refusal(self) -> Option<&'static str> {
+        match self {
+            Self::PayloadTooLarge
+            | Self::UriTooLong
+            | Self::RequestTimeout
+            | Self::TooManyRequests
+            | Self::EndpointCapacity => Some(self.code()),
+            _ => None,
         }
     }
 
     /// Builds the response: JSON when `wants_json`, plain text otherwise,
-    /// always carrying the request id.
+    /// always carrying the request id. A refusal also carries its
+    /// [`ProxyRefusal`].
     pub fn render(self, request_id: &str, wants_json: bool) -> Response<ResponseBody> {
         let (content_type, body) = if wants_json {
             let body = format!(
@@ -83,6 +128,9 @@ impl FixedResponse {
             header::HeaderValue::from_static(content_type),
         );
         headers.insert(REQUEST_ID, header_value(request_id));
+        if let Some(reason) = self.refusal() {
+            response.extensions_mut().insert(ProxyRefusal(reason));
+        }
         response
     }
 }
@@ -132,12 +180,17 @@ mod tests {
 
     use super::*;
 
-    const ALL: [FixedResponse; 7] = [
+    const ALL: [FixedResponse; 12] = [
         FixedResponse::UnknownHost,
         FixedResponse::SubsystemDisabled,
         FixedResponse::NoRoute,
         FixedResponse::NoHealthyUpstream,
         FixedResponse::MisdirectedRequest,
+        FixedResponse::PayloadTooLarge,
+        FixedResponse::UriTooLong,
+        FixedResponse::RequestTimeout,
+        FixedResponse::TooManyRequests,
+        FixedResponse::EndpointCapacity,
         FixedResponse::BadGateway,
         FixedResponse::GatewayTimeout,
     ];
@@ -150,7 +203,10 @@ mod tests {
     #[test]
     fn maps_each_kind_to_its_status() {
         let statuses: Vec<u16> = ALL.iter().map(|r| r.status().as_u16()).collect();
-        assert_eq!(statuses, [404, 503, 404, 503, 421, 502, 504]);
+        assert_eq!(
+            statuses,
+            [404, 503, 404, 503, 421, 413, 414, 408, 429, 503, 502, 504]
+        );
     }
 
     #[tokio::test]
@@ -189,5 +245,29 @@ mod tests {
         assert!(body_text(response)
             .await
             .contains(r#""requestId":"a\"b\\c""#));
+    }
+
+    #[test]
+    fn only_refusals_are_marked_and_each_with_its_code() {
+        let marked: Vec<(FixedResponse, &str)> = ALL
+            .iter()
+            .filter_map(|kind| {
+                let response = kind.render("rid", false);
+                response
+                    .extensions()
+                    .get::<ProxyRefusal>()
+                    .map(|refusal| (*kind, refusal.0))
+            })
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                (FixedResponse::PayloadTooLarge, "payload_too_large"),
+                (FixedResponse::UriTooLong, "uri_too_long"),
+                (FixedResponse::RequestTimeout, "request_timeout"),
+                (FixedResponse::TooManyRequests, "rate_limited"),
+                (FixedResponse::EndpointCapacity, "endpoint_capacity"),
+            ]
+        );
     }
 }

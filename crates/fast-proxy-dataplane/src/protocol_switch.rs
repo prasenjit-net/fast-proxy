@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::connections::{ConnectionContext, ConnectionGuard};
 use crate::headers;
+use crate::progress_io::{self, Deadlines, ProgressIo};
 use crate::ResponseBody;
 
 /// Streams the upstream response to the client, minus hop-by-hop headers.
@@ -39,15 +40,19 @@ pub(crate) fn switch_protocols(
     let (mut parts, _) = response.into_parts();
     headers::strip_hop_by_hop_keeping_upgrade(&mut parts.headers);
 
-    let (guard, force_close) = match context {
-        Some(context) => (Some(context.guard), context.force_close),
-        None => (None, CancellationToken::new()),
+    let (guard, force_close, idle) = match context {
+        Some(context) => (
+            Some(context.guard),
+            context.force_close,
+            context.tunnel_idle,
+        ),
+        None => (None, CancellationToken::new(), None),
     };
     tokio::spawn(relay(
         client_upgrade,
         upstream_upgrade,
         (guard, tunnel),
-        force_close,
+        (force_close, idle),
     ));
 
     let empty = Empty::<Bytes>::new()
@@ -58,23 +63,38 @@ pub(crate) fn switch_protocols(
 
 /// Copies bytes between the two upgraded connections. The guard keeps the
 /// tunnel counted as an open connection, and as in flight on its endpoint,
-/// for as long as it lives.
+/// for as long as it lives. A tunnel that carries nothing either way for
+/// `idle` is closed and counted.
 async fn relay(
     client: OnUpgrade,
     upstream: OnUpgrade,
-    _guards: (Option<std::sync::Arc<ConnectionGuard>>, InFlightGuard),
-    force_close: CancellationToken,
+    (connection, _in_flight): (Option<std::sync::Arc<ConnectionGuard>>, InFlightGuard),
+    (force_close, idle): (CancellationToken, Option<std::time::Duration>),
 ) {
     let (client, upstream) = tokio::join!(client, upstream);
     let (Ok(client), Ok(upstream)) = (client, upstream) else {
         tracing::debug!("protocol switch was not completed by both sides");
         return;
     };
-    let (mut client, mut upstream) = (TokioIo::new(client), TokioIo::new(upstream));
+    // Both sides record into one progress: traffic either way keeps it open.
+    let progress = progress_io::new_progress();
+    let mut client = ProgressIo::sharing(TokioIo::new(client), progress.clone());
+    let mut upstream = ProgressIo::sharing(TokioIo::new(upstream), progress.clone());
+    let deadlines = Deadlines {
+        first_byte: None,
+        send: None,
+        idle,
+    };
     tokio::select! {
         result = tokio::io::copy_bidirectional(&mut client, &mut upstream) => {
             if let Err(err) = result {
                 tracing::debug!("upgraded connection ended with error: {err}");
+            }
+        }
+        stall = progress_io::watch(progress, deadlines) => {
+            tracing::debug!(stall = stall.label(), "closing an idle tunnel");
+            if let Some(connection) = &connection {
+                connection.metrics().client_timeout(stall.label());
             }
         }
         () = force_close.cancelled() => {}

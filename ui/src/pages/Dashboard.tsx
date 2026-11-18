@@ -1,5 +1,6 @@
 import ActivityFeed from "../components/ActivityFeed";
 import CertificateHealthCard from "../components/CertificateHealthCard";
+import LimitsCard from "../components/LimitsCard";
 import LiveChart from "../components/LiveChart";
 import StatCard from "../components/StatCard";
 import UpstreamHealthCard from "../components/UpstreamHealthCard";
@@ -71,6 +72,8 @@ export default function DashboardPage() {
       <UpstreamHealthCard />
 
       <CertificateHealthCard />
+
+      <LimitsCard />
 
       <section className="card">
         <div className="card-head">

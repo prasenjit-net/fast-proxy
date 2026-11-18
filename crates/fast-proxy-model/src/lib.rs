@@ -20,6 +20,8 @@ mod lb_policy;
 mod maintenance;
 mod passive_health;
 mod path_prefix;
+mod rate_limit;
+mod request_body;
 mod retry;
 mod role;
 mod sampling;
@@ -49,7 +51,7 @@ pub use endpoint::{
 pub use endpoint_addr::EndpointAddr;
 pub use failure_policy::FailurePolicy;
 pub use field_error::FieldError;
-pub use group_policy::GroupPolicy;
+pub use group_policy::{check_max_requests, GroupPolicy, MAX_REQUESTS_PER_ENDPOINT};
 pub use health_check::{HealthCheck, HealthKind};
 pub use host_pattern::HostPattern;
 pub use https_policy::{Hsts, HttpsPolicy, RedirectMode, MAX_HSTS_AGE_SECS};
@@ -61,6 +63,11 @@ pub use maintenance::{
 };
 pub use passive_health::PassiveHealth;
 pub use path_prefix::{RoutePrefix, UpstreamPrefix};
+pub use rate_limit::{
+    RateLimitHeader, RateLimitKey, RateLimitPolicy, DEFAULT_IPV6_PREFIX, MAX_BURST,
+    MAX_PERIOD_SECS, MAX_RATE,
+};
+pub use request_body::{check_max_body_bytes, MAX_REQUEST_BODY_BYTES};
 pub use retry::{RetryBudget, RetryPolicy};
 pub use role::{Action, Role, TokenId, TokenName};
 pub use sampling::{

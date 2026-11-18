@@ -172,6 +172,8 @@ pub(crate) struct SamplingTail {
     pub(crate) body_omitted: Option<&'static str>,
     /// Holds the body memory budget until the sample is handled or dropped.
     pub(crate) reservation: Option<BodyReservation>,
+    /// The limit that refused the request, when one did.
+    pub(crate) refused: Option<&'static str>,
     /// What to ask of the request body while it streams to the upstream, when
     /// the request is forwarded.
     pub(crate) request_observation: Option<BodyObservation>,
@@ -220,6 +222,7 @@ impl SamplingTail {
             response_content_type: None,
             body_omitted: plan.omitted,
             reservation: plan.reservation,
+            refused: None,
             request_observation: forwarded.then_some(BodyObservation {
                 capture_cap: plan.request_cap,
             }),
@@ -259,6 +262,7 @@ impl SamplingTail {
                 .map_or(0, |body| body.bytes_read()),
             bytes_out: done.bytes_out,
             client_cancelled: done.cancelled,
+            refused: self.refused,
         };
         let state = DecisionState {
             latency: self.latency.as_deref().unwrap_or(&NO_WINDOW),

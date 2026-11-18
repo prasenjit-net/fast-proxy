@@ -114,6 +114,8 @@ pub struct Outcome {
     pub bytes_out: u64,
     /// The client left before the response finished (reported as 499).
     pub client_cancelled: bool,
+    /// The proxy limit that refused the request (`rate_limited`, ...), if one did.
+    pub refused: Option<&'static str>,
 }
 
 /// Why a request's headers look unusual (decision J7). A bit set, so noting

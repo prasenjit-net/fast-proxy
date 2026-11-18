@@ -21,6 +21,8 @@ pub struct Balancer {
     algorithm: Algorithm,
     failure_policy: FailurePolicy,
     counter: AtomicU64,
+    /// The most requests one endpoint may have in flight (ADR 0031).
+    max_requests: Option<u32>,
 }
 
 impl Balancer {
@@ -45,7 +47,36 @@ impl Balancer {
             algorithm,
             failure_policy,
             counter: AtomicU64::new(0),
+            max_requests: None,
         }
+    }
+
+    /// Caps each endpoint at `cap` requests in flight: a full endpoint is not
+    /// chosen, not even in panic mode. `None` is unlimited.
+    pub fn with_max_requests(mut self, cap: Option<u32>) -> Self {
+        self.max_requests = cap;
+        self
+    }
+
+    /// The per-endpoint cap, for the caller that counts the chosen request in
+    /// flight ([`crate::EndpointRuntime::try_track`]).
+    pub fn max_requests(&self) -> Option<u32> {
+        self.max_requests
+    }
+
+    /// Whether a refusal is (at least partly) because endpoints are full: the
+    /// group has a cap and an admin-enabled endpoint is at it. The data plane
+    /// answers `503 endpoint_capacity` rather than "no healthy endpoint" then.
+    pub fn is_at_capacity(&self, endpoints: &[Candidate]) -> bool {
+        self.max_requests.is_some()
+            && endpoints
+                .iter()
+                .any(|endpoint| endpoint.admin_enabled && !self.has_room(endpoint))
+    }
+
+    fn has_room(&self, endpoint: &Candidate) -> bool {
+        self.max_requests
+            .is_none_or(|cap| endpoint.runtime.in_flight() < cap)
     }
 
     /// What the caller must extract from the request and hash into
@@ -61,8 +92,9 @@ impl Balancer {
     /// Only admin-enabled, healthy, non-ejected endpoints are eligible. With
     /// none eligible, a `fail_open` group picks among admin-enabled endpoints
     /// ignoring health (`panic` is set); `fail_closed` returns `None`.
-    /// Draining and disabled endpoints are never chosen. The chosen endpoint is
-    /// marked selected (see [`crate::EndpointRuntime::mark_selected`]).
+    /// Draining and disabled endpoints are never chosen, and neither is an
+    /// endpoint at the group's request cap. The chosen endpoint is marked
+    /// selected (see [`crate::EndpointRuntime::mark_selected`]).
     pub fn select(
         &self,
         endpoints: &[Candidate],
@@ -72,7 +104,10 @@ impl Balancer {
         now_ms: u64,
     ) -> Option<Selection> {
         let allowed = |index: usize| Some(index) != exclude;
-        let eligible = |index: usize| allowed(index) && endpoints[index].is_eligible(now_ms);
+        let has_room = |index: usize| self.has_room(&endpoints[index]);
+        let eligible = |index: usize| {
+            allowed(index) && endpoints[index].is_eligible(now_ms) && has_room(index)
+        };
         if let Some(index) = self.pick(endpoints, ctx, rng, &eligible) {
             endpoints[index].runtime.mark_selected(now_ms);
             return Some(Selection {
@@ -83,7 +118,8 @@ impl Balancer {
         if self.failure_policy == FailurePolicy::FailClosed {
             return None;
         }
-        let admin_enabled = |index: usize| allowed(index) && endpoints[index].admin_enabled;
+        let admin_enabled =
+            |index: usize| allowed(index) && endpoints[index].admin_enabled && has_room(index);
         let index = self.pick(endpoints, ctx, rng, &admin_enabled)?;
         Some(Selection { index, panic: true })
     }

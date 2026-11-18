@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fast_proxy_balancing::RuntimeRegistry;
+use fast_proxy_limits::RateLimitRuntime;
 use fast_proxy_model::{
     RetryPolicy, RouteId, SamplingSettings, SubsystemId, SubsystemName, UpstreamGroupId,
     UpstreamPrefix,
@@ -10,8 +11,8 @@ use fast_proxy_model::{
 use fast_proxy_sampling::SamplingPolicy;
 
 use crate::{
-    AcmeChallenges, CompiledHttps, CompiledMaintenance, CompiledSampling, CompiledUpstream,
-    HostTable, RouteTable, SamplingRuntime,
+    AcmeChallenges, CompiledHttps, CompiledMaintenance, CompiledRateLimit, CompiledSampling,
+    CompiledUpstream, HostTable, RouteTable, SamplingRuntime,
 };
 
 /// A route with its upstream group resolved. The endpoint is chosen per
@@ -33,6 +34,10 @@ pub struct CompiledRoute {
     pub maintenance: Option<Arc<CompiledMaintenance>>,
     /// How requests on this route are sampled.
     pub sampling: CompiledSampling,
+    /// The rate limit that applies (the route's own policy, or its subsystem's).
+    pub rate_limit: Option<CompiledRateLimit>,
+    /// The largest request body; `None` uses the process default.
+    pub max_body_bytes: Option<u64>,
 }
 
 /// One subsystem ready for request handling. Disabled routes are not
@@ -73,6 +78,8 @@ pub struct Snapshot {
     pub sampling: SamplingRuntime,
     /// The pending ACME HTTP-01 challenges, answered ahead of routing.
     pub acme_challenges: Arc<AcmeChallenges>,
+    /// The rate-limit key tables of every policy, carried to the next compile.
+    pub rate_limits: RateLimitRuntime,
 }
 
 impl Snapshot {
@@ -85,6 +92,12 @@ impl Snapshot {
     /// change resets neither the guards nor a route's rolling latency.
     pub fn sampling_runtime(&self) -> SamplingRuntime {
         self.sampling.clone()
+    }
+
+    /// The rate-limit state to pass to the next compile, so tables of policies
+    /// that remain keep their keys.
+    pub fn rate_limit_runtime(&self) -> RateLimitRuntime {
+        self.rate_limits.clone()
     }
 
     /// The runtime state of every endpoint in this snapshot; the next

@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use fast_proxy_auth::TokenCache;
 use fast_proxy_balancing::RuntimeRegistry;
+use fast_proxy_limits::{RateLimitRuntime, DEFAULT_KEY_CAPACITY};
 use fast_proxy_routing::{
-    compile_full, AcmeInputs, MaintenanceInputs, SamplingInputs, SamplingRuntime, Snapshot,
-    SnapshotHolder,
+    compile_with, AcmeInputs, CompileInputs, MaintenanceInputs, SamplingInputs, SamplingRuntime,
+    Snapshot, SnapshotHolder,
 };
 use fast_proxy_store::repository::{audit, certificates, load, vault};
 use fast_proxy_store::{revision, Connection, Database, Mutation, Store, StoreError};
@@ -83,6 +84,18 @@ impl ConfigService {
         metrics: Arc<Metrics>,
         settings: TlsSettings,
     ) -> Result<Self, StartError> {
+        Self::start_with_limits(store, metrics, settings, DEFAULT_KEY_CAPACITY).await
+    }
+
+    /// Like [`ConfigService::start_with_tls`], with the process's rate-limit key
+    /// capacity (`[limits] rate_limit_keys`): every rate-limit table together
+    /// holds at most that many keys (ADR 0030).
+    pub async fn start_with_limits(
+        store: Store,
+        metrics: Arc<Metrics>,
+        settings: TlsSettings,
+        rate_limit_keys: usize,
+    ) -> Result<Self, StartError> {
         let tls_enabled = settings.enabled;
         let (config, version, has_certificates, check, (maintenance, sampling, acme)) = store
             .run(|db| {
@@ -108,14 +121,17 @@ impl ConfigService {
                 move |db| db.read(|conn| tls.build(conn))
             })
             .await?;
-        let snapshot = compile_full(
+        let snapshot = compile_with(
             version,
             &config,
             &RuntimeRegistry::new(),
-            &tls.inputs(&prepared, false),
-            &maintenance,
-            &sampling,
-            &acme,
+            &CompileInputs {
+                tls: &tls.inputs(&prepared, false),
+                maintenance: &maintenance,
+                sampling: &sampling,
+                acme: &acme,
+                rate_limits: &RateLimitRuntime::new(rate_limit_keys),
+            },
         )?;
         metrics.set_maintenance_active(&maintenance_readings(&snapshot));
         let holder = Arc::new(SnapshotHolder::new());
@@ -175,6 +191,7 @@ impl ConfigService {
         let live = self.holder.load();
         let previous = live.runtime_registry();
         let sampling_runtime = live.sampling_runtime();
+        let rate_limits = live.rate_limit_runtime();
         let prepared = self
             .store
             .run({
@@ -197,14 +214,17 @@ impl ConfigService {
             })
             .await?;
         let inputs = self.tls.inputs(&prepared, true);
-        let snapshot = compile_full(
+        let snapshot = compile_with(
             version,
             &config,
             &previous,
-            &inputs,
-            &maintenance,
-            &sampling,
-            &acme,
+            &CompileInputs {
+                tls: &inputs,
+                maintenance: &maintenance,
+                sampling: &sampling,
+                acme: &acme,
+                rate_limits: &rate_limits,
+            },
         )?;
         self.metrics
             .set_maintenance_active(&maintenance_readings(&snapshot));
@@ -254,6 +274,7 @@ impl ConfigService {
         let live = self.holder.load();
         let previous = live.runtime_registry();
         let sampling_runtime = live.sampling_runtime();
+        let rate_limits = live.rate_limit_runtime();
         let tls = self.tls.clone();
         let (config, version, prepared, (maintenance, sampling, acme)) = self
             .store
@@ -274,14 +295,17 @@ impl ConfigService {
             })
             .await?;
         let inputs = self.tls.inputs(&prepared, self.tls.settings.enabled);
-        let snapshot = compile_full(
+        let snapshot = compile_with(
             version,
             &config,
             &previous,
-            &inputs,
-            &maintenance,
-            &sampling,
-            &acme,
+            &CompileInputs {
+                tls: &inputs,
+                maintenance: &maintenance,
+                sampling: &sampling,
+                acme: &acme,
+                rate_limits: &rate_limits,
+            },
         )?;
         self.metrics
             .set_maintenance_active(&maintenance_readings(&snapshot));
@@ -413,6 +437,7 @@ impl ConfigService {
         let live = self.holder.load();
         let previous = live.runtime_registry();
         let sampling_runtime = live.sampling_runtime();
+        let rate_limits = live.rate_limit_runtime();
         let tls = self.tls.clone();
         let context = context.clone();
         let instance = self.instance.clone();
@@ -438,7 +463,7 @@ impl ConfigService {
                     db,
                     &actor,
                     audited_mutate,
-                    (&previous, sampling_runtime),
+                    (&previous, sampling_runtime, rate_limits),
                     &tls,
                 )
             })
@@ -522,7 +547,11 @@ fn persist_and_compile<T>(
     db: &mut Database,
     actor: &str,
     mutate: impl FnOnce(&Connection) -> Result<Mutation<T>, StoreError>,
-    (previous, sampling_runtime): (&RuntimeRegistry, SamplingRuntime),
+    (previous, sampling_runtime, rate_limits): (
+        &RuntimeRegistry,
+        SamplingRuntime,
+        RateLimitRuntime,
+    ),
     tls: &TlsState,
 ) -> Result<PersistOutcome<T>, StoreError> {
     let mut compiled = None;
@@ -562,15 +591,14 @@ fn persist_and_compile<T>(
                 return Err("acme challenges were not read".to_string());
             };
             let inputs = tls.inputs(ready, tls.settings.enabled);
-            match compile_full(
-                0,
-                config,
-                previous,
-                &inputs,
-                scopes,
-                sampling_inputs,
-                acme_inputs,
-            ) {
+            let compile_inputs = CompileInputs {
+                tls: &inputs,
+                maintenance: scopes,
+                sampling: sampling_inputs,
+                acme: acme_inputs,
+                rate_limits: &rate_limits,
+            };
+            match compile_with(0, config, previous, &compile_inputs) {
                 Ok(snapshot) => {
                     compiled = Some(snapshot);
                     Ok(())

@@ -87,8 +87,9 @@ change is recorded so it can be rolled back.
   lets in-flight requests and open WebSockets finish for up to
   `data_plane.shutdown_grace`.
 - **Observability.** Prometheus metrics at `/metrics`, one access-log line per
-  request, live traffic stats and a dashboard with upstream health, a live status
-  view per upstream, and a resolver that shows exactly where a given host and
+  request, live traffic stats and a dashboard with upstream health and the limits
+  (connections against their cap, the rate-limit key table, refusals by reason), a
+  live status view per upstream, and a resolver that shows exactly where a given host and
   path would be sent and which endpoints would take it.
 
 ## Quick start
@@ -278,6 +279,17 @@ failed (the message carries the proxy's own reason and names each bad field),
 | `sampling.queue_depth`, `batch_size`, `batch_interval` | `1024`, `50`, `250ms` | Kept samples that may wait, rows per write, the longest a sample waits for its batch |
 | `sampling.prune_interval` | `30s` | How often this instance prunes the shared sample table |
 | `sampling.body_budget_bytes` | `16 MiB` | Memory that captured bodies may hold at once |
+| `limits.max_connections` | `10000` | Open client connections across all listeners (`--max-connections`) |
+| `limits.max_connections_per_client` | `256` | Open connections from one peer address, checked before any TLS handshake; `0` turns it off (behind a load balancer) |
+| `limits.header_read_timeout` | `10s` | Time to send a request head; also the longest idle keep-alive between requests |
+| `limits.max_header_count` | `100` | Request header fields; more is `431` |
+| `limits.max_header_bytes` | `64 KiB` | Request head size (at least 8 KiB); larger is `431` |
+| `limits.max_uri_bytes` | `8 KiB` | Request target (path and query); longer is `414` |
+| `limits.max_body_bytes` | `0` | Body cap for routes that set none; larger is `413` before anything is forwarded, or cut while streaming; `0` is unlimited |
+| `limits.body_read_timeout` | `30s` | A request body that stops arriving this long is answered `408` (the upstream is not blamed) |
+| `limits.send_timeout` | `60s` | A client that stops reading its response this long is disconnected |
+| `limits.tunnel_idle_timeout` | `1h` | An upgraded tunnel (WebSocket) idle both ways this long is closed; `0s` never closes one |
+| `limits.rate_limit_keys` | `100000` | Client keys all rate-limit tables together may hold; a new client finding no room is let through and counted |
 | `logging.level` | `info` | Tracing filter (full directives allowed, e.g. `info,access=off`) |
 | `logging.access_log` | *(unset)* | Access-log file path; omit to disable the file |
 | `ui.app_name` | `Fast Proxy` | Shown in the sidebar + browser title |
@@ -290,6 +302,18 @@ Unknown keys are rejected, so a typo (or a certificate or key path, which never
 belong in this file) fails at startup instead of being ignored. Every listener is bound before any
 traffic is served, so a bad address or a port in use aborts startup with a clear
 message.
+
+### Upgrading
+
+A new release opens the database an earlier one wrote (from v0.1.1 on) and upgrades
+its schema in place, in one transaction, keeping every subsystem, certificate, token
+and sample. Before it does, it copies the file to
+`<database>.pre-v<N>-<time>.bak` beside it (owner-only permissions, the newest three
+kept) and logs where. That copy is only needed to go back to the previous release:
+stop the proxy, put the copy in place of the database, start the old binary. A
+database is never downgraded, so an older binary refuses one a newer release has
+upgraded. Instances sharing one database must all be upgraded together. The copy
+holds what the database holds, so protect it the same way.
 
 ## API
 
@@ -317,14 +341,17 @@ All routes except `/api/health` need `Authorization: Bearer <token>`; a missing 
 | GET, PUT, DELETE | `/api/subsystems/{id}` | Detail (hosts, upstreams, routes in match order) / replace / delete |
 | POST | `/api/subsystems/{id}/hosts` | Add a host pattern (`pattern`) |
 | DELETE | `/api/subsystems/{id}/hosts/{host_id}` | Remove a host pattern |
-| GET, POST | `/api/subsystems/{id}/upstreams` | List / create a group: `name`, `endpoints` (`addr`, `weight`, `state`), and optional `lb`, `failurePolicy`, `health`, `passive`, `retryBudget` |
+| GET, POST | `/api/subsystems/{id}/upstreams` | List / create a group: `name`, `endpoints` (`addr`, `weight`, `state`), and optional `lb`, `failurePolicy`, `health`, `passive`, `retryBudget`, `maxRequests` (requests in flight per endpoint) |
 | PUT, DELETE | `/api/subsystems/{id}/upstreams/{upstream_id}` | Replace the name and policy (endpoints are separate) / delete (409 while a route uses it) |
 | POST | `/api/subsystems/{id}/upstreams/{upstream_id}/endpoints` | Add an endpoint (`addr`, `weight`, `state`) |
 | PUT, DELETE | `.../endpoints/{endpoint_id}` | Replace / remove (409 for the last endpoint of a group) |
 | PUT | `.../endpoints/{endpoint_id}/state` | `{ "state": "enabled" \| "draining" \| "disabled" }`: takes effect for the next request |
 | GET | `.../upstreams/{upstream_id}/status` | Live state per endpoint: effective state and why, in-flight, latency, last probe |
 | GET, POST | `/api/subsystems/{id}/routes` | List in match order / create (optional `retry`: `maxAttempts`, `idempotentOn5xx`, `onTimeout`) |
-| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete |
+| PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}` | Replace / delete (optional `maxBodyBytes`: the route's body cap) |
+| GET, PUT, DELETE | `/api/subsystems/{id}/rate-limit` | The subsystem's rate-limit policy (404 when none) / set `{rate, periodSecs, burst?, key?: "client"\|"header", header?, ipv6Prefix?}` / clear |
+| GET, PUT, DELETE | `/api/subsystems/{id}/routes/{route_id}/rate-limit` | The same for one route; it replaces the subsystem's policy on that route |
+| GET | `/api/limits` | The `[limits]` in force, the rate-limit key table's fill, and refusals by reason (readable by a `viewer`) |
 | GET | `/api/revisions?limit=&before=` | Revision history, newest first (paged) |
 | GET | `/api/revisions/{version}` | The full configuration as of that revision |
 | POST | `/api/revisions/{version}/rollback` | Re-apply a revision as a new one |

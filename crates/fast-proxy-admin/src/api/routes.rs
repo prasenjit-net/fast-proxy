@@ -2,15 +2,15 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use fast_proxy_model::{
-    parse_timeout_ms, RetryPolicy, RouteId, RoutePrefix, SubsystemId, UpstreamGroupId,
-    UpstreamPrefix,
+    check_max_body_bytes, parse_timeout_ms, RetryPolicy, RouteId, RoutePrefix, SubsystemId,
+    UpstreamGroupId, UpstreamPrefix,
 };
 use fast_proxy_store::repository::{routes, subsystems};
 use fast_proxy_store::{Mutation, RouteFields};
 use serde::Deserialize;
 
 use super::change::Change;
-use super::detail::{millis_of, routes_in_match_order, subsystem_name, RetryDto, RouteDto};
+use super::detail::{route_dto, routes_in_match_order, subsystem_name, RouteDto};
 use super::envelope::{Envelope, VersionOnly};
 use super::input::FieldErrors;
 use super::json::ApiJson;
@@ -41,6 +41,8 @@ pub struct RouteRequest {
     retry: RetryRequest,
     #[serde(default = "yes")]
     enabled: bool,
+    /// The largest request body; absent or `null` uses the process default.
+    max_body_bytes: Option<u64>,
 }
 
 /// A route's retry settings; absent fields take their defaults.
@@ -65,8 +67,12 @@ fn default_response_timeout() -> u64 {
 }
 
 impl RouteRequest {
-    fn into_fields(self) -> AppResult<RouteFields> {
+    /// The route's fields and its body cap, validated together.
+    pub(super) fn into_fields(self) -> AppResult<(RouteFields, Option<u64>)> {
         let mut errors = FieldErrors::default();
+        if let Some(max) = self.max_body_bytes {
+            errors.check(check_max_body_bytes("maxBodyBytes", max));
+        }
         let prefix = errors.check(RoutePrefix::parse(&self.prefix));
         let upstream_prefix = errors.check(UpstreamPrefix::parse(&self.upstream_prefix));
         let connect_timeout = errors.check(parse_timeout_ms(
@@ -93,7 +99,7 @@ impl RouteRequest {
         else {
             unreachable!("finish() fails when any field is invalid");
         };
-        Ok(RouteFields {
+        let fields = RouteFields {
             prefix,
             upstream_group_id: UpstreamGroupId(self.upstream_group_id),
             strip_prefix: self.strip_prefix,
@@ -103,27 +109,23 @@ impl RouteRequest {
             response_timeout,
             retry,
             enabled: self.enabled,
-        })
+        };
+        Ok((fields, self.max_body_bytes))
     }
 }
 
-fn dto_from(id: RouteId, fields: &RouteFields) -> RouteDto {
-    RouteDto {
-        id: id.0,
-        prefix: fields.prefix.as_str().to_string(),
-        upstream_group_id: fields.upstream_group_id.0,
-        strip_prefix: fields.strip_prefix,
-        upstream_prefix: fields.upstream_prefix.as_str().to_string(),
-        preserve_host: fields.preserve_host,
-        connect_timeout_ms: millis_of(fields.connect_timeout),
-        response_timeout_ms: millis_of(fields.response_timeout),
-        retry: RetryDto {
-            max_attempts: fields.retry.max_attempts,
-            idempotent_on_5xx: fields.retry.idempotent_on_5xx,
-            on_timeout: fields.retry.on_timeout,
-        },
-        enabled: fields.enabled,
-    }
+/// The route as stored, for the response to a write: the same as a `GET`.
+fn stored_route(
+    conn: &fast_proxy_store::Connection,
+    id: SubsystemId,
+    route_id: RouteId,
+) -> Result<RouteDto, fast_proxy_store::StoreError> {
+    subsystems::get(conn, id)?
+        .routes
+        .iter()
+        .find(|route| route.id == route_id)
+        .map(route_dto)
+        .ok_or_else(|| fast_proxy_store::StoreError::NotFound(format!("route {}", route_id.0)))
 }
 
 /// `GET /api/subsystems/{id}/routes`, in match order (longest prefix first).
@@ -150,8 +152,7 @@ pub async fn create_route(
     ApiJson(body): ApiJson<RouteRequest>,
 ) -> AppResult<(StatusCode, Json<Envelope<RouteDto>>)> {
     let id = SubsystemId(id);
-    let fields = body.into_fields()?;
-    let for_response = fields.clone();
+    let (fields, max_body_bytes) = body.into_fields()?;
     let applied = state
         .config
         .apply(
@@ -159,8 +160,12 @@ pub async fn create_route(
             Audited::new("route.create", format!("subsystem:{}", id.0)),
             move |conn| {
                 let subsystem = subsystem_name(conn, id)?;
+                let route_id = routes::create(conn, id, &fields)?;
+                if max_body_bytes.is_some() {
+                    routes::set_max_body_bytes(conn, id, route_id, max_body_bytes)?;
+                }
                 Ok(Mutation {
-                    value: routes::create(conn, id, &fields)?,
+                    value: stored_route(conn, id, route_id)?,
                     summary: format!("route created: {} in {subsystem}", fields.prefix.as_str()),
                 })
             },
@@ -169,7 +174,7 @@ pub async fn create_route(
     Ok((
         StatusCode::CREATED,
         Json(Envelope {
-            data: dto_from(applied.value, &for_response),
+            data: applied.value,
             version: applied.version,
         }),
     ))
@@ -183,8 +188,7 @@ pub async fn update_route(
     ApiJson(body): ApiJson<RouteRequest>,
 ) -> AppResult<Json<Envelope<RouteDto>>> {
     let (id, route_id) = (SubsystemId(id), RouteId(route_id));
-    let fields = body.into_fields()?;
-    let for_response = fields.clone();
+    let (fields, max_body_bytes) = body.into_fields()?;
     let applied = state
         .config
         .apply(
@@ -196,15 +200,16 @@ pub async fn update_route(
             move |conn| {
                 let subsystem = subsystem_name(conn, id)?;
                 routes::update(conn, id, route_id, &fields)?;
+                routes::set_max_body_bytes(conn, id, route_id, max_body_bytes)?;
                 Ok(Mutation {
-                    value: (),
+                    value: stored_route(conn, id, route_id)?,
                     summary: format!("route updated: {} in {subsystem}", fields.prefix.as_str()),
                 })
             },
         )
         .await?;
     Ok(Json(Envelope {
-        data: dto_from(route_id, &for_response),
+        data: applied.value,
         version: applied.version,
     }))
 }

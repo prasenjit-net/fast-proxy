@@ -10,6 +10,7 @@ mod compile;
 mod compile_error;
 mod compiled_https;
 mod compiled_maintenance;
+mod compiled_rate_limit;
 mod compiled_sampling;
 mod compiled_upstream;
 mod holder;
@@ -26,12 +27,15 @@ mod upstream_uri;
 
 pub use acme_challenges::{AcmeChallenges, ACME_CHALLENGE_PREFIX};
 pub use acme_inputs::AcmeInputs;
-pub use compile::{compile, compile_all, compile_full, compile_with_tls};
+pub use compile::{
+    compile, compile_all, compile_full, compile_with, compile_with_tls, CompileInputs,
+};
 pub use compile_error::CompileError;
 pub use compiled_https::CompiledHttps;
 pub use compiled_maintenance::{
     CompiledMaintenance, MaintenanceCheck, MaintenanceScope, RenderedBody, ResponseFormat,
 };
+pub use compiled_rate_limit::CompiledRateLimit;
 pub use compiled_sampling::CompiledSampling;
 pub use compiled_upstream::{CompiledEndpoint, CompiledUpstream};
 pub use holder::SnapshotHolder;
@@ -47,6 +51,8 @@ pub use upstream_uri::build_upstream_uri;
 
 #[cfg(test)]
 mod maintenance_compile_tests;
+#[cfg(test)]
+mod rate_limit_compile_tests;
 #[cfg(test)]
 mod sampling_compile_tests;
 #[cfg(test)]

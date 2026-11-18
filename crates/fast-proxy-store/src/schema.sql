@@ -1,5 +1,8 @@
--- Schema v6. The project is not deployed, so changes edit this file directly
--- (no migrations); SCHEMA_VERSION in database.rs must be bumped with it.
+-- Schema v7: what a new database is created with. A released schema is never
+-- edited in place: a change is additive and comes with a step in `migrations/`
+-- that upgrades the previous version, and SCHEMA_VERSION in database.rs is bumped
+-- with it. A column added by a migration goes at the end of its table here too,
+-- so a new database and an upgraded one have the same shape (a test compares them).
 
 -- Certificate material. Private keys are stored only as AES-256-GCM ciphertext
 -- (sealed by the tls crate); this crate never decrypts. The SQL stays portable
@@ -50,9 +53,9 @@ CREATE TABLE subsystem (
   hsts_enabled            INTEGER NOT NULL DEFAULT 0,
   hsts_max_age_secs       INTEGER NOT NULL DEFAULT 31536000,
   hsts_include_subdomains INTEGER NOT NULL DEFAULT 0,
-  https_acme_enabled      INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  https_acme_enabled      INTEGER NOT NULL DEFAULT 0  -- schema 6
 );
 
 CREATE TABLE subsystem_host (
@@ -86,6 +89,7 @@ CREATE TABLE upstream_group (
   tls_verify           INTEGER NOT NULL DEFAULT 1,
   tls_server_name      TEXT    NOT NULL DEFAULT '',
   tls_ca               TEXT    NOT NULL DEFAULT '',
+  max_requests         INTEGER,  -- schema 7: per-endpoint in-flight cap; NULL is unlimited
   UNIQUE (subsystem_id, name)
 );
 
@@ -116,6 +120,7 @@ CREATE TABLE route (
   retry_idempotent_on_5xx INTEGER NOT NULL DEFAULT 1,
   retry_on_timeout    INTEGER NOT NULL DEFAULT 0,
   enabled             INTEGER NOT NULL DEFAULT 1,
+  max_body_bytes      INTEGER,  -- schema 7: NULL uses the process default
   UNIQUE (subsystem_id, prefix)
 );
 
@@ -308,3 +313,23 @@ CREATE TABLE acme_status (
   instance             TEXT NOT NULL DEFAULT '',
   updated_at           INTEGER NOT NULL
 );
+
+-- Rate-limit policies (M7, schema 7; ADR 0030). Config: a revision holds them and
+-- a rollback restores them. One per subsystem (route_id NULL, shared by its routes
+-- that have none of their own) and at most one per route, which replaces it.
+CREATE TABLE rate_limit_policy (
+  id           INTEGER PRIMARY KEY,
+  subsystem_id INTEGER NOT NULL REFERENCES subsystem(id) ON DELETE CASCADE,
+  route_id     INTEGER REFERENCES route(id) ON DELETE CASCADE,
+  rate         INTEGER NOT NULL,
+  period_secs  INTEGER NOT NULL,
+  burst        INTEGER NOT NULL,
+  key_kind     TEXT    NOT NULL CHECK (key_kind IN ('client', 'header')),
+  key_header   TEXT,
+  ipv6_prefix  INTEGER NOT NULL DEFAULT 64
+);
+-- UNIQUE treats NULLs as distinct, so the subsystem's own policy needs its own index.
+CREATE UNIQUE INDEX rate_limit_policy_subsystem ON rate_limit_policy (subsystem_id)
+  WHERE route_id IS NULL;
+CREATE UNIQUE INDEX rate_limit_policy_route ON rate_limit_policy (route_id)
+  WHERE route_id IS NOT NULL;

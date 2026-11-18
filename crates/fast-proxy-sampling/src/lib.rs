@@ -5,7 +5,6 @@
 //! and the sample service implements [`SampleSink`].
 
 mod batcher;
-mod bucket;
 mod budget;
 mod client_errors;
 mod decide;

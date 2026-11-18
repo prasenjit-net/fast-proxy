@@ -8,15 +8,21 @@
 mod acme_challenge;
 mod connections;
 mod forward;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 mod headers;
+mod limits;
 mod listener;
 mod maintenance;
 mod pending_request;
 mod pipeline;
+mod progress_io;
 mod protocol_switch;
+mod rate_limit;
 mod redirect;
 mod replay_body;
 mod request_id;
+mod request_size;
 mod responses;
 mod retry_policy;
 mod sampling_head;
@@ -41,11 +47,15 @@ mod drain_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod limits_tests;
+#[cfg(test)]
 mod maintenance_tests;
 #[cfg(test)]
 mod observability_tests;
 #[cfg(test)]
 mod passive_health_tests;
+#[cfg(test)]
+mod rate_limit_tests;
 #[cfg(test)]
 mod retry_tests;
 #[cfg(test)]
@@ -57,13 +67,16 @@ mod test_upstream;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod timeout_tests;
+#[cfg(test)]
 mod upgrade_tests;
 
 pub use forward::{Forward, Forwarded, ResponseBody, Target};
+pub use limits::{BodyLimits, RequestLimits, ServerLimits};
 pub use listener::{bind, BindError, BoundListener, ListenerSpec};
 pub use pipeline::RequestPipeline;
 pub use replay_body::{BodyObservation, BodyStats};
-pub use responses::FixedResponse;
+pub use responses::{FixedResponse, ProxyRefusal};
 pub use server::{DataPlane, DrainReport};
 pub use tls_plane::{Http2Limits, TlsPlane, TlsPlaneError, TlsPlaneSettings};
 pub use tracked_body::Observability;

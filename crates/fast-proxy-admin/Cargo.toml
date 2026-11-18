@@ -5,6 +5,10 @@ edition = "2021"
 description = "Axum admin plane for fast-proxy: REST API, WebSocket push, and the embedded UI"
 publish = false
 
+[features]
+# Entry points for the fuzz targets in `fuzz/` (ADR 0032); never public API.
+fuzzing = []
+
 [dependencies]
 fast-proxy-acme = { path = "../fast-proxy-acme" }
 fast-proxy-acme-service = { path = "../fast-proxy-acme-service" }
@@ -24,7 +28,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "service", "tokio", "http1", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
@@ -40,3 +43,6 @@ bytes = "1"
 fast-proxy-test-pki = { path = "../fast-proxy-test-pki" }
 tempfile = { workspace = true }
 http-body-util = { workspace = true }
+
+[lints]
+workspace = true

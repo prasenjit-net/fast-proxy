@@ -92,6 +92,7 @@ mod tests {
                     policy: GroupPolicy::default(),
                     endpoints,
                 }],
+                rate_limit: None,
                 routes: vec![],
             }],
         };

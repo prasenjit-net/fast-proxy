@@ -62,6 +62,7 @@ pub(crate) fn sample(n: i64, instance: &str, subsystem: &str) -> Sample {
             bytes: 0,
             body: None,
             body_omitted: None,
+            refused: None,
         },
         total_ms: 30,
         upstream: SampleUpstream {
