@@ -87,6 +87,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # File and line in panics and backtraces, without full debug info: much
+      # less to link and write, which is most of a Windows build.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -101,11 +105,25 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
-      - run: cargo test --locked
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-nextest@0.9.151
 
-      - run: cargo build --release --locked
+      # nextest runs the tests of every binary in parallel (cargo test runs the
+      # binaries one after another). No retries: a flaky test must fail.
+      - run: cargo nextest run --locked --no-fail-fast
+
+      # nextest does not run doctests; they are the same on every platform.
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked --doc
+
+      # The release binaries of every platform are built by publish-release.yml;
+      # here one release build checks the profile still builds and starts.
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo build --release --locked
 
       - name: Smoke-test the release binary
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           bin=target/release/fast-proxy
