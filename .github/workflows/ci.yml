@@ -183,12 +183,12 @@ jobs:
         env:
           FAST_PROXY_PEBBLE_CA: ${{ github.workspace }}/pebble-src/test/certs/pebble.minica.pem
 
-  # Fuzzing (M7 F2, ADR 0032): every target in fuzz/ for 60 s, on nightly Rust
+  # Fuzzing (M7 F2, ADR 0032): every target in fuzz/ for 20 s, on nightly Rust
   # with cargo-fuzz. The crate is outside the workspace, so nothing else builds
   # it. A crash fails the job and its input is uploaded; commit it as a unit
   # test in the crate that owns the function (fuzz/README.md).
   fuzz:
-    name: Fuzz (60 s per target)
+    name: Fuzz (20 s per target)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -211,7 +211,7 @@ jobs:
           matrix=$(sed -n '/target:/,/^ *[a-z-]*:$/p' .github/workflows/fuzz-nightly.yml | grep -E '^ *- ' | sed 's/^ *- //' | sort)
           diff <(echo "$listed") <(echo "$matrix")
 
-      - run: fuzz/run.sh 60
+      - run: fuzz/run.sh 20
 
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

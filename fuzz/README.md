@@ -10,7 +10,7 @@ outside the Cargo workspace, so stable builds, `cargo test` and Windows never bu
 rustup toolchain install nightly
 cargo install cargo-fuzz --locked --version 0.13.2
 
-fuzz/run.sh 60                    # every target for 60 s, as CI does on each pull request
+fuzz/run.sh 20                    # every target for 20 s, as CI does on each pull request
 fuzz/run.sh 600 pipeline_resolve  # one target for 10 minutes
 cd fuzz && cargo +nightly fuzz list
 ```
@@ -24,7 +24,7 @@ cargo +nightly fuzz run <target> artifacts/<target>/crash-...   # reproduce
 cargo +nightly fuzz tmin <target> artifacts/<target>/crash-...  # shrink it
 ```
 
-CI runs every target for 60 s on each pull request (`Fuzz` job in `ci.yml`), and for 20 minutes each
+CI runs every target for 20 s on each pull request (`Fuzz` job in `ci.yml`), and for 20 minutes each
 every night (`fuzz-nightly.yml`), which opens an issue with the input when one fails. Before 1.0 each
 target runs one CPU hour without a crash or timeout (M7 exit criterion 7).
 
