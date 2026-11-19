@@ -121,6 +121,16 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
+          # Static builds (rustls and bundled SQLite need no system library): the
+          # container image and the Homebrew formula on Linux use these.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+            musl: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+            musl: true
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
@@ -155,7 +165,26 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install the musl toolchain
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
       - run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          # The C parts (ring, SQLite) are compiled against musl too.
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+
+      - name: Check the binary is static
+        if: matrix.musl
+        run: |
+          set -euo pipefail
+          description=$(file "target/${{ matrix.target }}/release/fast-proxy")
+          echo "$description"
+          case "$description" in
+            *"statically linked"*|*"static-pie linked"*) ;;
+            *) echo "::error::The musl build is not static."; exit 1 ;;
+          esac
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
@@ -246,3 +275,172 @@ jobs:
           name: ${{ needs.qualify.outputs.tag }}
           generate_release_notes: true
           files: dist/*
+
+  image:
+    name: Publish Docker image
+    needs: [qualify, release]
+    if: needs.qualify.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # DOCKERHUB_USERNAME (a repository variable or secret; required), DOCKERHUB_IMAGE (a
+      # variable, optional: namespace/name; default <username>/fast-proxy), and the secret
+      # DOCKERHUB_TOKEN. A username kept as a secret shows as *** in the logs.
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+      IMAGE: docker.io/${{ vars.DOCKERHUB_IMAGE || format('{0}/fast-proxy', vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME) }}
+      TAG: ${{ needs.qualify.outputs.tag }}
+    steps:
+      - name: Check Docker Hub settings
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DOCKERHUB_USERNAME}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+            echo "::error::Set DOCKERHUB_USERNAME (repository variable or secret) and the secret DOCKERHUB_TOKEN (a Docker Hub access token with write access)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: package-*-linux-musl
+          path: archives
+          merge-multiple: true
+
+      - name: Unpack the static binaries
+        run: |
+          set -euo pipefail
+          for pair in amd64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl; do
+            arch="${pair%%:*}"
+            target="${pair#*:}"
+            stage="fast-proxy-${TAG}-${target}"
+            tar -xzf "archives/${stage}.tar.gz" -C archives
+            mkdir -p "dist/linux-${arch}"
+            cp "archives/${stage}/fast-proxy" "dist/linux-${arch}/fast-proxy"
+          done
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
+            type=raw,value=latest
+
+      - name: Build the amd64 image for the smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: BINARY_SOURCE=prebuilt
+          load: true
+          push: false
+          tags: fast-proxy:smoke
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          trap 'docker logs smoke || true; docker rm -f smoke >/dev/null 2>&1 || true' EXIT
+          user=$(docker image inspect -f '{{.Config.User}}' fast-proxy:smoke)
+          if [ "$user" != "65532:65532" ]; then
+            echo "::error::The image runs as '${user}', not the non-root user 65532."
+            exit 1
+          fi
+          docker run -d --name smoke -p 8000:8000 fast-proxy:smoke
+          for _ in $(seq 1 60); do
+            if docker exec smoke /usr/local/bin/fast-proxy status --local; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec smoke /usr/local/bin/fast-proxy status --local
+          docker exec smoke /usr/local/bin/fast-proxy --version | grep -F "${TAG#v}"
+          # No subsystem is configured yet, so the data plane answers 404.
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: smoke.invalid' http://127.0.0.1:8000/)
+          if [ "$status" != "404" ]; then
+            echo "::error::The data plane answered ${status}, expected 404."
+            exit 1
+          fi
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push the multi-arch image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: BINARY_SOURCE=prebuilt
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  homebrew:
+    name: Publish Homebrew formula
+    needs: [qualify, release]
+    if: needs.qualify.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Repository variable HOMEBREW_TAP_REPOSITORY (optional, owner/homebrew-name;
+      # default <owner>/homebrew-tap). Secret: HOMEBREW_TAP_TOKEN, allowed to push to it.
+      TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || format('{0}/homebrew-tap', github.repository_owner) }}
+      VERSION: ${{ needs.qualify.outputs.version }}
+    steps:
+      - name: Check the tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "::error::Set the secret HOMEBREW_TAP_TOKEN (a token that can push to ${TAP_REPOSITORY})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Write the formula
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          scripts/homebrew-formula.sh "$VERSION" dist "$GITHUB_REPOSITORY" > tap/Formula/fast-proxy.rb
+          ruby -c tap/Formula/fast-proxy.rb
+
+      - name: Commit and push the formula
+        working-directory: tap
+        run: |
+          set -euo pipefail
+          git add Formula/fast-proxy.rb
+          if git diff --cached --quiet; then
+            echo "The formula for ${VERSION} is already published."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "fast-proxy ${VERSION}"
+          git push
