@@ -511,10 +511,13 @@ Workstream letters: **G** groundwork, **LM** the limits crate and model, **S** s
 ### Workstream PK: Packaging and release
 
 - [ ] **PK1 (M) Dockerfile and image (L15)**, with a CI job that builds it on every pull request and runs a smoke
-  test (start, `/api/health`, proxy one request, health check passes, runs as non-root).
+  test (start, `/api/health`, proxy one request, health check passes, runs as non-root). *The `Dockerfile` and its
+  config are written, and the release smoke-tests the image before pushing it to Docker Hub; the pull-request job
+  is still to do.*
 - [ ] **PK2 (M) Release workflow.** Add the musl targets (amd64, arm64) and the multi-arch image push, `SHA256SUMS`,
   the CycloneDX SBOM, GitHub build provenance, and cosign signing of the image. The workflow's token permissions are
-  the narrowest that work.
+  the narrowest that work. *Done: the musl targets, the multi-arch push (Docker Hub) and the Homebrew formula
+  (ADR 0033, 2026-11-18). Still to do: `SHA256SUMS`, the SBOM, provenance and cosign.*
 - [ ] **PK3 (M) The upgrade test (exit criterion 11).** A CI job downloads every released binary since v0.1.1, uses
   each to create a database (subsystems, routes, groups, a certificate, a token, a maintenance scope, samples), then
   opens it with the new binary and checks everything through the API.

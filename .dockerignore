@@ -1,0 +1,12 @@
+target
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+ui/node_modules
+ui/dist
+state
+access.log
+config.local.toml
+.git
+.github
+**/.DS_Store

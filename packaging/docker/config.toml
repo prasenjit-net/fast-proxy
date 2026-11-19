@@ -1,0 +1,31 @@
+# fast-proxy configuration for the container image.
+#
+# Process settings only; subsystems, hosts, routes and upstreams live in the
+# database. Every section left out takes its default (see config.toml in the
+# repository for all of them). To change this file, mount your own over
+# /etc/fast-proxy/config.toml.
+
+[data_plane]
+# The image's volume: the database, its upgrade backups and the master key.
+# Back up the master key apart from the database (or set FAST_PROXY_MASTER_KEY).
+state_dir = "/var/lib/fast-proxy"
+
+[[data_plane.listener]]
+name = "http"
+listen = "0.0.0.0:8000"
+
+[data_plane.tls]
+# Turn on (or pass --tls) to serve HTTPS on 8443.
+enabled = false
+listen = "0.0.0.0:8443"
+
+[admin]
+# Loopback only: the health check and `docker exec ... fast-proxy <command>`
+# reach it, nothing outside the container does. To publish the admin plane,
+# mount a config that listens on 0.0.0.0:9000 with [admin.tls] enabled (a
+# non-loopback admin listener needs TLS and authentication).
+listen = "127.0.0.1:9000"
+
+[logging]
+level = "info"
+# No access log file: requests are logged to the console (docker logs).

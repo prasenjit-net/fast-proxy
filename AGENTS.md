@@ -139,6 +139,8 @@ Cargo workspace; the root package is the `fast-proxy` binary.
   `fuzz/run.sh SECONDS [TARGET...]`, hand-written `seeds/`, a fixed snapshot in `src/lib.rs`. Private
   functions are reached through the `fuzzing` feature of `fast-proxy-dataplane` and `fast-proxy-admin`
   (never public API). A crash input is committed as a unit test in the crate that owns the function.
+- `Dockerfile` and `packaging/docker/config.toml` are the container image (ADR 0033; the release builds it from
+  the musl binaries with `BINARY_SOURCE=prebuilt`); `scripts/homebrew-formula.sh` writes the Homebrew formula.
 - `docs/benchmarks.md` records the performance baseline and how to reproduce it
   (measured with `oha` against the `bench_backend` example in the data plane crate).
 - `ui/src/lib/` holds the frontend API client (`http.ts` core and `ApiError`,
