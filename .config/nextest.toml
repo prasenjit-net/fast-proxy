@@ -1,0 +1,10 @@
+# cargo-nextest settings (CI runs `cargo nextest run`).
+
+# The load tests compare throughput and latency between runs a few seconds apart
+# (sampling on and off, a write during a flood). nextest runs every test as its own
+# process in parallel, so other tests starting or finishing during one run and not
+# the other skewed the comparison on small runners (macOS: 12468 against 39160
+# requests). Each of these tests takes every test slot, so it runs alone.
+[[profile.default.overrides]]
+filter = 'binary(/_under_load$/)'
+threads-required = "num-cpus"
